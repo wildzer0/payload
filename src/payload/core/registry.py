@@ -83,39 +83,30 @@ def load_plugins(project_root: Path | None = None, strict: bool = True) -> Plugi
     strict=False: registra l'errore e prosegue (usato da 'doctor' e
     'plugins list', che vogliono mostrare *tutti* i problemi in un colpo solo).
     """
-    from payload.core.builtin_plugins import is_frozen, register_builtin_plugins
     from payload.core.local_plugins import load_local_plugins
 
     registry = PluginRegistry()
 
-    if is_frozen():
-        # dentro un exe PyInstaller, entry_points() può non trovare il
-        # dist-info correttamente anche se altre funzioni di
-        # importlib.metadata funzionano — bypassiamo il problema del
-        # tutto per i plugin che spediamo noi. Vedi core/builtin_plugins.py.
-        register_builtin_plugins(registry)
-        logger.debug("Processo congelato: plugin builtin registrati via import diretto")
-    else:
-        for group, register_fn in (
-            (READER_GROUP, registry.register_reader),
-            (WRITER_GROUP, registry.register_writer),
-            (DOCTOR_GROUP, registry.register_doctor_check),
-        ):
-            for ep in entry_points(group=group):
-                try:
-                    cls = ep.load()
-                    instance = cls()
-                    check_api_compatibility(ep.name, getattr(instance, "api_version", "0.0"))
-                    register_fn(instance)
-                    registry._origin[ep.name] = ep
-                    logger.debug("Plugin caricato: %s (%s)", ep.name, group)
-                except Exception as e:
-                    logger.debug("Fallito caricamento plugin %s (%s): %s", ep.name, group, e)
-                    if strict:
-                        raise PluginLoadError(ep.name, group, str(e)) from e
-                    # in modalità non strict, non registriamo il plugin ma
-                    # teniamo traccia del motivo: 'doctor' lo riporterà per nome
-                    registry.load_failures.append((ep.name, group, str(e)))
+    for group, register_fn in (
+        (READER_GROUP, registry.register_reader),
+        (WRITER_GROUP, registry.register_writer),
+        (DOCTOR_GROUP, registry.register_doctor_check),
+    ):
+        for ep in entry_points(group=group):
+            try:
+                cls = ep.load()
+                instance = cls()
+                check_api_compatibility(ep.name, getattr(instance, "api_version", "0.0"))
+                register_fn(instance)
+                registry._origin[ep.name] = ep
+                logger.debug("Plugin caricato: %s (%s)", ep.name, group)
+            except Exception as e:
+                logger.debug("Fallito caricamento plugin %s (%s): %s", ep.name, group, e)
+                if strict:
+                    raise PluginLoadError(ep.name, group, str(e)) from e
+                # in modalità non strict, non registriamo il plugin ma
+                # teniamo traccia del motivo: 'doctor' lo riporterà per nome
+                registry.load_failures.append((ep.name, group, str(e)))
 
     load_local_plugins(project_root or Path.cwd(), registry, strict=strict)
 
