@@ -1,0 +1,10 @@
+# Normalizza i line ending in checkout/commit, indipendentemente da
+# quale OS ha creato il file — evita differenze spurie nei diff e
+# nell'hash dei file quando si lavora tra Linux/macOS/Windows sullo
+# stesso repo.
+* text=auto eol=lf
+
+# I file generati/binari non vanno mai normalizzati
+*.bin binary
+*.hex text eol=lf
+*.o binary

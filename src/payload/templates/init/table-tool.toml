@@ -1,0 +1,14 @@
+[defaults]
+writer = "bin"
+output_dir = "build"
+golden_dir = "golden"
+cache_dir = ".payload_cache"
+byte_order = "little"
+
+[toolchain]
+compiler = "gcc"
+compiler_flags = []
+objcopy = "objcopy"
+# Richiesti solo se usi il writer 'obj' (compila .c -> .o linkabile).
+# objcopy_target = "elf32-littlearm"   # bfd target del tuo MCU
+# objcopy_arch = "arm"                 # architettura per objcopy -B

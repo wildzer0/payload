@@ -1,0 +1,88 @@
+"""
+Cache incrementale stile Make ma basata su hash del contenuto, non su mtime.
+
+La chiave include sorgente + reader + writer + config, perché stesso file
+con reader/writer/config diversi produce output diverso.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import threading
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+CACHE_FILENAME = ".payload_cache.json"
+
+
+@dataclass
+class CacheEntry:
+    input_hash: str
+    output_path: str
+
+
+def compute_cache_key(
+    source_bytes: bytes, reader_name: str, writer_name: str, config: dict
+) -> str:
+    h = hashlib.sha256()
+    h.update(source_bytes)
+    h.update(reader_name.encode())
+    h.update(writer_name.encode())
+    h.update(json.dumps(config, sort_keys=True, default=str).encode())
+    return h.hexdigest()
+
+
+class BuildCache:
+    def __init__(self, cache_dir: Path):
+        self.cache_dir = cache_dir
+        self.path = cache_dir / CACHE_FILENAME
+        self._entries: dict[str, CacheEntry] = {}
+        self._lock = threading.Lock()
+        self._load()
+
+    def _load(self) -> None:
+        if not self.path.exists():
+            return
+        try:
+            raw = json.loads(self.path.read_text())
+            self._entries = {k: CacheEntry(**v) for k, v in raw.items()}
+        except (json.JSONDecodeError, TypeError, KeyError) as e:
+            # cache corrotta: non è un errore fatale, si rigenera da zero.
+            # 'doctor' segnala questo caso come WARN prima che succeda in build.
+            logger.warning("Cache corrotta in %s, verrà ricreata (%s)", self.path, e)
+            self._entries = {}
+
+    def save(self) -> None:
+        with self._lock:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            data = {k: asdict(v) for k, v in self._entries.items()}
+            self.path.write_text(json.dumps(data, indent=2))
+
+    def is_fresh(self, table_key: str, cache_key: str) -> bool:
+        with self._lock:
+            entry = self._entries.get(table_key)
+
+        if entry is None:
+            logger.debug("Cache miss per %s: nessuna entry precedente", table_key)
+            return False
+        if entry.input_hash != cache_key:
+            logger.debug("Cache miss per %s: hash cambiato", table_key)
+            return False
+        if not Path(entry.output_path).exists():
+            logger.debug(
+                "Cache miss per %s: output '%s' non più presente su disco",
+                table_key, entry.output_path,
+            )
+            return False
+
+        logger.debug("Cache hit per %s", table_key)
+        return True
+
+    def update(self, table_key: str, cache_key: str, output_path: Path) -> None:
+        with self._lock:
+            self._entries[table_key] = CacheEntry(
+                input_hash=cache_key, output_path=str(output_path)
+            )

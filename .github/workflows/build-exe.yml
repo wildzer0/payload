@@ -1,0 +1,60 @@
+name: build-exe
+
+# Solo Windows per ora, come richiesto. Si attiva su push di un tag
+# 'v*' (allega l'exe a una GitHub Release) o manualmente da workflow_dispatch
+# per testare la build senza dover taggare nulla.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installa payload e pyinstaller
+        run: |
+          pip install -e .
+          pip install pyinstaller>=6.6
+
+      - name: Build exe standalone
+        # --copy-metadata payload: SENZA questo, l'exe parte ma non
+        # trova nessun plugin builtin (raw_text/csv/c_source/bin/hex/obj)
+        # perché sono scoperti via entry_points, che richiede i
+        # metadata del pacchetto installato (dist-info) — un exe
+        # congelato non li ha di default.
+        #
+        # --hidden-import per il backend Windows di watchdog: PyInstaller
+        # a volte non lo rileva da solo perché watchdog lo importa
+        # dinamicamente in base al sistema operativo a runtime, non con
+        # un import statico analizzabile staticamente.
+        run: >
+          pyinstaller --onefile --name pld
+          --copy-metadata payload
+          --hidden-import watchdog.observers.read_directory_changes
+          scripts/pld_entry.py
+
+      - name: Verifica che l'exe funzioni davvero
+        run: |
+          dist\pld.exe --version
+          dist\pld.exe plugins
+
+      - name: Carica l'exe come artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pld-windows-exe
+          path: dist/pld.exe
+
+      - name: Allega alla GitHub Release (solo su push di un tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/pld.exe

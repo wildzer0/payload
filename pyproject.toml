@@ -1,0 +1,60 @@
+[project]
+name = "payload"
+version = "0.1.0"
+description = "Tool da terminale per gestire tabelle di sistemi embedded"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "watchdog>=4.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+build = [
+    "pyinstaller>=6.6",
+]
+
+[project.scripts]
+pld = "payload.cli:app"
+
+# Plugin builtin, registrati esattamente come farebbe un pacchetto di terze
+# parti — dimostra che il core non ha trattamento speciale per i "propri" plugin.
+[project.entry-points."payload.readers"]
+raw_text = "payload.readers.raw_text:RawTextReader"
+csv = "payload.readers.csv_reader:CsvReader"
+c_source = "payload.readers.c_source:CSourceReader"
+
+[project.entry-points."payload.writers"]
+bin = "payload.writers.bin_writer:BinWriter"
+hex = "payload.writers.hex_writer:HexWriter"
+obj = "payload.writers.obj_writer:ObjWriter"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=payload --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src/payload"]
+omit = [
+    "src/payload/templates/*",  # template renderizzati a runtime, non codice eseguito direttamente
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

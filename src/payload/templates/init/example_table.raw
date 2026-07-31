@@ -1,0 +1,4 @@
+# Tabella di esempio generata da 'pld init'
+# unità: centesimi di grado
+0x0A, 0x1B   # offset 0: soglia min
+0x2C, 0x3D   # offset 2: soglia max
