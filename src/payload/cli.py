@@ -12,7 +12,6 @@ import shutil
 import subprocess
 import sys
 import threading
-import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import fields as dc_fields
 from pathlib import Path
@@ -658,27 +657,11 @@ def export(
     sotto-progetto o farne backup fuori da git."""
 
     def _run():
+        from payload.export import export_project
+
         sources, config = _discover_for_history(root)
-
-        files_to_zip: list[Path] = list(sources)
-
-        global_config = root / "table-tool.toml"
-        if global_config.exists():
-            files_to_zip.append(global_config)
-
-        files_to_zip.extend(root.rglob("*.config.toml"))
-
-        if include_history:
-            history_dir = root / ".payload_history"
-            if history_dir.exists():
-                files_to_zip.extend(p for p in history_dir.rglob("*") if p.is_file())
-
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as zf:
-            for f in files_to_zip:
-                zf.write(f, arcname=f.relative_to(root))
-
-        console.print(f"[green]✓[/] {len(files_to_zip)} file archiviati in {output}")
+        export_project(root, sources, output, include_history=include_history)
+        console.print(f"[green]✓[/] {len(sources)} tabelle archiviate in {output}")
 
     run_command(_run, ctx.obj["verbosity"])
 

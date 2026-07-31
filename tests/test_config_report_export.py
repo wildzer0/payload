@@ -44,7 +44,9 @@ def test_provenance_without_table_argument_ignores_sidecar(tmp_path):
     assert config.defaults.writer == "bin"
 
 
-def test_export_zip_contains_sources_and_config(tmp_path):
+def test_export_project_contains_sources_and_config(tmp_path):
+    from payload.export import export_project
+
     (tmp_path / "table-tool.toml").write_text("[defaults]\n")
     sensors = tmp_path / "sensors"
     sensors.mkdir()
@@ -52,25 +54,68 @@ def test_export_zip_contains_sources_and_config(tmp_path):
     src.write_text("x")
 
     sources = discover_table_sources(tmp_path, {".raw"}, tmp_path / "build")
-    files_to_zip = list(sources) + [tmp_path / "table-tool.toml"]
-
     out_zip = tmp_path / "out.zip"
-    with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-        for f in files_to_zip:
-            zf.write(f, arcname=f.relative_to(tmp_path))
+    export_project(tmp_path, sources, out_zip)
 
     with zipfile.ZipFile(out_zip) as zf:
         names = set(zf.namelist())
     assert names == {"sensors/temp.raw", "table-tool.toml"}
 
 
-def test_export_zip_roundtrip_preserves_content(tmp_path):
+def test_export_project_only_includes_sidecars_of_exported_sources(tmp_path):
+    """Il punto chiave di export_project rispetto a un rglob generico su
+    tutti i *.config.toml: un sidecar di una tabella NON esportata non
+    deve finire nello zip per sbaglio."""
+    from payload.export import export_project
+
+    (tmp_path / "table-tool.toml").write_text("[defaults]\n")
+    sensors = tmp_path / "sensors"
+    sensors.mkdir()
+    exported_src = sensors / "temp.raw"
+    exported_src.write_text("x")
+    (sensors / "temp.config.toml").write_text('[defaults]\nwriter = "hex"\n')
+
+    # tabella NON esportata, con sidecar orfano nello stesso progetto
+    other_src = tmp_path / "other.raw"
+    other_src.write_text("y")
+    (tmp_path / "other.config.toml").write_text('[defaults]\nwriter = "bin"\n')
+
+    out_zip = tmp_path / "out.zip"
+    export_project(tmp_path, [exported_src], out_zip)  # solo temp.raw
+
+    with zipfile.ZipFile(out_zip) as zf:
+        names = set(zf.namelist())
+
+    assert "sensors/temp.config.toml" in names
+    assert "other.config.toml" not in names
+    assert "other.raw" not in names
+
+
+def test_export_project_include_history(tmp_path):
+    from payload.core.history import HistoryStore
+    from payload.export import export_project
+
+    src = tmp_path / "t.raw"
+    src.write_text("x")
+    history = HistoryStore(tmp_path)
+    history.commit("t", src, [], "v1")
+
+    out_zip = tmp_path / "out.zip"
+    export_project(tmp_path, [src], out_zip, include_history=True)
+
+    with zipfile.ZipFile(out_zip) as zf:
+        names = set(zf.namelist())
+    assert any(n.startswith(".payload_history/") for n in names)
+
+
+def test_export_project_roundtrip_preserves_content(tmp_path):
+    from payload.export import export_project
+
     src = tmp_path / "t.raw"
     src.write_text("contenuto originale")
 
     out_zip = tmp_path / "out.zip"
-    with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.write(src, arcname=src.relative_to(tmp_path))
+    export_project(tmp_path, [src], out_zip)
 
     extract_dir = tmp_path / "extracted"
     with zipfile.ZipFile(out_zip) as zf:

@@ -178,11 +178,11 @@ def test_doctor_missing_toolchain_exits_cleanly_no_traceback(tmp_path, monkeypat
     assert "Traceback" not in result.stdout
 
 
-def test_plugin_new_creates_scaffold():
-    with runner.isolated_filesystem():
-        result = runner.invoke(app, ["plugin", "new", "payload-writer-testx", "--kind", "writer"])
-        assert result.exit_code == 0
-        assert Path("payload-writer-testx/pyproject.toml").exists()
+def test_plugin_new_creates_scaffold(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["plugin", "new", "payload-writer-testx", "--kind", "writer"])
+    assert result.exit_code == 0
+    assert (tmp_path / "payload-writer-testx" / "pyproject.toml").exists()
 
 
 def test_plugins_list_runs_without_error():

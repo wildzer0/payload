@@ -20,7 +20,10 @@ def test_model_dump_returns_plain_dict():
             "writer": None, "output_dir": "build", "golden_dir": "golden",
             "cache_dir": ".payload_cache", "byte_order": "little",
         },
-        "toolchain": {"compiler": "gcc", "compiler_flags": [], "objcopy": "objcopy"},
+        "toolchain": {
+            "compiler": "gcc", "compiler_flags": [], "objcopy": "objcopy",
+            "objcopy_target": "", "objcopy_arch": "",
+        },
         "plugin": {},
     }
 
