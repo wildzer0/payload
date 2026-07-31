@@ -17,7 +17,8 @@ Prima versione funzionante del tool.
 - `pld init --wizard`: modalità guidata (nome progetto, cosa includere, writer/byte_order di default, `git init` opzionale); `local_plugins/` creata di default anche senza wizard
 - `doctor`: nuovi check `git` (informativo) e `local_plugin_deps` (dipendenze mancanti nei plugin locali); fix di due check (`plugins`, `table_names`) che ignoravano la project root reale
 - Fix: `UnicodeEncodeError` su console Windows con codepage legacy (cp1252) durante la stampa dei tip con emoji — `stdout`/`stderr` riconfigurati con `errors="replace"` all'avvio della CLI
-- `build-exe.yml`: installazione non-editable (`pip install .`) prima del build PyInstaller (sospetta causa di `entry_points` vuoti dentro l'exe con installazione editable); step di verifica ora fallisce esplicitamente se i plugin builtin non sono trovati, invece di un successo silenzioso con tabella vuota
+- Fix (causa vera, non la prima ipotesi): dentro un exe PyInstaller congelato, `importlib.metadata.entry_points()` non trova i plugin builtin anche con `--copy-metadata payload` e anche se `importlib.metadata.version()` funziona per lo stesso pacchetto — i 6 plugin builtin ora vengono registrati con `import` diretto quando `sys.frozen` è vero (`core/builtin_plugins.py`), bypassando del tutto `entry_points` in quel contesto. Nessun impatto sull'installazione normale (pip/wheel), verificato che continua a usare `entry_points` come sempre
+- `build-exe.yml`: step di verifica fallisce esplicitamente se i plugin builtin non sono trovati, invece di un successo silenzioso con tabella vuota
 
 ### Comandi
 - `init`, `doctor`, `plugins`, `plugin new/validate/info`, `clean`
@@ -59,5 +60,5 @@ Prima versione funzionante del tool.
 - `pld watch` su singolo file non è stato validato su Android/Termux
 - Nessuna soglia di copertura test fissata (misurata, non ancora decisa)
 - `tests/test_cli_smoke.py` (incluso il wizard di `init`) scritto ma non eseguito nell'ambiente di sviluppo di questo repository (nessun accesso a `typer` lì) — verificato con cura contro l'API documentata, da confermare con un run reale
-- `pld.exe` mai compilato/eseguito realmente (richiede un runner Windows) — la pipeline è pronta ma la prima verifica vera sarà al primo push di un tag `v*`
+- `pld.exe` compilato in CI ma con il bug entry_points appena descritto — il fix (import diretto dei builtin quando congelato) non è ancora stato verificato su una build Windows reale, solo simulato con `sys.frozen = True` in questo ambiente di sviluppo
 - `pld plugin install-deps` non funziona dentro `pld.exe` congelato (nessun vero interprete Python dietro `sys.executable` lì) — documentato come limite noto, non un bug da correggere
