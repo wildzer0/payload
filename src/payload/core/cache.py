@@ -35,6 +35,18 @@ def compute_cache_key(
     return h.hexdigest()
 
 
+def compute_pipeline_cache_key(source_bytes: bytes, stage_signature: str, config: dict) -> str:
+    """Come compute_cache_key, ma sull'intera pipeline (stage_signature
+    da PipelineSpec.cache_signature()) invece di un solo reader/writer —
+    cambiare anche un solo stage nel mezzo invalida la cache dell'intera
+    pipeline. Cache per singolo stage è un'estensione futura, non qui."""
+    h = hashlib.sha256()
+    h.update(source_bytes)
+    h.update(stage_signature.encode())
+    h.update(json.dumps(config, sort_keys=True, default=str).encode())
+    return h.hexdigest()
+
+
 class BuildCache:
     def __init__(self, cache_dir: Path):
         self.cache_dir = cache_dir
@@ -86,3 +98,12 @@ class BuildCache:
             self._entries[table_key] = CacheEntry(
                 input_hash=cache_key, output_path=str(output_path)
             )
+
+    def get_output_path(self, table_key: str) -> Path | None:
+        """Ritorna l'output_path registrato per table_key, se esiste —
+        usato per riprendere l'esecuzione da un checkpoint di stage
+        senza dover rieseguire gli stage precedenti. Non verifica
+        freschezza: chiamare is_fresh() prima."""
+        with self._lock:
+            entry = self._entries.get(table_key)
+        return Path(entry.output_path) if entry else None

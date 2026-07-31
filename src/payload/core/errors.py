@@ -101,6 +101,19 @@ class InvalidConfigError(ConfigError):
         )
 
 
+class InvalidPipelineError(ConfigError):
+    """Regole di alternanza violate (reader/writer/exec) — vedi
+    docs/PIPELINE.md. Sollevato PRIMA di eseguire qualunque stage."""
+
+    def __init__(self, stage_index: int, reason: str, **kw):
+        super().__init__(
+            f"Pipeline non valida allo stage #{stage_index}: {reason}",
+            hint="Vedi docs/PIPELINE.md per le regole di alternanza reader/writer/exec",
+            stage_index=stage_index,
+            **kw,
+        )
+
+
 class PluginError(ConfigError):
     pass
 

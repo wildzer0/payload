@@ -97,7 +97,10 @@ del wizard senza interazione.
 
 ### `pld build <sorgente> [opzioni]`
 
-Compila una singola tabella.
+Compila una singola tabella. Internamente esegue sempre una
+**pipeline** — implicita a 2 stage (`--from`/`--to`, il caso comune) o
+esplicita se la tabella ha una sezione `[pipeline]` in config, vedi
+[docs/PIPELINE.md](PIPELINE.md).
 
 | Opzione | Default | Significato |
 |---|---|---|
@@ -105,14 +108,20 @@ Compila una singola tabella.
 | `--to <writer>` | da config | writer di output da usare |
 | `--out <dir>` | `build` | cartella di output |
 | `--force` | off | ignora la cache, ricompila comunque |
-| `--dry-run` | off | mostra cosa verrebbe fatto senza scrivere nulla |
+| `--dry-run` | off | mostra cosa verrebbe fatto senza scrivere nulla (non esegue mai stage `exec`) |
 | `--check-golden` | off | fallisce (exit 3) se l'output non combacia col golden salvato |
 | `--opt chiave=valore` | — | override una tantum per il plugin attivo, ripetibile (vedi [PLUGINS.md](PLUGINS.md#passare-informazioni-extra-a-un-plugin)) |
+| `--keep-intermediate` | off | non ripulisce `tmp/` dopo la build — utile per ispezionare i file intermedi di una pipeline multi-stage |
 
 ```bash
 pld build sensors/temp_table.raw --to bin
 pld build sensors/temp_table.raw --from raw_text --to hex --out release/
 ```
+
+**Nota**: `--from`/`--to` vengono **ignorati** (con un warning) se la
+tabella ha già una `[pipeline]` esplicita in config — le due cose non
+si mescolano, la pipeline esplicita dichiara già tutto quello che
+serve.
 
 ### `pld build-all [root] [opzioni]`
 
@@ -128,6 +137,7 @@ quindi il batch è parallelizzabile in sicurezza.
 | `--filter <glob>` | tutti i sorgenti noti | limita la scansione, es. `"sensors/**"` |
 | `--force`, `--dry-run`, `--check-golden` | come `build` | applicati a ogni tabella |
 | `--opt chiave=valore` | — | override una tantum applicato a tutte le tabelle del batch, ripetibile |
+| `--keep-intermediate` | off | non ripulisce `tmp/` dopo ogni build del batch |
 
 ```bash
 pld build-all . --to bin --jobs 4
@@ -160,6 +170,17 @@ sta vincendo per una tabella specifica.
 ```bash
 pld config show                # config globale, nessun sidecar coinvolto
 pld config show temp_table     # include l'eventuale sidecar di questa tabella
+```
+
+### `pld pipeline show <tabella> [--root <dir>]`
+
+Mostra la pipeline risolta per una tabella (implicita a 2 stage da
+`--from`/`--to`, o esplicita da `[pipeline]` in config) — vedi
+[PIPELINE.md](PIPELINE.md). Indica anche quali stage hanno un
+checkpoint di cache valido in questo momento.
+
+```bash
+pld pipeline show temp_table
 ```
 
 ### `pld report [root]`
@@ -276,10 +297,13 @@ Mostra le differenze byte per byte tra output attuale e golden salvato.
 Verifica pre-volo: toolchain raggiungibile, plugin caricabili (con nomi
 di quelli rotti), config valida (globale + tutti i sidecar), nomi
 tabella duplicati, dipendenze dei plugin locali soddisfatte, git
-disponibile (informativo, non bloccante), directory scrivibili, cache
-non corrotta. Da eseguire prima di un batch grosso o in CI. Exit 2 se
-almeno un check fallisce (FAIL) — un check `WARN` (es. git assente, o
-un plugin locale con dipendenze mancanti) non blocca l'exit code.
+disponibile (informativo, non bloccante), quanti stage `exec` sono
+configurati nel progetto (informativo — vedi
+[PIPELINE.md](PIPELINE.md#sicurezza--da-non-sottovalutare)), directory
+scrivibili, cache non corrotta. Da eseguire prima di un batch grosso o
+in CI. Exit 2 se almeno un check fallisce (FAIL) — un check `WARN`
+(es. git assente, un plugin locale con dipendenze mancanti, o stage
+`exec` configurati) non blocca l'exit code.
 
 ```bash
 pld doctor
@@ -393,6 +417,10 @@ writer = "hex"               # solo questa tabella usa hex invece del default gl
 Una terza sezione, `[plugin.<nome>]`, è riservata a informazioni
 specifiche di un plugin (non validata dal core) — vedi
 [PLUGINS.md](PLUGINS.md#passare-informazioni-extra-a-un-plugin).
+
+Una quarta, `[pipeline]`, dichiara una pipeline esplicita per la
+tabella (invece della coppia implicita reader/writer da `--from`/`--to`)
+— vedi [PIPELINE.md](PIPELINE.md) per il design completo, con esempi.
 
 ---
 

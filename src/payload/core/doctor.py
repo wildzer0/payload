@@ -281,6 +281,52 @@ class GitCheck:
         return CheckResult(self.name, CheckStatus.OK, f"{version} ({repo_status})")
 
 
+class PipelineExecStagesCheck:
+    """Segnala quanti stage 'exec' sono configurati nel progetto — uno
+    stage exec esegue codice arbitrario letto da config (vedi
+    docs/PIPELINE.md, sezione Sicurezza). Non bloccante: solo
+    visibilità, per non ignorarlo senza accorgersene."""
+
+    name = "pipeline_exec"
+    api_version = "1.0"
+
+    def run(self, config: dict) -> CheckResult:
+        from payload.core.config import GLOBAL_CONFIG_FILENAME, _load_toml
+
+        project_root = Path(config.get("_project_root", "."))
+
+        toml_files = []
+        global_path = project_root / GLOBAL_CONFIG_FILENAME
+        if global_path.exists():
+            toml_files.append(global_path)
+        toml_files.extend(project_root.rglob("*.config.toml"))
+
+        exec_count = 0
+        files_with_exec = []
+
+        for f in toml_files:
+            try:
+                data = _load_toml(f)
+            except Exception:
+                continue  # file malformato: già segnalato da ConfigValidityCheck, non duplichiamo qui
+            stages = data.get("pipeline", {}).get("stages", [])
+            if not isinstance(stages, list):
+                continue
+            n = sum(1 for s in stages if isinstance(s, dict) and s.get("type") == "exec")
+            if n:
+                exec_count += n
+                files_with_exec.append(f.name)
+
+        if exec_count:
+            return CheckResult(
+                self.name, CheckStatus.WARN,
+                f"{exec_count} stage 'exec' configurati in {len(files_with_exec)} file — "
+                f"eseguono comandi esterni durante la build",
+                hint=f"File: {', '.join(files_with_exec)}. Vedi docs/PIPELINE.md, sezione Sicurezza",
+            )
+        return CheckResult(self.name, CheckStatus.OK, "nessuno stage 'exec' configurato")
+
+
 def builtin_checks() -> list:
     return [
         ToolchainCheck("compiler", "compiler"),
@@ -290,6 +336,7 @@ def builtin_checks() -> list:
         TableNameUniquenessCheck(),
         LocalPluginDepsCheck(),
         GitCheck(),
+        PipelineExecStagesCheck(),
         DirWritableCheck(),
         CacheIntegrityCheck(),
     ]

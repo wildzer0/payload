@@ -65,6 +65,12 @@ class PayloadConfig:
     # bisogno. Un reader/writer legge la propria fetta con
     # config.get("plugin", {}).get(self.name, {}).
     plugin: dict = field(default_factory=dict)
+    # [pipeline] stages = [...] — lista grezza di dict, validata e
+    # trasformata in PipelineSpec da core/pipeline_spec.py, non qui
+    # (il core config resta generico, non deve conoscere le regole di
+    # alternanza reader/writer/exec). Vuota = nessuna pipeline esplicita,
+    # si usa la risoluzione implicita da --from/--to (vedi core/pipeline.py).
+    pipeline_stages: list = field(default_factory=list)
 
     def model_dump(self) -> dict:
         """Nome del metodo mantenuto uguale a pydantic v2 apposta: nessun
@@ -118,6 +124,7 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
     defaults_dict = merged.get("defaults", {})
     toolchain_dict = merged.get("toolchain", {})
     plugin_dict = merged.get("plugin", {})
+    pipeline_dict = merged.get("pipeline", {})
 
     if not isinstance(defaults_dict, dict):
         raise InvalidConfigError(path, field="defaults", reason="deve essere una tabella TOML, es. [defaults]")
@@ -125,8 +132,14 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
         raise InvalidConfigError(path, field="toolchain", reason="deve essere una tabella TOML, es. [toolchain]")
     if not isinstance(plugin_dict, dict):
         raise InvalidConfigError(path, field="plugin", reason="deve essere una tabella TOML, es. [plugin.nome_plugin]")
+    if not isinstance(pipeline_dict, dict):
+        raise InvalidConfigError(path, field="pipeline", reason="deve essere una tabella TOML, es. [pipeline]")
 
-    unknown_top = set(merged.keys()) - {"defaults", "toolchain", "plugin"}
+    pipeline_stages = pipeline_dict.get("stages", [])
+    if not isinstance(pipeline_stages, list):
+        raise InvalidConfigError(path, field="pipeline.stages", reason="deve essere una lista di stage")
+
+    unknown_top = set(merged.keys()) - {"defaults", "toolchain", "plugin", "pipeline"}
     if unknown_top:
         raise InvalidConfigError(path, field=next(iter(unknown_top)), reason="sezione sconosciuta")
 
@@ -134,6 +147,9 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
     _validate_section(toolchain_dict, "toolchain", _TOOLCHAIN_STR_FIELDS, _TOOLCHAIN_LIST_STR_FIELDS, path)
     # [plugin.*] è deliberatamente NON validato qui: è territorio del
     # plugin, il core non ha modo di sapere quali chiavi siano legittime.
+    # [pipeline.stages] è deliberatamente validato solo strutturalmente
+    # (lista sì/no): le regole di alternanza reader/writer/exec sono
+    # territorio di core/pipeline_spec.py, non del core config.
 
     byte_order = defaults_dict.get("byte_order", "little")
     if byte_order not in _VALID_BYTE_ORDERS:
@@ -146,6 +162,7 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
         defaults=DefaultsConfig(**defaults_dict),
         toolchain=ToolchainConfig(**toolchain_dict),
         plugin=plugin_dict,
+        pipeline_stages=pipeline_stages,
     )
 
 

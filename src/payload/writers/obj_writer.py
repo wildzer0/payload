@@ -16,8 +16,8 @@ dipende dal target."""
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from payload.core.errors import ToolchainExecutionError, WriterEmitError
@@ -61,8 +61,11 @@ class ObjWriter:
 
         section = section_name_for(ir.name)
 
-        with tempfile.TemporaryDirectory() as tmp_str:
-            tmp = Path(tmp_str)
+        # sottocartella PRIVATA, stesso motivo di c_source.py: tmp/ è
+        # condivisa tra più stage di una pipeline, non va cancellata tutta.
+        tmp = ir.source_path.parent / "tmp" / "obj_writer_scratch"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
             bin_path = tmp / "input.bin"
             bin_path.write_bytes(ir.data)
 
@@ -74,5 +77,7 @@ class ObjWriter:
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
                 raise ToolchainExecutionError(cmd, result.returncode, result.stderr)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
         return out_path

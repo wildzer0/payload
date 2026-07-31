@@ -133,6 +133,31 @@ def test_build_happy_path(tmp_path, monkeypatch):
     assert (proj / "build" / "example_table.bin").exists()
 
 
+def test_pipeline_show_implicit_pipeline(tmp_path, monkeypatch):
+    """pld pipeline show su una tabella senza [pipeline] esplicita deve
+    mostrare comunque la pipeline implicita a 2 stage (reader+writer)."""
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "proj"])
+    proj = tmp_path / "proj"
+    monkeypatch.chdir(proj)
+
+    result = runner.invoke(app, ["pipeline", "show", "example_table"])
+
+    assert result.exit_code == 0
+    assert "raw_text" in result.stdout
+    assert "bin" in result.stdout
+
+
+def test_pipeline_show_unknown_table_exits_4(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "proj"])
+    monkeypatch.chdir(tmp_path / "proj")
+
+    result = runner.invoke(app, ["pipeline", "show", "tabella_inesistente"])
+
+    assert result.exit_code == 4
+
+
 def test_status_shows_never_saved(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init", "proj"])

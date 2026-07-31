@@ -1,5 +1,63 @@
 # Changelog
 
+## v0.2.0
+
+**Pipeline configurabile** — modello unico per ogni build, vedi
+[docs/PIPELINE.md](docs/PIPELINE.md) per il design completo.
+
+- Tre tipi di stage: `reader` (file → dati), `writer` (dati → file),
+  `exec` (file → file, comando shell/software host)
+- Un solo motore di esecuzione (`core/pipeline.py`) per ogni build: una
+  build "semplice" (`--from`/`--to`) è internamente una pipeline
+  implicita a 2 stage, nessun percorso di codice separato
+- `[pipeline]` in `table-tool.toml`/sidecar per dichiarare pipeline
+  esplicite multi-stage — sidecar sostituisce l'intera lista `stages`,
+  non la fonde elemento per elemento
+- Regole di alternanza validate **prima** di eseguire qualunque stage
+  (`InvalidPipelineError`, exit 2): reader sempre seguito da writer,
+  pipeline minimo 2 stage, `exec` finale richiede `output_extension`
+- Compatibilità reader/writer verificata su **ogni** coppia della
+  pipeline, non solo la prima
+- File intermedi in `tmp/` accanto al sorgente, ripuliti automaticamente
+  — `--keep-intermediate` su `build`/`build-all` per ispezionarli
+- `--dry-run` non esegue mai stage `exec` (possibili effetti collaterali reali)
+- `on_error = "warn"` per stage `exec` non essenziali (non blocca la build)
+- Cache sull'intera pipeline (`compute_pipeline_cache_key`): cambiare
+  anche un solo stage invalida correttamente
+- Nuovo `doctor` check `pipeline_exec`: segnala (informativo, non
+  bloccante) quanti stage `exec` sono configurati nel progetto —
+  eseguono codice arbitrario da config, vedi PIPELINE.md sezione Sicurezza
+- Verificato con `gcc`/`objcopy` e comandi shell reali (non solo
+  simulati); un bug reale trovato e corretto durante il test:
+  `on_error="warn"` sull'ultimo stage lasciava il file di fallback
+  dentro `tmp/`, che veniva ripulita subito dopo — ora viene copiato
+  nella posizione finale attesa prima del cleanup
+- **Cache per singolo stage**: ogni stage `writer`/`exec` non finale
+  persiste il proprio output (fuori da `tmp/`) con una chiave sul
+  prefisso di pipeline fino a quel punto — cambiare solo l'ultimo
+  stage non richiede più ricompilare un `.c` costoso a monte. `--force`
+  bypassa anche questi checkpoint, non solo la cache finale. Bug reale
+  trovato durante l'implementazione: `c_source.py`/`obj_writer.py`
+  usavano la stessa `tmp/` condivisa dalla pipeline e la cancellavano a
+  fine parsing/emit, rompendo gli stage successivi — corretto dando a
+  ciascuno una sottocartella privata (`tmp/c_source_scratch/`,
+  `tmp/obj_writer_scratch/`)
+- Nuovo comando `pld pipeline show <tabella>`: mostra la pipeline
+  risolta (implicita o esplicita) e quali stage hanno un checkpoint di
+  cache valido in questo momento
+
+## v0.1.1
+
+Checkpoint di rollback prima di iniziare la feature "pipeline". Sei fix
+emersi dall'uso reale su un progetto vero (SPARC/RTEMS), tutti
+verificati con toolchain reali dove applicabile.
+
+- `run_command` mostra ora stderr/stdout del comando fallito con `-vv` — prima la promessa "esegui con -vv" era falsa, non veniva mai mostrato nulla
+- `readers/c_source.py` e `writers/obj_writer.py`: cartella `tmp/` locale accanto al sorgente invece di `AppData\Local\Temp` (Windows) — creata e ripulita automaticamente ad ogni build, mai lasciata sporca
+- `.gitignore`: aggiunta `tmp/`
+- Fix: `pld watch <sottocartella>` non trovava mai la config globale (`table-tool.toml`) se la sottocartella osservata non coincideva con la cartella da cui si lancia `pld` — ora la config globale si cerca sempre da `Path.cwd()`, coerente con `pld build`. Il sidecar per-tabella non era mai stato affetto (si risolve sempre relativo al file, non a `root`)
+- Nuovo comando `pld plugin new-local <nome> --kind reader|writer|doctor-check`: scaffold rapido di un plugin locale (singolo file in `local_plugins/`, nessun `pip install`) — prima l'unico scaffold disponibile (`pld plugin new`) generava un intero pacchetto pip, eccessivo per un plugin di progetto
+
 ## v0.1.0 (non ancora rilasciata)
 
 Prima versione funzionante del tool.

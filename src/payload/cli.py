@@ -52,9 +52,11 @@ app = typer.Typer(name="pld", help="payload — gestione tabelle per sistemi emb
 golden_app = typer.Typer(help="Gestione golden file")
 plugin_app = typer.Typer(help="Gestione/scaffold plugin")
 config_app = typer.Typer(help="Ispezione della configurazione risolta")
+pipeline_app = typer.Typer(help="Ispezione della pipeline")
 app.add_typer(golden_app, name="golden")
 app.add_typer(plugin_app, name="plugin")
 app.add_typer(config_app, name="config")
+app.add_typer(pipeline_app, name="pipeline")
 
 # Console Windows con codepage legacy (cp1252/'charmap', non UTF-8) non
 # sanno rappresentare emoji come 💡 usate nei tip — senza questo, un
@@ -126,6 +128,15 @@ def run_command(fn, verbosity: int):
         err_console.print(f"[red]✗[/] {e.message}")
         if e.hint:
             err_console.print(f"    → {e.hint}", style="dim")
+        if verbosity >= 2:
+            stderr_text = e.context.get("stderr")
+            stdout_text = e.context.get("stdout")
+            if stderr_text:
+                err_console.print("\n[bold]--- stderr del comando ---[/]")
+                err_console.print(stderr_text)
+            if stdout_text:
+                err_console.print("\n[bold]--- stdout del comando ---[/]")
+                err_console.print(stdout_text)
         raise typer.Exit(code=e.exit_code)
     except typer.Exit:
         raise
@@ -170,6 +181,9 @@ def build_cmd(
     opt: Optional[list[str]] = typer.Option(
         None, "--opt", help="Override chiave=valore per il plugin attivo, es. --opt delimiter=; (ripetibile)"
     ),
+    keep_intermediate: bool = typer.Option(
+        False, "--keep-intermediate", help="Non ripulisce tmp/ dopo la build (debug pipeline multi-stage)"
+    ),
 ):
     """Compila una singola tabella."""
 
@@ -183,7 +197,7 @@ def build_cmd(
             out_path, was_built = build(
                 source, registry, config, out, cache=cache,
                 reader_name=from_, writer_name=to, force=force, dry_run=dry_run,
-                cli_opts=cli_opts,
+                cli_opts=cli_opts, keep_intermediate=keep_intermediate,
             )
             cache.save()
 
@@ -211,6 +225,9 @@ def build_all_cmd(
     check_golden_flag: bool = typer.Option(False, "--check-golden"),
     opt: Optional[list[str]] = typer.Option(
         None, "--opt", help="Override chiave=valore per il plugin attivo, applicato a tutte le tabelle (ripetibile)"
+    ),
+    keep_intermediate: bool = typer.Option(
+        False, "--keep-intermediate", help="Non ripulisce tmp/ dopo ogni build (debug pipeline multi-stage)"
     ),
 ):
     """Batch build ricorsivo su tutte le tabelle trovate sotto root."""
@@ -243,7 +260,7 @@ def build_all_cmd(
                 out_path, was_built = build(
                     src, registry, per_table_config, out, cache=cache,
                     writer_name=to, force=force, dry_run=dry_run,
-                    cli_opts=cli_opts,
+                    cli_opts=cli_opts, keep_intermediate=keep_intermediate,
                 )
                 mismatch = False
                 if check_golden_flag and not dry_run:
@@ -314,13 +331,14 @@ def watch(
     """Rebuild automatico ad ogni salvataggio (Ctrl+C per uscire)."""
 
     def _run():
-        registry = load_plugins(project_root=root)
-        config = load_config(root)
+        project_root = Path.cwd()
+        registry = load_plugins(project_root=project_root)
+        config = load_config(project_root)
         cache = BuildCache(Path(config.defaults.cache_dir))
         known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
 
         def on_change(src: Path):
-            per_table_config = load_config(root, source_path=src)
+            per_table_config = load_config(project_root, source_path=src)
             out_path, was_built = build(
                 src, registry, per_table_config, out, cache=cache, writer_name=to,
             )
@@ -620,6 +638,81 @@ def config_show(
     run_command(_run, ctx.obj["verbosity"])
 
 
+@pipeline_app.command("show")
+def pipeline_show(
+    ctx: typer.Context,
+    table: str = typer.Argument(..., help="Nome tabella"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Mostra la pipeline risolta per una tabella (implicita a 2 stage
+    da --from/--to, o esplicita da [pipeline] in config) — utile
+    quando la pipeline è lunga e non è ovvio a colpo d'occhio cosa
+    farà. Mostra anche quali stage hanno un checkpoint di cache valido."""
+
+    def _run():
+        from payload.core.cache import compute_pipeline_cache_key
+        from payload.core.pipeline import (
+            final_output_path,
+            resolve_pipeline_spec,
+            validate_pipeline_against_registry,
+        )
+        from payload.core.pipeline_spec import ExecStage, ReaderStage, WriterStage
+
+        sources, _ = _discover_for_history(root)
+        src = next((s for s in sources if s.stem == table), None)
+        if src is None:
+            console.print(f"[red]✗[/] tabella '{table}' non trovata")
+            raise typer.Exit(code=4)
+
+        registry = load_plugins(project_root=root)
+        config = load_config(root, source_path=src)
+
+        spec = resolve_pipeline_spec(src, registry, config, None, None)
+        validate_pipeline_against_registry(spec, registry)
+
+        cache = BuildCache(Path(config.defaults.cache_dir))
+        source_bytes = src.read_bytes()
+        config_dict = config.model_dump()
+
+        t = Table(title=f"Pipeline per {table}")
+        t.add_column("#")
+        t.add_column("Tipo")
+        t.add_column("Dettaglio")
+        t.add_column("Cache stage", style="dim")
+
+        for i, stage in enumerate(spec.stages):
+            if isinstance(stage, ReaderStage):
+                detail = f"reader: {stage.name}"
+            elif isinstance(stage, WriterStage):
+                detail = f"writer: {stage.name}"
+            else:
+                detail = f"exec: {stage.command}"
+                if stage.on_error == "warn":
+                    detail += "  [dim](on_error=warn)[/]"
+
+            checkpoint_note = ""
+            if isinstance(stage, (WriterStage, ExecStage)):
+                checkpoint_key = compute_pipeline_cache_key(
+                    source_bytes, spec.signature_prefix(i), config_dict
+                )
+                stage_table_key = f"{src}::stage{i}"
+                is_last = i == len(spec.stages) - 1
+                if is_last:
+                    checkpoint_note = "[dim](finale, vedi cache tabella)[/]"
+                elif cache.is_fresh(stage_table_key, checkpoint_key):
+                    checkpoint_note = "[green]valido[/]"
+                else:
+                    checkpoint_note = "[dim]nessuno[/]"
+
+            t.add_row(str(i), stage.kind, detail, checkpoint_note)
+
+        console.print(t)
+        out_path = final_output_path(spec, src, Path(config.defaults.output_dir), registry)
+        console.print(f"Output finale: [bold]{out_path}[/]")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
 @app.command()
 def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
     """Vista d'insieme del progetto: una riga per tabella con dimensioni,
@@ -910,6 +1003,105 @@ def plugin_validate(
         for issue in issues:
             console.print(f"    [{issue.check}] {issue.detail}", style="red")
         raise typer.Exit(code=1)
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@plugin_app.command("new-local")
+def plugin_new_local(
+    ctx: typer.Context,
+    name: str = typer.Argument(..., help="Nome del plugin (slug), es. simple_reader"),
+    kind: str = typer.Option(..., "--kind", help="reader | writer | doctor-check"),
+    dest: Path = typer.Option(Path("local_plugins"), "--dest", help="Cartella di destinazione"),
+):
+    """Scaffold rapido di un plugin LOCALE: un singolo file .py dentro
+    local_plugins/, senza pip install. Per un plugin distribuibile
+    (pacchetto pip vero), usa invece 'pld plugin new'."""
+
+    def _run():
+        if kind not in ("reader", "writer", "doctor-check"):
+            console.print(f"[red]✗[/] kind sconosciuto: '{kind}' (reader|writer|doctor-check)")
+            raise typer.Exit(code=2)
+
+        slug = name.replace("-", "_")
+        class_suffix = {"reader": "Reader", "writer": "Writer", "doctor-check": "Check"}[kind]
+        raw_class_name = "".join(p.capitalize() for p in slug.split("_"))
+        class_name = raw_class_name if raw_class_name.lower().endswith(class_suffix.lower()) else raw_class_name + class_suffix
+        attr_name = {"reader": "READER", "writer": "WRITER", "doctor-check": "DOCTOR_CHECK"}[kind]
+
+        dest.mkdir(parents=True, exist_ok=True)
+        out_path = dest / f"{slug}.py"
+        if out_path.exists():
+            console.print(f"[red]✗[/] '{out_path}' esiste già")
+            raise typer.Exit(code=2)
+
+        if kind == "reader":
+            body = f'''"""TODO: descrivi qui il formato che questo plugin legge, con un esempio."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from payload.core.errors import ReaderParseError
+from payload.core.ir import TableIR
+
+
+class {class_name}:
+    name = "{slug}"
+    extensions = [".{slug}"]
+    api_version = "1.0"
+    default_writer = "bin"  # opzionale: writer suggerito, o None
+
+    def sniff(self, path: Path) -> bool:
+        return False
+
+    def parse(self, path: Path, config: dict) -> TableIR:
+        raise NotImplementedError("TODO: implementa il parsing")
+
+
+{attr_name} = {class_name}
+'''
+        elif kind == "writer":
+            body = f'''"""TODO: descrivi qui il formato che questo plugin scrive, con un esempio."""
+from __future__ import annotations
+
+from pathlib import Path
+
+from payload.core.ir import TableIR
+
+
+class {class_name}:
+    name = "{slug}"
+    extension = ".{slug}"
+    api_version = "1.0"
+    compatible_readers = None  # opzionale: lista di reader compatibili, o None per tutti
+
+    def emit(self, ir: TableIR, out_path: Path, config: dict) -> Path:
+        raise NotImplementedError("TODO: implementa la scrittura")
+
+
+{attr_name} = {class_name}
+'''
+        else:
+            body = f'''"""TODO: descrivi qui cosa verifica questo check."""
+from __future__ import annotations
+
+from payload.core.plugin_base import CheckResult, CheckStatus
+
+
+class {class_name}:
+    name = "{slug}"
+    api_version = "1.0"
+
+    def run(self, config: dict) -> CheckResult:
+        raise NotImplementedError("TODO: implementa il check")
+
+
+{attr_name} = {class_name}
+'''
+
+        out_path.write_text(body)
+        console.print(f"[green]✓[/] creato {out_path}")
+        console.print(f"    → 'pld plugins' per verificare che venga scoperto dopo averlo completato", style="dim")
 
     run_command(_run, ctx.obj["verbosity"])
 

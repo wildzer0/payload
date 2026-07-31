@@ -17,7 +17,8 @@ sorgente (.c | .raw | ...) → [Reader plugin] → TableIR → [Writer plugin] �
 - **[docs/PLUGINS.md](docs/PLUGINS.md)** — guida sviluppatore: contratto
   Reader/Writer/TableIR spiegato per intero, esempi commentati, come
   validare un plugin. Parti da qui se vuoi *estendere* il tool.
-
+- **[docs/PIPELINE.md](docs/PIPELINE.md)** — pipeline configurabile
+  (stage reader/writer/exec): come funziona, sintassi, esempi.
 ## Installazione (sviluppo)
 
 ```bash

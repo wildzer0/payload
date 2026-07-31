@@ -24,8 +24,8 @@ realmente compilati contano."""
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from payload.core.errors import ReaderParseError, ToolchainExecutionError
@@ -58,8 +58,14 @@ class CSourceReader:
         compiler_flags = toolchain.get("compiler_flags", [])
         objcopy = toolchain.get("objcopy", "objcopy")
 
-        with tempfile.TemporaryDirectory() as tmp_str:
-            tmp = Path(tmp_str)
+        # sottocartella PRIVATA dentro tmp/, non tmp/ stessa: quando questo
+        # reader gira dentro una pipeline multi-stage, tmp/ è condivisa tra
+        # più stage (vedi core/pipeline.py) — cancellare l'intera tmp/ a
+        # fine parsing romperebbe gli stage successivi che se la aspettano
+        # ancora lì.
+        tmp = path.parent / "tmp" / "c_source_scratch"
+        tmp.mkdir(parents=True, exist_ok=True)
+        try:
             obj_path = tmp / "intermediate.o"
             bin_path = tmp / "extracted.bin"
 
@@ -85,6 +91,8 @@ class CSourceReader:
                 )
 
             data = bin_path.read_bytes()
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
         return TableIR(
             name=path.stem,
