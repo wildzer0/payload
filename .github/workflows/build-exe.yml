@@ -23,8 +23,14 @@ jobs:
           python-version: "3.12"
 
       - name: Installa payload e pyinstaller
+        # Installazione NON editable (pip install ., non -e .): con
+        # un'installazione editable, --copy-metadata di PyInstaller può
+        # non trovare/impacchettare correttamente il dist-info a
+        # seconda del meccanismo PEP 660 in uso, lasciando entry_points
+        # vuoto dentro l'exe congelato (nessun plugin trovato). Una
+        # build reale del pacchetto evita questa ambiguità.
         run: |
-          pip install -e .
+          pip install .
           pip install pyinstaller>=6.6
 
       - name: Build exe standalone
@@ -45,9 +51,17 @@ jobs:
           scripts/pld_entry.py
 
       - name: Verifica che l'exe funzioni davvero
+        shell: pwsh
         run: |
           dist\pld.exe --version
-          dist\pld.exe plugins
+
+          $output = dist\pld.exe plugins | Out-String
+          Write-Output $output
+
+          if ($output -notmatch "raw_text") {
+            Write-Error "L'exe non trova i plugin builtin (raw_text assente dalla tabella) — probabile problema con --copy-metadata o l'installazione del pacchetto prima del build"
+            exit 1
+          }
 
       - name: Carica l'exe come artifact
         uses: actions/upload-artifact@v4

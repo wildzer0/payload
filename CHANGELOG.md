@@ -16,6 +16,8 @@ Prima versione funzionante del tool.
 - Dipendenze dichiarate dai plugin locali: `REQUIRES = [...]`, letto staticamente (AST, non esecuzione) anche se il modulo non sarebbe importabile; `pld plugin install-deps <file>` le installa con pip
 - `pld init --wizard`: modalità guidata (nome progetto, cosa includere, writer/byte_order di default, `git init` opzionale); `local_plugins/` creata di default anche senza wizard
 - `doctor`: nuovi check `git` (informativo) e `local_plugin_deps` (dipendenze mancanti nei plugin locali); fix di due check (`plugins`, `table_names`) che ignoravano la project root reale
+- Fix: `UnicodeEncodeError` su console Windows con codepage legacy (cp1252) durante la stampa dei tip con emoji — `stdout`/`stderr` riconfigurati con `errors="replace"` all'avvio della CLI
+- `build-exe.yml`: installazione non-editable (`pip install .`) prima del build PyInstaller (sospetta causa di `entry_points` vuoti dentro l'exe con installazione editable); step di verifica ora fallisce esplicitamente se i plugin builtin non sono trovati, invece di un successo silenzioso con tabella vuota
 
 ### Comandi
 - `init`, `doctor`, `plugins`, `plugin new/validate/info`, `clean`

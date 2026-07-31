@@ -56,6 +56,22 @@ app.add_typer(golden_app, name="golden")
 app.add_typer(plugin_app, name="plugin")
 app.add_typer(config_app, name="config")
 
+# Console Windows con codepage legacy (cp1252/'charmap', non UTF-8) non
+# sanno rappresentare emoji come 💡 usate nei tip — senza questo, un
+# UnicodeEncodeError durante la scrittura fa crashare l'intero comando
+# per un dettaglio puramente estetico. errors="replace" sostituisce il
+# carattere non rappresentabile con un placeholder invece di sollevare,
+# non ha alcun effetto quando lo stream supporta già UTF-8 (il caso
+# comune su Linux/macOS e Windows Terminal moderno). Deve avvenire
+# PRIMA di creare le istanze Console sotto, altrimenti rich potrebbe
+# aver già letto l'encoding originale dello stream.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(errors="replace")
+        except (ValueError, OSError):  # pragma: no cover - stream non riconfigurabile
+            pass
+
 console = Console()
 err_console = Console(stderr=True)
 
