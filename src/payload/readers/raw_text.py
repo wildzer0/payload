@@ -49,7 +49,7 @@ class RawTextReader:
 
             code_part, _, comment_part = line.partition("#")
             code_part = code_part.strip()
-            if not code_part:
+            if not code_part:  # pragma: no cover - difesa: 'line' già garantita non-vuota e non-'#'-iniziale sopra, quindi code_part non può essere vuoto
                 continue
 
             offset_before = len(data)

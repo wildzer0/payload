@@ -9,10 +9,10 @@ from payload.core.pipeline import build
 
 def test_build_produces_expected_output(tmp_path, source_file, registry, config):
     out_dir = tmp_path / "out"
-    out_path, was_built = build(source_file, registry, config, out_dir, writer_name="fake_writer")
+    out_paths, was_built = build(source_file, registry, config, out_dir, writer_name="fake_writer")
 
     assert was_built is True
-    assert out_path.read_bytes() == b"FAKE:hello table"
+    assert out_paths[0].read_bytes() == b"FAKE:hello table"
 
 
 def test_build_missing_source_raises(tmp_path, registry, config):
@@ -68,9 +68,9 @@ def test_force_bypasses_cache(tmp_path, source_file, registry, config):
 
 def test_dry_run_does_not_write_output(tmp_path, source_file, registry, config):
     out_dir = tmp_path / "out"
-    out_path, was_built = build(
+    out_paths, was_built = build(
         source_file, registry, config, out_dir, writer_name="fake_writer", dry_run=True
     )
 
     assert was_built is True
-    assert not out_path.exists()
+    assert not out_paths[0].exists()

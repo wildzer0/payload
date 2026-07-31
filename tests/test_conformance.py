@@ -6,6 +6,7 @@ from payload.core.ir import TableIR
 from payload.readers.csv_reader import CsvReader
 from payload.readers.raw_text import RawTextReader
 from payload.writers.bin_writer import BinWriter
+from payload.writers.header_writer import HeaderWriter
 from payload.writers.hex_writer import HexWriter
 from payload.testing import assert_reader_conforms, assert_writer_conforms
 
@@ -33,6 +34,11 @@ def test_bin_writer_conforms(tmp_path):
 def test_hex_writer_conforms(tmp_path):
     ir = TableIR(name="t", data=b"\x00\x01", source_path=Path("x"), source_format="fake")
     assert_writer_conforms(HexWriter(), ir, tmp_path)
+
+
+def test_header_writer_conforms(tmp_path):
+    ir = TableIR(name="t", data=b"\x00\x01", source_path=Path("x"), source_format="fake")
+    assert_writer_conforms(HeaderWriter(), ir, tmp_path)
 
 
 # La suite deve anche saper INTERCETTARE violazioni vere, non solo

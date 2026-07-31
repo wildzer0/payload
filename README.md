@@ -44,13 +44,13 @@ Proprietaria, uso interno — vedi [LICENSE](LICENSE).
 pytest
 ```
 
-Con `pytest-cov` configurato (report a schermo, nessuna soglia minima
-imposta a priori — misurala tu una volta, poi decidi se e dove fissare
-`--cov-fail-under=N` in `pyproject.toml`). I test del core usano plugin
-fake in-memory (`tests/fakes.py`) e non richiedono toolchain di
+Con `pytest-cov` configurato (report a schermo). La suite è al 100% di
+copertura riga per riga. I test del core usano plugin fake in-memory
+(`tests/fakes.py`) o subprocess mockati e non richiedono toolchain di
 compilazione; `tests/test_c_source_and_obj.py` e
-`tests/test_cli_smoke.py::test_c_source_to_obj_via_cli` richiedono
-`gcc`/`objcopy` reali e vengono saltati automaticamente se assenti.
+`tests/test_cli_smoke.py::test_c_source_to_obj_via_cli` sono gli unici
+che usano `gcc`/`objcopy` reali (integrazione, non necessari per la
+copertura) e vengono saltati automaticamente se assenti.
 
 ## Build e distribuzione
 
@@ -78,3 +78,4 @@ Python e dipendenze già dentro), vedi
 - `writers/bin_writer.py` — dump binario grezzo
 - `writers/hex_writer.py` — formato Intel HEX standard (checksum incluso)
 - `writers/obj_writer.py` — `.o` linkabile con sezione dedicata, simboli `__start_`/`__stop_` generati dal linker finale
+- `writers/header_writer.py` — header C (`static const uint8_t[]`), zero configurazione di toolchain richiesta

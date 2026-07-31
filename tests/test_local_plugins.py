@@ -52,6 +52,12 @@ class BrokenWriter:
 WRITER = BrokenWriter
 '''
 
+# fallisce all'IMPORT del modulo stesso (non nell'istanziare una classe
+# valida) — diverso da BROKEN_SOURCE, che invece esercita _register_one
+MODULE_LEVEL_FAILURE_SOURCE = '''
+raise RuntimeError("fallito prima ancora di definire un plugin")
+'''
+
 
 def test_local_plugins_dir_discovered_next_to_project_root(tmp_path):
     (tmp_path / "local_plugins").mkdir()
@@ -70,6 +76,13 @@ def test_env_var_adds_extra_directory(tmp_path, monkeypatch):
 
     dirs = discover_local_plugin_dirs(tmp_path)
     assert external in dirs
+
+
+def test_env_var_nonexistent_directory_ignored(tmp_path, monkeypatch):
+    monkeypatch.setenv("PAYLOAD_PLUGIN_PATH", str(tmp_path / "non_esiste"))
+
+    dirs = discover_local_plugin_dirs(tmp_path)
+    assert dirs == []
 
 
 def test_single_writer_loaded_and_functional(tmp_path):
@@ -120,6 +133,28 @@ def test_broken_plugin_non_strict_tracked_not_raised(tmp_path):
 
     assert "broken" not in registry.writers
     assert len(registry.load_failures) == 1
+
+
+def test_module_import_failure_strict_raises(tmp_path):
+    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "crashes.py").write_text(MODULE_LEVEL_FAILURE_SOURCE)
+
+    registry = PluginRegistry()
+    with pytest.raises(PluginLoadError):
+        load_local_plugins(tmp_path, registry, strict=True)
+
+
+def test_module_import_failure_non_strict_tracked_not_raised(tmp_path):
+    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "crashes.py").write_text(MODULE_LEVEL_FAILURE_SOURCE)
+
+    registry = PluginRegistry()
+    load_local_plugins(tmp_path, registry, strict=False)  # non deve sollevare
+
+    assert len(registry.load_failures) == 1
+    assert registry.load_failures[0][0] == "crashes.py"
 
 
 def test_underscore_prefixed_files_ignored(tmp_path):

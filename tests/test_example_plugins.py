@@ -54,6 +54,44 @@ def test_csv_reader_sniff_detects_value_header(tmp_path):
     assert CsvReader().sniff(csv_file) is True
 
 
+def test_csv_reader_sniff_returns_false_on_unreadable_path(tmp_path):
+    directory = tmp_path / "una_cartella"
+    directory.mkdir()
+    assert CsvReader().sniff(directory) is False
+
+
+def test_csv_reader_skips_rows_with_empty_value(tmp_path):
+    csv_file = tmp_path / "t.csv"
+    # riga vuota "vera" (senza virgole) viene scartata dal modulo csv
+    # stesso, prima ancora di arrivare al reader — qui invece la riga
+    # esiste con una colonna 'value' vuota, per esercitare lo skip
+    # esplicito del reader
+    csv_file.write_text("value,comment\n0x0A,x\n,\n0x0B,y\n")
+    ir = CsvReader().parse(csv_file, {})
+    assert ir.data == bytes([0x0A, 0x0B])
+
+
+def test_csv_reader_invalid_value_raises(tmp_path):
+    csv_file = tmp_path / "t.csv"
+    csv_file.write_text("value\nnon_un_numero\n")
+    with pytest.raises(ReaderParseError):
+        CsvReader().parse(csv_file, {})
+
+
+def test_csv_reader_unsupported_width_raises(tmp_path):
+    csv_file = tmp_path / "t.csv"
+    csv_file.write_text("value,width\n0x0A,3\n")
+    with pytest.raises(ReaderParseError):
+        CsvReader().parse(csv_file, {})
+
+
+def test_csv_reader_overlapping_offset_raises(tmp_path):
+    csv_file = tmp_path / "t.csv"
+    csv_file.write_text("offset,value\n0,0xAA\n2,0xBB\n1,0xCC\n")
+    with pytest.raises(ReaderParseError):
+        CsvReader().parse(csv_file, {})
+
+
 # --- HexWriter -----------------------------------------------------------
 
 def _ir(data: bytes) -> TableIR:

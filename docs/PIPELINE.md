@@ -1,15 +1,13 @@
 # La pipeline — come funziona
 
 Questo documento descrive il modello con cui `payload` esegue **ogni**
-build, dalla più semplice (un reader + un writer, come nella versione
-originaria del tool) alla più complessa (più stage con trasformazioni
-esterne in mezzo).
+build, dalla più semplice (un reader + un writer) alla più complessa
+(più stage con trasformazioni esterne in mezzo).
 
-**Implementato.** Verificato con `gcc`/`objcopy` reali e con comandi
-shell reali su Linux; su Windows la sintassi del comando `exec` segue
-le regole della shell dell'host (`cmd.exe`/PowerShell), non ancora
-verificata lì di persona — se qualcosa si comporta diversamente,
-segnalalo.
+Nota su `exec` e Windows: il comando dentro uno stage `exec` gira
+tramite la shell dell'host, quindi la sua sintassi segue le regole di
+`cmd.exe`/PowerShell su Windows e della shell POSIX su Linux/macOS —
+uno stesso comando `exec` non è automaticamente portabile tra i due.
 
 ---
 
@@ -65,19 +63,68 @@ verificabili **prima** di lanciare qualunque build (non a metà):
 5. **La pipeline deve avere almeno 2 stage**: un `reader` e un
    `writer` — il minimo indispensabile, che è esattamente il
    comportamento di oggi.
+6. **Fan-out**: un `reader` può essere seguito da **più `writer`
+   consecutivi**, non solo uno — tutti alimentati dalla stessa IR
+   parsata una sola volta (vedi sezione dedicata sotto). L'unico
+   vincolo: un gruppo di 2+ writer consecutivi dev'essere l'**ultimo**
+   della pipeline — non può esserci un `reader`/`exec` dopo un
+   fan-out. Un gruppo di un solo writer resta senza questa
+   restrizione (comportamento di sempre).
 
 In breve, come state machine:
 
 ```
-[inizio] → reader → writer → { fine | reader | exec }
+[inizio] → reader → writer → { fine | reader | exec | altro writer* }
                                             ↑___________|
                               exec → { fine | reader | exec }
+
+  * "altro writer" (fan-out) è permesso solo se porta fino alla fine
+    della pipeline — niente reader/exec dopo un gruppo di 2+ writer.
 ```
 
 Una config che viola queste regole (es. due `reader` di fila, o che
-finisce con un `reader`) viene rifiutata **in fase di validazione**,
-prima di toccare qualunque file — stesso principio già usato per la
-validazione del config esistente (`InvalidConfigError`).
+finisce con un `reader`, o un `exec` dopo un fan-out) viene rifiutata
+**in fase di validazione**, prima di toccare qualunque file — stesso
+principio già usato per la validazione del config esistente
+(`InvalidConfigError`).
+
+---
+
+## Fan-out: più writer dallo stesso parse
+
+Caso d'uso comune: vuoi produrre `.bin` **e** `.hex` **e** un header
+`.h` dalla stessa tabella, senza rileggere/riparsare il sorgente tre
+volte (con un reader costoso — es. `c_source`, che compila con gcc —
+la differenza è reale, non solo stilistica).
+
+```toml
+[pipeline]
+stages = [
+    { type = "reader", name = "csv" },
+    { type = "writer", name = "bin" },
+    { type = "writer", name = "hex" },
+    { type = "writer", name = "header" },
+]
+```
+
+Il reader viene eseguito **una sola volta**; l'IR risultante viene
+passata, invariata, a ciascuno dei tre writer, che scrivono ciascuno
+il proprio file (`tabella.bin`, `tabella.hex`, `tabella.h`) nella
+directory di output. La compatibilità reader/writer viene verificata
+per **ogni** writer del gruppo, non solo il primo — un writer con
+`compatible_readers` che esclude il reader usato blocca la build prima
+di scrivere qualunque file, come per una pipeline lineare.
+
+`build()` ritorna quindi sempre una **lista** di path (un elemento nel
+caso comune, uno per writer con un fan-out) — vedi `core/pipeline.py`,
+`final_output_paths()`.
+
+**Cosa NON è supportato**: un fan-out con **continuazione per ramo** —
+es. `writer bin -> exec firma-v1` e, in parallelo, `writer hex -> exec
+firma-v2`, ognuno con i propri stage successivi indipendenti. Ogni
+writer del fan-out è sempre uno stage **terminale**: se ti serve una
+trasformazione diversa per ciascun output, usa pipeline separate (una
+per output, con lo stesso reader ripetuto).
 
 ---
 
@@ -172,11 +219,8 @@ comandi arbitrari senza necessariamente accorgertene.
 sono configurati nel progetto** — check `pipeline_exec`, scansiona il
 config globale e tutti i sidecar: `"3 stage 'exec' configurati in 2
 file"`, con l'elenco dei file coinvolti nell'hint. Informativo (`WARN`,
-non `FAIL`), ma reso impossibile da ignorare. Se in futuro serve
-qualcosa di più severo (un flag esplicito tipo `--allow-exec` richiesto
-per far girare build con `exec`), lo aggiungiamo quando emerge un caso
-d'uso reale che lo giustifica — non prima, per non aggiungere frizione
-a chi non ne ha bisogno.
+non `FAIL`), ma reso impossibile da ignorare — esegui `pld doctor`
+prima di lanciare una build su una config di cui non ti fidi al 100%.
 
 ---
 
@@ -220,30 +264,12 @@ cosa verrebbe scritto, come già oggi.
 
 ---
 
-## Cosa NON c'è in questa prima versione
+## Limiti noti
 
-- **Fan-out**: un reader che alimenta più writer in parallelo (es. per
-  produrre `.bin` e `.hex` dallo stesso parse) — richiederebbe rompere
-  il modello lineare. Se serve davvero, si affronta come iterazione
-  successiva una volta che la pipeline lineare è stabile.
-- **Stage condizionali** (es. "esegui solo se `profile == release`") —
-  stessa logica: aggiungiamolo quando c'è un caso d'uso concreto, non
-  in anticipo.
-
----
-
-## Cosa tocca il codice, se vuoi orientarti
-
-`core/pipeline_spec.py` (stage + regole di alternanza),
-`core/pipeline.py` (motore di esecuzione, unico per implicita/esplicita,
-inclusa la cache per stage), `core/cache.py`
-(`compute_pipeline_cache_key`, `BuildCache.get_output_path`),
-`core/config.py` (sezione `[pipeline]`), `core/doctor.py` (check
-`pipeline_exec`), `cli.py` (`--keep-intermediate` su
-`build`/`build-all`, comando `pld pipeline show`).
-
-## Idee per un'iterazione successiva
-
-- **`--allow-exec`**: se emerge un caso d'uso reale che lo giustifica,
-  un flag esplicito richiesto per eseguire build con stage `exec` —
-  non aggiunto ora per non introdurre frizione senza un bisogno concreto.
+- **Fan-out con continuazione per ramo**: non supportato, vedi sezione
+  "Fan-out" sopra — ogni writer di un fan-out è sempre uno stage
+  terminale.
+- **Stage condizionali** (es. "esegui questo stage solo se una certa
+  condizione è vera"): non esiste una sintassi per questo in
+  `[pipeline] stages`. Se ti serve, gestiscilo a monte con config
+  diverse (globale vs. sidecar) per le tabelle che ne hanno bisogno.

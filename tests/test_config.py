@@ -25,6 +25,7 @@ def test_model_dump_returns_plain_dict():
             "objcopy_target": "", "objcopy_arch": "",
         },
         "plugin": {},
+        "pipeline_stages": [],
     }
 
 
@@ -74,5 +75,41 @@ def test_malformed_toml_raises(tmp_path):
 
 def test_unknown_top_level_section_raises(tmp_path):
     (tmp_path / "table-tool.toml").write_text('[sezione_a_caso]\nx = 1\n')
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_str_field_wrong_type_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text("[defaults]\nwriter = 123\n")
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_defaults_section_not_a_table_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('defaults = "non una tabella"\n')
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_toolchain_section_not_a_table_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('toolchain = "non una tabella"\n')
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_pipeline_section_not_a_table_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('pipeline = "non una tabella"\n')
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_pipeline_stages_not_a_list_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('[pipeline]\nstages = "non una lista"\n')
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_invalid_byte_order_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('[defaults]\nbyte_order = "middle"\n')
     with pytest.raises(InvalidConfigError):
         load_config(tmp_path)

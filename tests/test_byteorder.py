@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from payload.core.byteorder import pack_value, repack, unpack_value
 from payload.readers.csv_reader import CsvReader
 from payload.writers.bin_writer import BinWriter
@@ -9,6 +11,25 @@ from payload.writers.bin_writer import BinWriter
 
 def test_pack_value_little_endian():
     assert pack_value(0x1234, width=2, byte_order="little") == bytes.fromhex("3412")
+
+
+def test_pack_value_invalid_byte_order_raises():
+    with pytest.raises(ValueError, match="little.*big"):
+        pack_value(1, width=1, byte_order="middle")
+
+
+def test_pack_value_unsupported_width_raises():
+    with pytest.raises(ValueError, match="larghezza"):
+        pack_value(1, width=3, byte_order="little")
+
+
+def test_repack_non_contiguous_offset_raises():
+    fields = [
+        {"offset": 0, "width": 1, "value": 0x01},
+        {"offset": 5, "width": 1, "value": 0x02},  # buco tra offset 1 e 5
+    ]
+    with pytest.raises(ValueError, match="non contiguo"):
+        repack(fields, "little")
 
 
 def test_pack_value_big_endian():

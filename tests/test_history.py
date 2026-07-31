@@ -1,10 +1,17 @@
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from payload.core.discovery import discover_table_sources
 from payload.core.errors import SnapshotNotFoundError
 from payload.core.history import HistoryStore
+
+
+def test_read_blob_missing_raises(tmp_path):
+    history = HistoryStore(tmp_path)
+    with pytest.raises(SnapshotNotFoundError):
+        history.read_blob("hash_che_non_esiste")
 
 
 def test_never_committed_table_is_dirty(tmp_path):
@@ -126,6 +133,20 @@ def test_discover_table_sources_excludes_output_dir(tmp_path):
     assert [s.name for s in sources] == ["t1.raw"]
 
 
+def test_discover_table_sources_excludes_matching_extension_inside_output_dir(tmp_path):
+    """Un file DENTRO output_dir con un'estensione nota (non solo
+    un'estensione diversa, come nel test sopra) deve comunque essere
+    escluso — altrimenti una build che rigenera un .raw dentro build/
+    (caso limite ma possibile) verrebbe ripresa come sorgente."""
+    (tmp_path / "t1.raw").write_text("x")
+    out_dir = tmp_path / "build"
+    out_dir.mkdir()
+    (out_dir / "rigenerato.raw").write_text("x")
+
+    sources = discover_table_sources(tmp_path, {".raw"}, out_dir)
+    assert [s.name for s in sources] == ["t1.raw"]
+
+
 def test_discover_table_sources_respects_filter_glob(tmp_path):
     (tmp_path / "sensors").mkdir()
     (tmp_path / "sensors" / "t1.raw").write_text("x")
@@ -133,4 +154,42 @@ def test_discover_table_sources_respects_filter_glob(tmp_path):
     (tmp_path / "other" / "t2.raw").write_text("x")
 
     sources = discover_table_sources(tmp_path, {".raw"}, tmp_path / "build", filter_glob="sensors/**")
+    assert [s.name for s in sources] == ["t1.raw"]
+
+
+def test_discover_table_sources_tolerates_unresolvable_output_dir(tmp_path):
+    """Se output_dir.resolve() fallisce (es. permessi, filesystem
+    particolari), la discovery non deve crashare — degrada a usare il
+    path non risolto invece di alzare."""
+    (tmp_path / "t1.raw").write_text("x")
+    out_dir = tmp_path / "build"
+    real_resolve = Path.resolve
+
+    def fake_resolve(self, *a, **kw):
+        if self == out_dir:
+            raise OSError("simulato")
+        return real_resolve(self, *a, **kw)
+
+    with patch.object(Path, "resolve", fake_resolve):
+        sources = discover_table_sources(tmp_path, {".raw"}, out_dir)
+
+    assert [s.name for s in sources] == ["t1.raw"]
+
+
+def test_discover_table_sources_tolerates_unresolvable_source(tmp_path):
+    """Se il resolve() di un candidato fallisce, va comunque incluso tra
+    i sorgenti invece di essere perso silenziosamente (fail-safe: meglio
+    un falso positivo che una tabella scomparsa dalla discovery)."""
+    src = tmp_path / "t1.raw"
+    src.write_text("x")
+    real_resolve = Path.resolve
+
+    def fake_resolve(self, *a, **kw):
+        if self == src:
+            raise OSError("simulato")
+        return real_resolve(self, *a, **kw)
+
+    with patch.object(Path, "resolve", fake_resolve):
+        sources = discover_table_sources(tmp_path, {".raw"}, tmp_path / "build")
+
     assert [s.name for s in sources] == ["t1.raw"]

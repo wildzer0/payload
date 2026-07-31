@@ -117,6 +117,28 @@ def test_reader_stage_missing_name_rejected():
         ])
 
 
+def test_writer_stage_missing_name_rejected():
+    with pytest.raises(InvalidPipelineError):
+        PipelineSpec.from_raw_stages([
+            {"type": "reader", "name": "a"},
+            {"type": "writer"},
+        ])
+
+
+def test_reader_as_last_stage_of_longer_pipeline_rejected():
+    with pytest.raises(InvalidPipelineError):
+        PipelineSpec.from_raw_stages([
+            {"type": "reader", "name": "a"},
+            {"type": "writer", "name": "b"},
+            {"type": "reader", "name": "c"},
+        ])
+
+
+def test_raw_stages_not_a_list_rejected():
+    with pytest.raises(InvalidPipelineError):
+        PipelineSpec.from_raw_stages({"not": "a list"})
+
+
 def test_exec_stage_missing_command_rejected():
     with pytest.raises(InvalidPipelineError):
         PipelineSpec.from_raw_stages([
@@ -167,3 +189,91 @@ def test_reader_writer_pairs_finds_all_pairs_in_multistage_pipeline():
     assert len(pairs) == 2
     assert pairs[0][0].name == "r1" and pairs[0][1].name == "w1"
     assert pairs[1][0].name == "r2" and pairs[1][1].name == "w2"
+
+
+# --- fan-out: reader -> 1+ writer terminali -------------------------------
+
+def test_reader_followed_by_two_writers_valid():
+    spec = PipelineSpec.from_raw_stages([
+        {"type": "reader", "name": "a"},
+        {"type": "writer", "name": "bin"},
+        {"type": "writer", "name": "hex"},
+    ])
+    assert len(spec.stages) == 3
+
+
+def test_reader_writer_reader_writer_still_valid():
+    """Gruppi di un solo writer restano senza restrizioni: reader/exec
+    possono ancora seguirli, comportamento invariato."""
+    spec = PipelineSpec.from_raw_stages([
+        {"type": "reader", "name": "r1"},
+        {"type": "writer", "name": "w1"},
+        {"type": "reader", "name": "r2"},
+        {"type": "writer", "name": "w2"},
+    ])
+    assert len(spec.stages) == 4
+
+
+def test_reader_writer_exec_still_valid():
+    spec = PipelineSpec.from_raw_stages([
+        {"type": "reader", "name": "a"},
+        {"type": "writer", "name": "b"},
+        {"type": "exec", "command": "x", "output_extension": ".x"},
+    ])
+    assert len(spec.stages) == 3
+
+
+def test_writer_run_followed_by_reader_rejected():
+    with pytest.raises(InvalidPipelineError):
+        PipelineSpec.from_raw_stages([
+            {"type": "reader", "name": "a"},
+            {"type": "writer", "name": "bin"},
+            {"type": "writer", "name": "hex"},
+            {"type": "reader", "name": "b"},
+        ])
+
+
+def test_writer_run_followed_by_exec_rejected():
+    with pytest.raises(InvalidPipelineError):
+        PipelineSpec.from_raw_stages([
+            {"type": "reader", "name": "a"},
+            {"type": "writer", "name": "bin"},
+            {"type": "writer", "name": "hex"},
+            {"type": "exec", "command": "x", "output_extension": ".x"},
+        ])
+
+
+def test_terminal_writer_start_for_single_writer():
+    spec = PipelineSpec.implicit("raw_text", "bin")
+    assert spec.terminal_writer_start() == 1
+
+
+def test_terminal_writer_start_for_fan_out_group():
+    spec = PipelineSpec.from_raw_stages([
+        {"type": "reader", "name": "a"},
+        {"type": "writer", "name": "bin"},
+        {"type": "writer", "name": "hex"},
+        {"type": "writer", "name": "header"},
+    ])
+    assert spec.terminal_writer_start() == 1
+
+
+def test_terminal_writer_start_for_exec_terminated_pipeline():
+    spec = PipelineSpec.from_raw_stages([
+        {"type": "reader", "name": "a"},
+        {"type": "writer", "name": "b"},
+        {"type": "exec", "command": "x", "output_extension": ".x"},
+    ])
+    assert spec.terminal_writer_start() == len(spec.stages)
+
+
+def test_reader_writer_pairs_yields_all_writers_in_fan_out_group():
+    spec = PipelineSpec.from_raw_stages([
+        {"type": "reader", "name": "a"},
+        {"type": "writer", "name": "bin"},
+        {"type": "writer", "name": "hex"},
+        {"type": "writer", "name": "header"},
+    ])
+    pairs = list(spec.reader_writer_pairs())
+    assert [w.name for _, w in pairs] == ["bin", "hex", "header"]
+    assert all(r.name == "a" for r, _ in pairs)

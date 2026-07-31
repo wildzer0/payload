@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 from payload.core.cache import BuildCache, compute_pipeline_cache_key
 from payload.core.errors import (
     InvalidPipelineError,
+    NoWriterFoundError,
     SourceNotFoundError,
     ToolchainExecutionError,
     WriterEmitError,
@@ -67,6 +68,8 @@ def resolve_pipeline_spec(
     wname = writer_name or config.defaults.writer or getattr(reader, "default_writer", None)
     if wname is None:
         raise WriterNotSpecifiedError(source_path, reader.name)
+    if wname not in registry.writers:
+        raise NoWriterFoundError(wname)
 
     return PipelineSpec.implicit(reader.name, wname)
 
@@ -92,16 +95,22 @@ def validate_pipeline_against_registry(spec: PipelineSpec, registry: PluginRegis
             )
 
 
-def final_output_path(
+def final_output_paths(
     spec: PipelineSpec, source_path: Path, out_dir: Path, registry: PluginRegistry
-) -> Path:
+) -> list[Path]:
+    """Un path per ogni stage terminale della pipeline — normalmente
+    uno solo, ma un fan-out (reader -> più writer consecutivi) ne
+    produce uno per writer, tutti dalla stessa IR."""
     last = spec.stages[-1]
     if isinstance(last, WriterStage):
-        writer = registry.writers[last.name]
-        return out_dir / f"{source_path.stem}{writer.extension}"
+        start = spec.terminal_writer_start()
+        return [
+            out_dir / f"{source_path.stem}{registry.writers[s.name].extension}"
+            for s in spec.stages[start:]
+        ]
     # ExecStage come ultimo stage: validate_alternation garantisce che
     # output_extension sia sempre presente a questo punto.
-    return out_dir / f"{source_path.stem}{last.output_extension}"
+    return [out_dir / f"{source_path.stem}{last.output_extension}"]
 
 
 def _describe_pipeline(spec: PipelineSpec) -> str:
@@ -126,6 +135,31 @@ def _stage_artifact_dir(cache: BuildCache) -> Path:
 
 def _stage_checkpoint_key(table_key: str, stage_index: int) -> str:
     return f"{table_key}::stage{stage_index}"
+
+
+def _persist_stage_checkpoint(
+    spec: PipelineSpec,
+    table_key: str,
+    table_name: str,
+    stage_index: int,
+    emitted_path: Path,
+    config_dict: dict,
+    source_bytes: bytes,
+    cache: BuildCache,
+) -> None:
+    """Persiste l'output di uno stage NON terminale (writer/exec, con
+    qualcosa dopo di sé nella pipeline) FUORI da tmp/ — che viene
+    ripulita ad ogni build — così sopravvive alla build successiva ed è
+    riusabile come checkpoint."""
+    artifact_dir = _stage_artifact_dir(cache)
+    persisted_path = artifact_dir / f"{table_name}_stage{stage_index}{emitted_path.suffix}"
+    if emitted_path != persisted_path:
+        shutil.copy2(emitted_path, persisted_path)
+    checkpoint_key = compute_pipeline_cache_key(
+        source_bytes, spec.signature_prefix(stage_index), config_dict
+    )
+    cache.update(_stage_checkpoint_key(table_key, stage_index), checkpoint_key, persisted_path)
+    logger.debug("Checkpoint stage %d salvato: %s", stage_index, persisted_path)
 
 
 def _find_resumable_checkpoint(
@@ -198,14 +232,15 @@ def _execute_stages(
     registry: PluginRegistry,
     config_dict: dict,
     tmp_dir: Path,
-    final_out_path: Path,
+    final_out_paths: list[Path],
     cache: BuildCache | None = None,
     source_bytes: bytes | None = None,
     force: bool = False,
-) -> Path:
+) -> list[Path]:
     table_name = source_path.stem
     n_stages = len(spec.stages)
     table_key = str(source_path)
+    terminal_start = spec.terminal_writer_start()
 
     start_index = 0
     current_path: Path | None = source_path
@@ -222,9 +257,10 @@ def _execute_stages(
             current_path = checkpoint_path
             start_index = checkpoint_index + 1
 
-    for i in range(start_index, n_stages):
+    results: list[Path] = []
+    i = start_index
+    while i < n_stages:
         stage = spec.stages[i]
-        is_last = i == n_stages - 1
 
         if isinstance(stage, ReaderStage):
             reader = registry.readers[stage.name]
@@ -233,38 +269,55 @@ def _execute_stages(
             current_ir = reader.parse(current_path, config_dict)
             logger.debug("Parse completato in %.3fs", time.perf_counter() - t0)
             current_path = None
+            i += 1
 
         elif isinstance(stage, WriterStage):
-            writer = registry.writers[stage.name]
-            stage_out = final_out_path if is_last else tmp_dir / f"stage{i}{writer.extension}"
-            logger.debug("Stage %d/%d: writer '%s' -> %s", i + 1, n_stages, stage.name, stage_out)
-            t0 = time.perf_counter()
-            current_path = writer.emit(current_ir, stage_out, config_dict)
-            logger.debug("Emit completato in %.3fs", time.perf_counter() - t0)
+            # Un reader alimenta l'intero gruppo di writer consecutivi
+            # che lo segue con la STESSA IR (fan-out) — parse() sopra è
+            # già stato chiamato una sola volta per l'intero gruppo.
+            while i < n_stages and isinstance(spec.stages[i], WriterStage):
+                writer_stage = spec.stages[i]
+                writer = registry.writers[writer_stage.name]
+                in_terminal_group = i >= terminal_start
+                stage_out = (
+                    final_out_paths[i - terminal_start] if in_terminal_group
+                    else tmp_dir / f"stage{i}{writer.extension}"
+                )
+                logger.debug(
+                    "Stage %d/%d: writer '%s' -> %s", i + 1, n_stages, writer_stage.name, stage_out
+                )
+                t0 = time.perf_counter()
+                emitted = writer.emit(current_ir, stage_out, config_dict)
+                logger.debug("Emit completato in %.3fs", time.perf_counter() - t0)
+
+                if in_terminal_group:
+                    results.append(emitted)
+                else:
+                    current_path = emitted
+                    # Non terminale = c'è dell'altro dopo (reader/exec):
+                    # checkpoint utile, coperto dalla cache di tabella
+                    # solo se questo era l'ultimo stage, che qui non è.
+                    if cache is not None:
+                        _persist_stage_checkpoint(
+                            spec, table_key, table_name, i, emitted, config_dict, source_bytes, cache
+                        )
+                i += 1
             current_ir = None
 
         else:  # ExecStage
-            stage_out = final_out_path if is_last else tmp_dir / f"stage{i}.bin"
+            is_last = i == n_stages - 1
+            stage_out = final_out_paths[0] if is_last else tmp_dir / f"stage{i}.bin"
             logger.debug("Stage %d/%d: exec '%s' -> %s", i + 1, n_stages, stage.command, stage_out)
             current_path = _run_exec_stage(stage, current_path, stage_out, table_name)
+            if is_last:
+                results.append(current_path)
+            elif cache is not None:
+                _persist_stage_checkpoint(
+                    spec, table_key, table_name, i, current_path, config_dict, source_bytes, cache
+                )
+            i += 1
 
-        # Checkpoint: solo per stage che producono un file (writer/exec)
-        # e solo se NON è l'ultimo (quello lo gestisce già la cache
-        # dell'intera pipeline in build()). Persistito FUORI da tmp/,
-        # altrimenti sparirebbe al cleanup e il checkpoint sarebbe inutile
-        # alla build successiva.
-        if cache is not None and not is_last and isinstance(stage, (WriterStage, ExecStage)):
-            artifact_dir = _stage_artifact_dir(cache)
-            persisted_path = artifact_dir / f"{table_name}_stage{i}{current_path.suffix}"
-            if current_path != persisted_path:
-                shutil.copy2(current_path, persisted_path)
-            checkpoint_key = compute_pipeline_cache_key(
-                source_bytes, spec.signature_prefix(i), config_dict
-            )
-            cache.update(_stage_checkpoint_key(table_key, i), checkpoint_key, persisted_path)
-            logger.debug("Checkpoint stage %d salvato: %s", i, persisted_path)
-
-    return current_path
+    return results
 
 
 def build(
@@ -279,8 +332,10 @@ def build(
     dry_run: bool = False,
     cli_opts: dict | None = None,
     keep_intermediate: bool = False,
-) -> tuple[Path, bool]:
-    """Ritorna (output_path, was_built). was_built=False se servito da cache.
+) -> tuple[list[Path], bool]:
+    """Ritorna (output_paths, was_built). was_built=False se servito da
+    cache. output_paths ha un solo elemento nel caso comune, più di uno
+    se la pipeline termina in un fan-out (reader -> più writer).
 
     cli_opts: override una tantum da --opt chiave=valore, validi solo
     per questa invocazione. keep_intermediate: non ripulisce tmp/ dopo
@@ -301,23 +356,23 @@ def build(
 
         cache_key = compute_pipeline_cache_key(source_bytes, spec.cache_signature(), config_dict)
         table_key = str(source_path)
-        out_path = final_output_path(spec, source_path, out_dir, registry)
+        out_paths = final_output_paths(spec, source_path, out_dir, registry)
 
         if cache is not None and not force and cache.is_fresh(table_key, cache_key):
             logger.info("Cache hit, skip build")
-            return out_path, False
+            return out_paths, False
 
         if dry_run:
-            logger.info("[dry-run] pipeline: %s -> %s", _describe_pipeline(spec), out_path)
-            return out_path, True
+            logger.info("[dry-run] pipeline: %s -> %s", _describe_pipeline(spec), out_paths)
+            return out_paths, True
 
         out_dir.mkdir(parents=True, exist_ok=True)
         tmp_dir = source_path.parent / "tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            result_path = _execute_stages(
-                spec, source_path, registry, config_dict, tmp_dir, out_path,
+            result_paths = _execute_stages(
+                spec, source_path, registry, config_dict, tmp_dir, out_paths,
                 cache=cache, source_bytes=source_bytes, force=force,
             )
         finally:
@@ -325,9 +380,9 @@ def build(
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
         if cache is not None:
-            cache.update(table_key, cache_key, result_path)
+            cache.update(table_key, cache_key, result_paths)
 
-        logger.info("Build completata: %s -> %s", source_path.name, result_path)
-        return result_path, True
+        logger.info("Build completata: %s -> %s", source_path.name, result_paths)
+        return result_paths, True
     finally:
         current_table.reset(token)

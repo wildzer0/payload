@@ -10,9 +10,15 @@ Tre tipi di stage:
 Regole di alternanza, verificate PRIMA di eseguire qualunque stage:
 1. il primo stage deve essere un reader
 2. un reader deve essere seguito immediatamente da un writer
-3. dopo un writer: reader, exec, o fine pipeline
+3. dopo un writer: reader, exec, un altro writer, o fine pipeline
 4. dopo un exec: reader, exec, o fine pipeline
 5. almeno 2 stage (reader + writer)
+6. fan-out: un reader può essere seguito da PIÙ writer consecutivi (tutti
+   alimentati dalla stessa IR parsata una sola volta) — ma un gruppo di
+   2+ writer consecutivi dev'essere l'ultimo della pipeline: non può
+   esserci un reader/exec dopo un fan-out. Un gruppo di un solo writer
+   resta senza questa restrizione (comportamento di sempre: reader/exec
+   possono seguirlo). Vedi docs/PIPELINE.md, sezione Fan-out.
 """
 from __future__ import annotations
 
@@ -95,14 +101,31 @@ def validate_alternation(stages: list[Stage]) -> None:
     if not isinstance(stages[0], ReaderStage):
         raise InvalidPipelineError(0, "il primo stage deve essere un 'reader'")
 
-    for i, stage in enumerate(stages):
+    n = len(stages)
+    i = 0
+    while i < n:
+        stage = stages[i]
         if isinstance(stage, ReaderStage):
-            if i + 1 >= len(stages):
+            if i + 1 >= n:
                 raise InvalidPipelineError(i, "un 'reader' non può essere l'ultimo stage della pipeline")
             if not isinstance(stages[i + 1], WriterStage):
                 raise InvalidPipelineError(
                     i, "un 'reader' deve essere seguito immediatamente da un 'writer'"
                 )
+            i += 1
+        elif isinstance(stage, WriterStage):
+            run_start = i
+            while i < n and isinstance(stages[i], WriterStage):
+                i += 1
+            run_end = i - 1
+            if (run_end - run_start + 1) >= 2 and run_end != n - 1:
+                raise InvalidPipelineError(
+                    run_end,
+                    "un gruppo di più 'writer' consecutivi (fan-out) deve essere l'ultimo "
+                    "gruppo della pipeline — nessun 'reader'/'exec' può seguirlo",
+                )
+        else:  # ExecStage
+            i += 1
 
     last = stages[-1]
     if isinstance(last, ExecStage) and not last.output_extension:
@@ -158,7 +181,24 @@ class PipelineSpec:
     def reader_writer_pairs(self):
         """Ogni coppia (reader, writer) adiacente — per il check di
         compatibilità, applicato a OGNI coppia nella pipeline, non solo
-        alla prima."""
+        alla prima. Con un fan-out (reader seguito da più writer
+        consecutivi), restituisce una coppia per CIASCUN writer del
+        gruppo, non solo il primo — la compatibilità va verificata per
+        ognuno."""
+        n = len(self.stages)
         for i, stage in enumerate(self.stages):
             if isinstance(stage, ReaderStage):
-                yield stage, self.stages[i + 1]
+                j = i + 1
+                while j < n and isinstance(self.stages[j], WriterStage):
+                    yield stage, self.stages[j]
+                    j += 1
+
+    def terminal_writer_start(self) -> int:
+        """Indice del primo stage del gruppo finale di 'WriterStage'
+        consecutivi (un gruppo di 1 o più — comprende anche il caso
+        comune di un solo writer terminale). len(stages) se l'ultimo
+        stage non è un writer (es. pipeline terminata da un 'exec')."""
+        i = len(self.stages)
+        while i > 0 and isinstance(self.stages[i - 1], WriterStage):
+            i -= 1
+        return i

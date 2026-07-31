@@ -34,6 +34,7 @@ c_source = "payload.readers.c_source:CSourceReader"
 bin = "payload.writers.bin_writer:BinWriter"
 hex = "payload.writers.hex_writer:HexWriter"
 obj = "payload.writers.obj_writer:ObjWriter"
+header = "payload.writers.header_writer:HeaderWriter"
 
 [build-system]
 requires = ["setuptools>=68"]

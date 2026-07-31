@@ -145,12 +145,12 @@ def test_output_is_correct_when_resuming_from_checkpoint(tmp_path, source, regis
     stages_v2 = [
         {"type": "reader", "name": "counting_reader"},
         {"type": "writer", "name": "fake_writer"},
-        {"type": "exec", "command": "echo -n MODIFICATO > {output}", "output_extension": ".v2"},
+        {"type": "exec", "command": "printf 'MODIFICATO' > {output}", "output_extension": ".v2"},
     ]
-    out_path, built = build(source, registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
+    out_paths, built = build(source, registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
 
     assert built is True
-    assert out_path.read_text() == "MODIFICATO"
+    assert out_paths[0].read_text() == "MODIFICATO"
 
 
 def test_stage_checkpoint_survives_across_builds_after_tmp_cleanup(tmp_path, source, registry):

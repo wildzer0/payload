@@ -28,10 +28,10 @@ class Reader(Protocol):
     def sniff(self, path: Path) -> bool:
         """Fallback di riconoscimento a contenuto, usato solo in caso di
         ambiguità tra più reader che matchano la stessa estensione."""
-        ...
+        ...  # pragma: no cover - corpo di Protocol, mai eseguito (non instanziabile)
 
     def parse(self, path: Path, config: dict) -> TableIR:
-        ...
+        ...  # pragma: no cover - corpo di Protocol, mai eseguito (non instanziabile)
 
 
 @runtime_checkable
@@ -49,7 +49,7 @@ class Writer(Protocol):
     compatible_readers: list[str] | None
 
     def emit(self, ir: TableIR, out_path: Path, config: dict) -> Path:
-        ...
+        ...  # pragma: no cover - corpo di Protocol, mai eseguito (non instanziabile)
 
 
 class CheckStatus:
@@ -74,7 +74,7 @@ class DoctorCheck(Protocol):
     api_version: str
 
     def run(self, config: dict) -> CheckResult:
-        ...
+        ...  # pragma: no cover - corpo di Protocol, mai eseguito (non instanziabile)
 
 
 def check_api_compatibility(plugin_name: str, plugin_api_version: str) -> None:

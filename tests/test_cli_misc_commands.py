@@ -1,0 +1,525 @@
+"""
+Test CLI per i comandi restanti: view, build-all, watch (on_change),
+pipeline show (rami rimanenti), golden (update/check/diff completi),
+plugin (info/install-deps/validate/new-local), clean, init (rami
+rimanenti), entry point da riga di comando."""
+import subprocess
+import sys
+from unittest.mock import patch
+
+from typer.testing import CliRunner
+
+from payload.cli import app
+
+runner = CliRunner()
+
+
+def _init_project(tmp_path, monkeypatch, name="proj"):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", name])
+    proj = tmp_path / name
+    monkeypatch.chdir(proj)
+    return proj
+
+
+# --- view ----------------------------------------------------------------
+
+def test_view_shows_bytes_and_comments(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "t.raw").write_text("0x0A, 0x1B  # soglia\n")
+
+    result = runner.invoke(app, ["view", "t.raw"])
+
+    assert result.exit_code == 0
+    assert "0A" in result.stdout
+    assert "soglia" in result.stdout
+
+
+# --- build: check-golden ----------------------------------------------------
+
+def test_build_check_golden_mismatch_raises(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+    (proj / "example_table.raw").write_text("0x99\n")
+
+    result = runner.invoke(app, ["build", "example_table.raw", "--to", "bin", "--force", "--check-golden"])
+
+    assert result.exit_code == 3
+
+
+# --- build-all -------------------------------------------------------------
+
+def test_build_all_success(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "second.raw").write_text("0x02\n")
+
+    result = runner.invoke(app, ["build-all"])
+
+    assert result.exit_code == 0
+    assert "2 tabelle processate" in result.stdout
+    assert (proj / "build" / "example_table.bin").exists()
+    assert (proj / "build" / "second.bin").exists()
+
+
+def test_build_all_duplicate_names_raises(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "sub").mkdir()
+    (proj / "sub" / "example_table.raw").write_text("0x01\n")
+
+    result = runner.invoke(app, ["build-all"])
+
+    assert result.exit_code != 0
+
+
+def test_build_all_golden_mismatch_reported_not_fatal(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    golden_dir = proj / "golden"  # già creata da 'init'
+    (golden_dir / "example_table.bin.golden").write_bytes(b"contenuto sbagliato")
+
+    result = runner.invoke(app, ["build-all", "--check-golden"])
+
+    assert result.exit_code == 0
+    assert "golden mismatch" in result.stdout
+
+
+def test_build_all_real_failure_raises_batch_error(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "broken.raw").write_text("0xZZ\n")
+
+    result = runner.invoke(app, ["build-all"])
+
+    assert result.exit_code == 1
+
+
+def test_build_all_shows_random_tip_when_lucky(tmp_path, monkeypatch):
+    """Il tip a fondo pagina è mostrato solo probabilisticamente (30%) —
+    lo forziamo qui invece di affidarci al caso, altrimenti la riga
+    risulterebbe scoperta o meno a seconda della fortuna del run."""
+    _init_project(tmp_path, monkeypatch)
+    with patch("payload.cli.random.random", return_value=0.0):
+        result = runner.invoke(app, ["build-all"])
+    assert result.exit_code == 0
+    assert "💡" in result.stdout
+
+
+def test_build_all_multiple_jobs(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "second.raw").write_text("0x02\n")
+
+    result = runner.invoke(app, ["build-all", "--jobs", "2"])
+
+    assert result.exit_code == 0
+
+
+# --- watch: on_change e build iniziale parzialmente fallita -----------------
+
+def test_watch_initial_build_partial_failure_reported(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "broken.raw").write_text("0xZZ\n")
+    monkeypatch.setattr("payload.cli.watch_loop", lambda *a, **k: None)
+
+    result = runner.invoke(app, ["watch", "."])
+
+    assert result.exit_code == 0
+    assert "tabelle fallite" in result.stdout
+
+
+def test_watch_on_change_rebuilds_and_prints(tmp_path, monkeypatch, capsys):
+    proj = _init_project(tmp_path, monkeypatch)
+    captured = {}
+
+    def fake_watch_loop(root, known_ext, out, on_change):
+        captured["on_change"] = on_change
+
+    monkeypatch.setattr("payload.cli.watch_loop", fake_watch_loop)
+    result = runner.invoke(app, ["watch", "."])
+    assert result.exit_code == 0
+
+    captured["on_change"](proj / "example_table.raw")
+    out = capsys.readouterr().out
+    assert "example_table.raw" in out
+
+
+# --- pipeline show: rami rimanenti -----------------------------------------
+
+def test_pipeline_show_explicit_exec_stage_and_checkpoint_states(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "table-tool.toml").write_text(
+        '[pipeline]\nstages = ['
+        '{ type = "reader", name = "raw_text" }, '
+        '{ type = "writer", name = "bin" }, '
+        '{ type = "exec", command = "cp {input} {output}", output_extension = ".copy", on_error = "warn" }'
+        ']\n'
+    )
+
+    before = runner.invoke(app, ["pipeline", "show", "example_table"])
+    assert before.exit_code == 0
+    assert "on_error=warn" in before.stdout
+    assert "nessuno" in before.stdout  # nessun checkpoint per lo stage writer non terminale, ancora
+
+    runner.invoke(app, ["build", "example_table.raw"])
+
+    after = runner.invoke(app, ["pipeline", "show", "example_table"])
+    assert "valido" in after.stdout
+
+
+# --- golden update/check/diff: rami rimanenti -------------------------------
+
+def test_golden_update_single_file(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+
+    result = runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+
+    assert result.exit_code == 0
+    assert (proj / "golden" / "example_table.bin.golden").exists()
+
+
+def test_golden_update_directory_updates_all_files(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+
+    result = runner.invoke(app, ["golden", "update", "build"])
+
+    assert result.exit_code == 0
+    assert (proj / "golden" / "example_table.bin.golden").exists()
+
+
+def test_golden_check_match(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+
+    result = runner.invoke(app, ["golden", "check", "build/example_table.bin"])
+
+    assert result.exit_code == 0
+    assert "match" in result.stdout
+
+
+def test_golden_check_mismatch_raises(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+    (proj / "build" / "example_table.bin").write_bytes(b"altro contenuto")
+
+    result = runner.invoke(app, ["golden", "check", "build/example_table.bin"])
+
+    assert result.exit_code == 3
+
+
+def test_golden_diff_no_difference(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+
+    result = runner.invoke(app, ["golden", "diff", "build/example_table.bin"])
+
+    assert result.exit_code == 0
+    assert "Nessuna differenza" in result.stdout
+
+
+def test_golden_diff_shows_byte_differences(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+    (proj / "build" / "example_table.bin").write_bytes(b"\xff\xff\xff\xff")
+
+    result = runner.invoke(app, ["golden", "diff", "build/example_table.bin"])
+
+    assert result.exit_code == 0
+    assert "Diff per" in result.stdout
+
+
+# --- plugin info -------------------------------------------------------------
+
+def test_plugin_info_unknown_exits_4(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["plugin", "info", "non_esiste"])
+    assert result.exit_code == 4
+
+
+def test_plugin_info_reader_shows_extensions_and_default_writer(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["plugin", "info", "raw_text"])
+    assert result.exit_code == 0
+    assert "estensioni" in result.stdout
+    assert "writer suggerito" in result.stdout
+
+
+def test_plugin_info_writer_shows_extension(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["plugin", "info", "bin"])
+    assert result.exit_code == 0
+    assert "estensione output" in result.stdout
+
+
+def test_plugin_info_shows_compatible_readers_when_restricted(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    plugin_dir = proj / "local_plugins"
+    plugin_dir.mkdir(exist_ok=True)
+    (plugin_dir / "picky.py").write_text(
+        "class PickyWriter:\n"
+        "    name = 'picky'\n"
+        "    extension = '.picky'\n"
+        "    api_version = '1.0'\n"
+        "    compatible_readers = ['raw_text']\n"
+        "    def emit(self, ir, out_path, config):\n"
+        "        out_path.write_bytes(ir.data)\n"
+        "        return out_path\n"
+        "\n"
+        "WRITER = PickyWriter\n"
+    )
+
+    result = runner.invoke(app, ["plugin", "info", "picky"])
+
+    assert result.exit_code == 0
+    assert "compatibile solo con" in result.stdout
+    assert "raw_text" in result.stdout
+
+
+# --- plugin install-deps: rami rimanenti ------------------------------------
+
+def test_plugin_install_deps_already_satisfied(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    f = tmp_path / "p.py"
+    f.write_text('REQUIRES = ["json", "os"]\n')  # stdlib, sempre soddisfatte
+
+    result = runner.invoke(app, ["plugin", "install-deps", str(f)])
+
+    assert result.exit_code == 0
+    assert "già installate" in result.stdout
+
+
+def test_plugin_install_deps_declined_confirmation(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    f = tmp_path / "p.py"
+    f.write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
+
+    result = runner.invoke(app, ["plugin", "install-deps", str(f)], input="n\n")
+
+    assert result.exit_code == 0
+    assert "Annullato" in result.stdout
+
+
+def test_plugin_install_deps_yes_success(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    f = tmp_path / "p.py"
+    f.write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
+
+    with patch("payload.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
+        result = runner.invoke(app, ["plugin", "install-deps", str(f), "--yes"])
+
+    assert result.exit_code == 0
+    assert "installate" in result.stdout
+
+
+def test_plugin_install_deps_pip_failure_exits_1(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    f = tmp_path / "p.py"
+    f.write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
+
+    with patch("payload.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 1)):
+        result = runner.invoke(app, ["plugin", "install-deps", str(f), "--yes"])
+
+    assert result.exit_code == 1
+    assert "fallita" in result.stdout
+
+
+# --- plugin validate ---------------------------------------------------------
+
+def test_plugin_validate_unknown_exits_4(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["plugin", "validate", "non_esiste"])
+    assert result.exit_code == 4
+
+
+def test_plugin_validate_reader_without_sample_skips_behavior_checks(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["plugin", "validate", "raw_text"])
+    assert result.exit_code == 0
+    assert "salto i check comportamentali" in result.stdout
+
+
+def test_plugin_validate_reader_with_sample_conforms(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    sample = proj / "sample.raw"
+    sample.write_text("0x0A\n")
+
+    result = runner.invoke(app, ["plugin", "validate", "raw_text", "--sample", str(sample)])
+
+    assert result.exit_code == 0
+    assert "conforme" in result.stdout
+
+
+def test_plugin_validate_writer_conforms(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["plugin", "validate", "bin"])
+    assert result.exit_code == 0
+    assert "conforme" in result.stdout
+
+
+def test_plugin_validate_non_conforming_plugin_exits_1(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    plugin_dir = proj / "local_plugins"
+    plugin_dir.mkdir(exist_ok=True)
+    (plugin_dir / "incompleto.py").write_text(
+        "class IncompleteReader:\n"
+        "    name = 'incompleto'\n"
+        "    extensions = ['.inc']\n"
+        "    api_version = '1.0'\n"
+        "    # manca 'sniff' e 'parse'\n"
+        "\n"
+        "READER = IncompleteReader\n"
+    )
+
+    result = runner.invoke(app, ["plugin", "validate", "incompleto"])
+
+    assert result.exit_code == 1
+    assert "violazioni" in result.stdout
+
+
+# --- plugin new-local ----------------------------------------------------
+
+def test_plugin_new_local_unknown_kind_exits_2(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["plugin", "new-local", "foo", "--kind", "boh"])
+    assert result.exit_code == 2
+
+
+def test_plugin_new_local_creates_reader(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["plugin", "new-local", "my_format", "--kind", "reader"])
+    assert result.exit_code == 0
+    created = tmp_path / "local_plugins" / "my_format.py"
+    assert created.exists()
+    assert "READER = MyFormatReader" in created.read_text()
+
+
+def test_plugin_new_local_creates_writer(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["plugin", "new-local", "my_format", "--kind", "writer"])
+    assert result.exit_code == 0
+    created = tmp_path / "local_plugins" / "my_format.py"
+    assert "WRITER = MyFormatWriter" in created.read_text()
+
+
+def test_plugin_new_local_creates_doctor_check(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["plugin", "new-local", "my_check", "--kind", "doctor-check"])
+    assert result.exit_code == 0
+    created = tmp_path / "local_plugins" / "my_check.py"
+    assert "DOCTOR_CHECK = MyCheck" in created.read_text()
+
+
+def test_plugin_new_local_refuses_existing_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["plugin", "new-local", "dup", "--kind", "reader"])
+    result = runner.invoke(app, ["plugin", "new-local", "dup", "--kind", "reader"])
+    assert result.exit_code == 2
+    assert "esiste già" in result.stdout
+
+
+# --- clean -----------------------------------------------------------------
+
+def test_clean_unknown_target_exits_2(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["clean", "--target", "boh"])
+    assert result.exit_code == 2
+
+
+def test_clean_nothing_to_clean(tmp_path, monkeypatch):
+    # 'init' crea già build/ e golden/ (vuote) ma non .payload_cache/,
+    # creata solo al primo salvataggio della cache
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["clean", "--target", "cache"])
+    assert result.exit_code == 0
+    assert "Niente da pulire" in result.stdout
+
+
+def test_clean_declined_confirmation(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+
+    result = runner.invoke(app, ["clean", "--target", "build"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "Annullato" in result.stdout
+    assert (proj / "build").exists()
+
+
+def test_clean_yes_removes_target(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+
+    result = runner.invoke(app, ["clean", "--target", "build", "--yes"])
+
+    assert result.exit_code == 0
+    assert not (proj / "build").exists()
+
+
+def test_clean_all_target(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+
+    result = runner.invoke(app, ["clean", "--target", "all", "--yes"])
+
+    assert result.exit_code == 0
+    assert not (proj / "build").exists()
+    assert not (proj / "golden").exists()
+
+
+# --- init: rami rimanenti -----------------------------------------------
+
+def test_init_wizard_prompts_for_name_when_omitted(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, ["init", "--wizard"], input="wizname\ny\ny\n\nlittle\nn\n")
+    assert result.exit_code == 0
+    assert (tmp_path / "wizname" / "table-tool.toml").exists()
+
+
+def test_init_refuses_existing_nonempty_named_dir_without_force(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "esiste_gia"
+    target.mkdir()
+    (target / "qualcosa.txt").write_text("x")
+
+    result = runner.invoke(app, ["init", "esiste_gia"])
+
+    assert result.exit_code == 2
+    assert "esiste già" in result.stdout
+
+
+def test_init_wizard_git_not_found(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with patch("payload.cli.shutil.which", return_value=None):
+        result = runner.invoke(
+            app, ["init", "proj", "--wizard"],
+            input="y\ny\n\nlittle\ny\n",
+        )
+    assert result.exit_code == 0
+    assert "git non trovato" in result.stdout
+
+
+def test_init_wizard_git_init_fails(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    with patch("payload.cli.shutil.which", return_value="/usr/bin/git"), \
+         patch("payload.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 1, stderr="fallito")):
+        result = runner.invoke(
+            app, ["init", "proj", "--wizard"],
+            input="y\ny\n\nlittle\ny\n",
+        )
+    assert result.exit_code == 0
+    assert "'git init' fallito" in result.stdout
+
+
+# --- entry point da riga di comando -----------------------------------------
+
+def test_module_entry_point_runs_as_script():
+    result = subprocess.run(
+        [sys.executable, "-m", "payload.cli", "--version"],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0
+    assert "payload" in result.stdout.lower()

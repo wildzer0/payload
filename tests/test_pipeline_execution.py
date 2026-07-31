@@ -65,12 +65,27 @@ def source(tmp_path):
     return p
 
 
+# --- pipeline esplicita + --from/--to esplicito insieme -------------------
+
+def test_explicit_pipeline_warns_when_reader_or_writer_name_also_given(tmp_path, source, registry, caplog):
+    import logging
+
+    stages = [
+        {"type": "reader", "name": "fake_reader"},
+        {"type": "writer", "name": "fake_writer"},
+    ]
+    with caplog.at_level(logging.WARNING):
+        build(source, registry, _FakeConfig(stages), tmp_path / "out", writer_name="fake_writer")
+
+    assert any("ignorati" in r.message for r in caplog.records)
+
+
 # --- retrocompatibilità: pipeline implicita a 2 stage --------------------
 
 def test_implicit_pipeline_matches_old_behavior(tmp_path, source, registry):
-    out_path, built = build(source, registry, _FakeConfig(), tmp_path / "out")
+    out_paths, built = build(source, registry, _FakeConfig(), tmp_path / "out")
     assert built is True
-    assert out_path.read_bytes() == b"ciao"
+    assert out_paths[0].read_bytes() == b"ciao"
 
 
 def test_implicit_pipeline_cache_works(tmp_path, source, registry):
@@ -94,10 +109,10 @@ def test_explicit_three_stage_pipeline_with_exec(tmp_path, registry):
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": 'tr "[:upper:]" "[:lower:]" < {input} > {output}', "output_extension": ".lower"},
     ]
-    out_path, built = build(source, registry, _FakeConfig(stages), tmp_path / "out")
+    out_paths, built = build(source, registry, _FakeConfig(stages), tmp_path / "out")
 
-    assert out_path.name == "t.lower"
-    assert out_path.read_text() == "ciao mondo"
+    assert out_paths[0].name == "t.lower"
+    assert out_paths[0].read_text() == "ciao mondo"
 
 
 def test_explicit_five_stage_pipeline(tmp_path, registry):
@@ -111,9 +126,9 @@ def test_explicit_five_stage_pipeline(tmp_path, registry):
         {"type": "reader", "name": "fake_reader"},
         {"type": "writer", "name": "fake_writer"},
     ]
-    out_path, built = build(source, registry, _FakeConfig(stages), tmp_path / "out")
+    out_paths, built = build(source, registry, _FakeConfig(stages), tmp_path / "out")
 
-    content = out_path.read_text()
+    content = out_paths[0].read_text()
     assert "dato originale" in content
     assert "TRASFORMATO" in content
 
@@ -139,10 +154,20 @@ def test_exec_on_error_warn_produces_final_file_outside_tmp(tmp_path, source, re
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "exit 1", "output_extension": ".x", "on_error": "warn"},
     ]
-    out_path, built = build(source, registry, _FakeConfig(stages), tmp_path / "out")
+    out_paths, built = build(source, registry, _FakeConfig(stages), tmp_path / "out")
 
-    assert out_path.exists()
-    assert out_path.read_bytes() == b"ciao"
+    assert out_paths[0].exists()
+    assert out_paths[0].read_bytes() == b"ciao"
+
+
+def test_exec_unknown_placeholder_raises(tmp_path, source, registry):
+    stages = [
+        {"type": "reader", "name": "fake_reader"},
+        {"type": "writer", "name": "fake_writer"},
+        {"type": "exec", "command": "cp {input} {placeholder_inesistente}", "output_extension": ".x"},
+    ]
+    with pytest.raises(ToolchainExecutionError):
+        build(source, registry, _FakeConfig(stages), tmp_path / "out")
 
 
 def test_exec_missing_output_file_raises(tmp_path, source, registry):
@@ -172,6 +197,30 @@ def test_cache_invalidated_by_changing_pipeline(tmp_path, source, registry):
 
     assert built_a is True
     assert built_b is True  # pipeline diversa, non deve essere un cache hit
+
+
+def test_non_last_exec_stage_persists_checkpoint_when_cache_given(tmp_path, source, registry):
+    """Uno stage 'exec' che NON è l'ultimo (qui seguito da reader+writer)
+    deve persistere un checkpoint quando una cache è passata — coprire
+    esplicitamente questo ramo, distinto dallo stage 'exec' terminale
+    (che non riceve mai un checkpoint proprio, coperto dalla cache di
+    tabella)."""
+    from payload.core.cache import BuildCache
+
+    cache = BuildCache(tmp_path / "cache")
+    stages = [
+        {"type": "reader", "name": "fake_reader"},
+        {"type": "writer", "name": "fake_writer"},
+        {"type": "exec", "command": "echo TRASFORMATO >> {input} && cp {input} {output}"},
+        {"type": "reader", "name": "fake_reader"},
+        {"type": "writer", "name": "fake_writer"},
+    ]
+    out_paths, built = build(source, registry, _FakeConfig(stages), tmp_path / "out", cache=cache)
+
+    assert built is True
+    assert "TRASFORMATO" in out_paths[0].read_text()
+    checkpoint_dir = tmp_path / "cache" / "stage_artifacts"
+    assert any(p.name.startswith("t_stage2") for p in checkpoint_dir.iterdir())
 
 
 # --- dry-run non esegue exec ----------------------------------------------

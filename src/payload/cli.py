@@ -11,8 +11,6 @@ import random
 import shutil
 import subprocess
 import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import fields as dc_fields
 from pathlib import Path
 from typing import Optional
@@ -23,6 +21,7 @@ from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
+from payload.core.batch import run_batch_build
 from payload.core.cache import BuildCache
 from payload.core.config import load_config, resolve_config_with_provenance
 from payload.core.discovery import discover_table_sources, find_duplicate_stems
@@ -194,7 +193,7 @@ def build_cmd(
         cli_opts = _parse_opts(opt)
 
         with console.status(f"[cyan]{random_loading_phrase()}[/]", spinner="dots"):
-            out_path, was_built = build(
+            out_paths, was_built = build(
                 source, registry, config, out, cache=cache,
                 reader_name=from_, writer_name=to, force=force, dry_run=dry_run,
                 cli_opts=cli_opts, keep_intermediate=keep_intermediate,
@@ -202,12 +201,14 @@ def build_cmd(
             cache.save()
 
             if check_golden_flag and not dry_run:
-                result = check_golden(out_path, Path(config.defaults.golden_dir))
-                if result.status == "mismatch":
-                    raise GoldenMismatchError(out_path)
+                for out_path in out_paths:
+                    result = check_golden(out_path, Path(config.defaults.golden_dir))
+                    if result.status == "mismatch":
+                        raise GoldenMismatchError(out_path)
 
         status = "costruito" if was_built else "da cache"
-        console.print(f"[green]✓[/] {source.name} → {out_path} ({status})")
+        destinations = ", ".join(str(p) for p in out_paths)
+        console.print(f"[green]✓[/] {source.name} → {destinations} ({status})")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -247,29 +248,6 @@ def build_all_cmd(
         if duplicates:
             raise DuplicateTableNameError(duplicates)
 
-        results = {"built": 0, "cached": 0, "golden_mismatch": 0, "errors": 0}
-        failures = []
-        results_lock = threading.Lock()
-
-        def _build_one(src: Path):
-            """Eseguita in un thread del pool. Ritorna sempre, non solleva:
-            gli errori sono catturati qui per non far crashare l'executor
-            e per accumulare tutti i fallimenti, non solo il primo."""
-            try:
-                per_table_config = load_config(root, source_path=src)
-                out_path, was_built = build(
-                    src, registry, per_table_config, out, cache=cache,
-                    writer_name=to, force=force, dry_run=dry_run,
-                    cli_opts=cli_opts, keep_intermediate=keep_intermediate,
-                )
-                mismatch = False
-                if check_golden_flag and not dry_run:
-                    gresult = check_golden(out_path, Path(per_table_config.defaults.golden_dir))
-                    mismatch = gresult.status == "mismatch"
-                return ("ok", src, was_built, mismatch, None)
-            except PayloadError as e:
-                return ("error", src, False, False, e)
-
         with Progress(
             SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
             BarColumn(), TextColumn("{task.completed}/{task.total}"), TimeElapsedColumn(),
@@ -277,33 +255,27 @@ def build_all_cmd(
         ) as progress:
             task = progress.add_task(random_loading_phrase(), total=len(sources))
 
+            def _on_result(src: Path, status: str) -> None:
+                progress.update(task, description=f"[cyan]{src.name}[/]")
+                progress.advance(task)
+
             # jobs=1 -> stesso comportamento sequenziale di prima, nessun
             # overhead di thread pool. jobs>1 -> parallelizza, dato che le
             # tabelle sono indipendenti tra loro (nessuna reference incrociata).
-            with ThreadPoolExecutor(max_workers=max(1, jobs)) as executor:
-                futures = {executor.submit(_build_one, src): src for src in sources}
-                for future in as_completed(futures):
-                    status, src, was_built, mismatch, error = future.result()
-                    with results_lock:
-                        progress.update(task, description=f"[cyan]{src.name}[/]")
-                        if status == "ok":
-                            results["built" if was_built else "cached"] += 1
-                            if mismatch:
-                                results["golden_mismatch"] += 1
-                        else:
-                            results["errors"] += 1
-                            failures.append(error)
-                        progress.advance(task)
+            summary = run_batch_build(
+                sources, root, registry, cache, out, jobs=jobs, writer_name=to,
+                force=force, dry_run=dry_run, check_golden_flag=check_golden_flag,
+                cli_opts=cli_opts, keep_intermediate=keep_intermediate,
+                on_table_result=_on_result,
+            )
 
-        cache.save()
-
-        summary_style = "red" if results["errors"] else ("yellow" if results["golden_mismatch"] else "green")
+        summary_style = "red" if summary.errors else ("yellow" if summary.golden_mismatch else "green")
         console.print(
             Panel(
-                f"[green]{results['built']}[/] costruite   "
-                f"[cyan]{results['cached']}[/] da cache   "
-                f"[yellow]{results['golden_mismatch']}[/] golden mismatch   "
-                f"[red]{results['errors']}[/] errori",
+                f"[green]{summary.built}[/] costruite   "
+                f"[cyan]{summary.cached}[/] da cache   "
+                f"[yellow]{summary.golden_mismatch}[/] golden mismatch   "
+                f"[red]{summary.errors}[/] errori",
                 title=f"{len(sources)} tabelle processate",
                 border_style=summary_style,
             )
@@ -311,8 +283,8 @@ def build_all_cmd(
         if random.random() < 0.3:
             console.print(f"[dim]💡 {random_tip()}[/]")
 
-        if failures:
-            raise BatchBuildError(failures)
+        if summary.failures:
+            raise BatchBuildError(summary.failures)
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -327,8 +299,13 @@ def watch(
     root: Path = typer.Argument(Path("."), help="File o cartella da osservare"),
     to: Optional[str] = typer.Option(None, "--to", help="Writer da usare"),
     out: Path = typer.Option(Path("build"), "--out", help="Directory di output"),
+    jobs: int = typer.Option(1, "--jobs", help="Grado di parallelismo per la build iniziale"),
+    filter_glob: Optional[str] = typer.Option(
+        None, "--filter", help="Glob per filtrare i sorgenti nella build iniziale (non nel watch live)"
+    ),
 ):
-    """Rebuild automatico ad ogni salvataggio (Ctrl+C per uscire)."""
+    """Build iniziale di tutte le tabelle sotto 'root', poi rebuild
+    automatico ad ogni salvataggio (Ctrl+C per uscire)."""
 
     def _run():
         project_root = Path.cwd()
@@ -336,17 +313,41 @@ def watch(
         config = load_config(project_root)
         cache = BuildCache(Path(config.defaults.cache_dir))
         known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
+        watch_root = root if root.is_dir() else root.parent
+
+        # La build iniziale non deve mai impedire l'avvio del watch —
+        # stessa filosofia di payload/watch.py, che non muore mai per un
+        # errore di build durante l'osservazione live.
+        try:
+            sources = discover_table_sources(root, known_ext, Path(config.defaults.output_dir), filter_glob)
+            duplicates = find_duplicate_stems(sources)
+            if duplicates:
+                raise DuplicateTableNameError(duplicates)
+            summary = run_batch_build(sources, root, registry, cache, out, jobs=jobs, writer_name=to)
+            if summary.failures:
+                console.print(
+                    f"[yellow]![/] build iniziale: {len(summary.failures)}/{len(sources)} "
+                    "tabelle fallite — procedo comunque con il watch"
+                )
+            else:
+                console.print(
+                    f"[green]✓[/] build iniziale: {summary.built} costruite, "
+                    f"{summary.cached} da cache ({len(sources)} tabelle)"
+                )
+        except PayloadError as e:
+            console.print(f"[yellow]![/] build iniziale fallita ({e.message}) — procedo comunque con il watch")
 
         def on_change(src: Path):
             per_table_config = load_config(project_root, source_path=src)
-            out_path, was_built = build(
+            out_paths, was_built = build(
                 src, registry, per_table_config, out, cache=cache, writer_name=to,
             )
             cache.save()
             status = "ricostruito" if was_built else "invariato (cache)"
-            console.print(f"[green]✓[/] {src.name} → {out_path} ({status})")
+            destinations = ", ".join(str(p) for p in out_paths)
+            console.print(f"[green]✓[/] {src.name} → {destinations} ({status})")
 
-        watch_loop(root if root.is_dir() else root.parent, known_ext, out, on_change)
+        watch_loop(watch_root, known_ext, out, on_change)
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -652,7 +653,7 @@ def pipeline_show(
     def _run():
         from payload.core.cache import compute_pipeline_cache_key
         from payload.core.pipeline import (
-            final_output_path,
+            final_output_paths,
             resolve_pipeline_spec,
             validate_pipeline_against_registry,
         )
@@ -680,6 +681,8 @@ def pipeline_show(
         t.add_column("Dettaglio")
         t.add_column("Cache stage", style="dim")
 
+        terminal_start = spec.terminal_writer_start()
+
         for i, stage in enumerate(spec.stages):
             if isinstance(stage, ReaderStage):
                 detail = f"reader: {stage.name}"
@@ -696,8 +699,8 @@ def pipeline_show(
                     source_bytes, spec.signature_prefix(i), config_dict
                 )
                 stage_table_key = f"{src}::stage{i}"
-                is_last = i == len(spec.stages) - 1
-                if is_last:
+                in_terminal_group = i >= terminal_start
+                if in_terminal_group:
                     checkpoint_note = "[dim](finale, vedi cache tabella)[/]"
                 elif cache.is_fresh(stage_table_key, checkpoint_key):
                     checkpoint_note = "[green]valido[/]"
@@ -707,8 +710,9 @@ def pipeline_show(
             t.add_row(str(i), stage.kind, detail, checkpoint_note)
 
         console.print(t)
-        out_path = final_output_path(spec, src, Path(config.defaults.output_dir), registry)
-        console.print(f"Output finale: [bold]{out_path}[/]")
+        out_paths = final_output_paths(spec, src, Path(config.defaults.output_dir), registry)
+        destinations = ", ".join(str(p) for p in out_paths)
+        console.print(f"Output finale: [bold]{destinations}[/]")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -1340,5 +1344,5 @@ def init(
     run_command(_run, ctx.obj["verbosity"])
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover - eseguito solo come 'python -m payload.cli', un sottoprocesso separato dal processo di test (vedi test_module_entry_point_runs_as_script)
     app()

@@ -38,6 +38,21 @@ def test_read_requires_static_works_even_if_module_would_fail_to_import(tmp_path
     assert read_requires_static(f) == ["questo_modulo_non_esiste_di_sicuro"]
 
 
+def test_read_requires_static_returns_empty_on_syntax_error(tmp_path):
+    f = tmp_path / "plugin.py"
+    f.write_text("questo non e' python valido [[[")
+
+    assert read_requires_static(f) == []
+
+
+def test_missing_requirements_skips_unparseable_requirement_string():
+    # una stringa che non inizia con un carattere valido per un nome
+    # pacchetto (qui uno specifier senza nome) non genera un match e va
+    # semplicemente ignorata, non trattata come dipendenza mancante
+    missing = missing_requirements([">=1.0"])
+    assert missing == []
+
+
 def test_missing_requirements_detects_absent_package():
     missing = missing_requirements(["libreria_sicuramente_inesistente_xyz"])
     assert missing == ["libreria_sicuramente_inesistente_xyz"]
