@@ -69,7 +69,13 @@ for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
         try:
             _stream.reconfigure(errors="replace")
-        except (ValueError, OSError):  # pragma: no cover - stream non riconfigurabile
+        except Exception:  # pragma: no cover - puramente cosmetico, non deve MAI bloccare l'avvio
+            # 'pytest' (e altri contesti che sostituiscono sys.stdout/stderr
+            # con wrapper custom, es. cattura output) possono esporre un
+            # attributo 'reconfigure' che si comporta diversamente da un
+            # vero io.TextIOWrapper e sollevare eccezioni impreviste — un
+            # except ristretto a ValueError/OSError non le copriva tutte,
+            # rompendo l'IMPORT dell'intero modulo (quindi ogni test).
             pass
 
 console = Console()

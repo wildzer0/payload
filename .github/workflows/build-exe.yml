@@ -40,6 +40,17 @@ jobs:
         # metadata del pacchetto installato (dist-info) — un exe
         # congelato non li ha di default.
         #
+        # --collect-submodules payload: i plugin builtin sono importati
+        # in modo lazy (dentro funzioni, non in cima ai file) fino a
+        # due livelli di profondità (load_plugins -> builtin_plugins ->
+        # singoli reader/writer) — l'analisi statica di PyInstaller non
+        # li segue sempre fino in fondo attraverso import condizionali
+        # annidati. Questo forza l'inclusione di TUTTI i sottomoduli di
+        # 'payload', indipendentemente da cosa l'analisi statica riesce
+        # a rilevare da sola — niente più liste di --hidden-import da
+        # tenere aggiornate manualmente ogni volta che aggiungiamo un
+        # reader/writer nuovo.
+        #
         # --hidden-import per il backend Windows di watchdog: PyInstaller
         # a volte non lo rileva da solo perché watchdog lo importa
         # dinamicamente in base al sistema operativo a runtime, non con
@@ -47,6 +58,7 @@ jobs:
         run: >
           pyinstaller --onefile --name pld
           --copy-metadata payload
+          --collect-submodules payload
           --hidden-import watchdog.observers.read_directory_changes
           scripts/pld_entry.py
 

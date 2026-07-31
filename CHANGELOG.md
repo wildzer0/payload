@@ -19,6 +19,7 @@ Prima versione funzionante del tool.
 - Fix: `UnicodeEncodeError` su console Windows con codepage legacy (cp1252) durante la stampa dei tip con emoji — `stdout`/`stderr` riconfigurati con `errors="replace"` all'avvio della CLI
 - Fix (causa vera, non la prima ipotesi): dentro un exe PyInstaller congelato, `importlib.metadata.entry_points()` non trova i plugin builtin anche con `--copy-metadata payload` e anche se `importlib.metadata.version()` funziona per lo stesso pacchetto — i 6 plugin builtin ora vengono registrati con `import` diretto quando `sys.frozen` è vero (`core/builtin_plugins.py`), bypassando del tutto `entry_points` in quel contesto. Nessun impatto sull'installazione normale (pip/wheel), verificato che continua a usare `entry_points` come sempre
 - `build-exe.yml`: step di verifica fallisce esplicitamente se i plugin builtin non sono trovati, invece di un successo silenzioso con tabella vuota
+- Fix: `ModuleNotFoundError: payload.core.builtin_plugins` dentro l'exe — gli import lazy annidati (load_plugins → builtin_plugins → singoli reader/writer) non venivano seguiti fino in fondo dall'analisi statica di PyInstaller. Aggiunto `--collect-submodules payload` al comando di build, che impacchetta l'intero pacchetto indipendentemente da cosa l'analisi statica riesce a rilevare da sola
 
 ### Comandi
 - `init`, `doctor`, `plugins`, `plugin new/validate/info`, `clean`
