@@ -1,8 +1,8 @@
 """
-Test diretti (non tramite CliRunner) di run_command() e _parse_opts() —
-il punto unico di cattura errori/verbosità del CLI. Verificarlo
-direttamente è più semplice che instradare ogni ramo attraverso un
-comando reale, ed è comunque quello che ogni comando usa sotto."""
+Direct tests (not via CliRunner) of run_command() and _parse_opts() —
+the CLI's single error/verbosity capture point. Testing it directly is
+simpler than routing every branch through a real command, and it's
+what every command uses underneath anyway."""
 import pytest
 import typer
 
@@ -21,26 +21,26 @@ def test_parse_opts_parses_key_value_pairs():
 def test_parse_opts_missing_equals_raises():
     from payload.core.errors import InvalidCliOptionError
     with pytest.raises(InvalidCliOptionError):
-        _parse_opts(["senza_uguale"])
+        _parse_opts(["no_equals_sign"])
 
 
 def test_parse_opts_empty_key_raises():
     from payload.core.errors import InvalidCliOptionError
     with pytest.raises(InvalidCliOptionError):
-        _parse_opts(["=valore"])
+        _parse_opts(["=value"])
 
 
 def test_run_command_prints_payload_error_and_exits_with_its_code(capsys):
     def _boom():
-        raise ToolchainExecutionError(["cmd"], 1, "errore di compilazione")
+        raise ToolchainExecutionError(["cmd"], 1, "compilation error")
 
     with pytest.raises(typer.Exit) as exc_info:
         run_command(_boom, verbosity=0)
 
     assert exc_info.value.exit_code == 1
     captured = capsys.readouterr()
-    assert "errore di compilazione" not in captured.err  # senza -vv, niente dump stderr
-    assert "Comando" in captured.err
+    assert "compilation error" not in captured.err  # no -vv, no stderr dump
+    assert "Command" in captured.err
 
 
 def test_run_command_verbose_dumps_stderr_and_stdout_from_context():
@@ -48,7 +48,7 @@ def test_run_command_verbose_dumps_stderr_and_stdout_from_context():
         exit_code = 1
 
     def _boom():
-        raise _CustomError("fallito", stderr="dettagli stderr", stdout="dettagli stdout")
+        raise _CustomError("failed", stderr="stderr details", stdout="stdout details")
 
     import io
     from contextlib import redirect_stderr
@@ -59,8 +59,8 @@ def test_run_command_verbose_dumps_stderr_and_stdout_from_context():
             run_command(_boom, verbosity=2)
 
     output = buf.getvalue()
-    assert "dettagli stderr" in output
-    assert "dettagli stdout" in output
+    assert "stderr details" in output
+    assert "stdout details" in output
 
 
 def test_run_command_reraises_typer_exit_unchanged():
@@ -74,11 +74,11 @@ def test_run_command_reraises_typer_exit_unchanged():
 
 def test_run_command_wraps_unexpected_exception(capsys):
     def _bug():
-        raise RuntimeError("bug interno mai previsto")
+        raise RuntimeError("internal bug never anticipated")
 
     with pytest.raises(typer.Exit) as exc_info:
         run_command(_bug, verbosity=0)
 
     assert exc_info.value.exit_code == 1
     captured = capsys.readouterr()
-    assert "Errore interno inatteso" in captured.err
+    assert "Unexpected internal error" in captured.err

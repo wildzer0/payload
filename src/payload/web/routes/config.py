@@ -1,8 +1,8 @@
-"""config show/edit, sidecar per-tabella, pipeline show/edit — controparte
-web dei comandi omonimi in cli.py più le operazioni di scrittura che la
-CLI non espone ancora (editing config globale/sidecar, pipeline builder
-visuale): tutte scrivono tramite payload.core.config, che valida PRIMA
-di toccare il disco."""
+"""config show/edit, per-table sidecar, pipeline show/edit — web
+counterpart of the same-named commands in cli.py plus the write
+operations the CLI doesn't expose yet (global/sidecar config editing,
+visual pipeline builder): all write through payload.core.config, which
+validates BEFORE touching disk."""
 from __future__ import annotations
 
 from dataclasses import fields as dc_fields
@@ -43,8 +43,8 @@ def _find_ref(sources: list[Path], batch_tables: list, table_name: str):
 def _reject_batch(ref) -> None:
     if ref.is_batch:
         raise InvalidRequestError(
-            f"'{ref.name}' è una tabella batch: non ha un sidecar, gli override "
-            "vivono inline in [[batch_table]] (vedi src/payload/docs/BATCH.md)"
+            f"'{ref.name}' is a batch table: it has no sidecar, overrides "
+            "live inline in [[batch_table]] (see src/payload/docs/BATCH.md)"
         )
 
 
@@ -53,9 +53,9 @@ def _config_payload(root: Path, table: str | None) -> dict:
     if table:
         sources, batch_tables, _ = discover_for_history(root)
         ref = _find_ref(sources, batch_tables, table)
-        # una tabella batch non ha un source_path da cui risolvere un
-        # sidecar (i suoi override vivono inline in [[batch_table]]) —
-        # mostra solo la config globale in quel caso.
+        # a batch table has no source_path to resolve a sidecar from
+        # (its overrides live inline in [[batch_table]]) — show only
+        # the global config in that case.
         if not ref.is_batch:
             source_path = ref.source_paths[0]
 
@@ -94,7 +94,7 @@ async def config_put_route(request: Request) -> JSONResponse:
     body = await request.json()
     defaults, toolchain = body.get("defaults"), body.get("toolchain")
     if not isinstance(defaults, dict) or not isinstance(toolchain, dict):
-        raise InvalidRequestError("parametri 'defaults'/'toolchain' mancanti o non validi (attese due tabelle)")
+        raise InvalidRequestError("missing or invalid 'defaults'/'toolchain' parameters (expected two tables)")
     root = request.app.state.root
 
     def _run():
@@ -121,9 +121,9 @@ async def sidecar_put_route(request: Request) -> JSONResponse:
     body = await request.json()
     defaults, toolchain = body.get("defaults"), body.get("toolchain")
     if defaults is not None and not isinstance(defaults, dict):
-        raise InvalidRequestError("'defaults' deve essere una tabella")
+        raise InvalidRequestError("'defaults' must be a table")
     if toolchain is not None and not isinstance(toolchain, dict):
-        raise InvalidRequestError("'toolchain' deve essere una tabella")
+        raise InvalidRequestError("'toolchain' must be a table")
     root = request.app.state.root
     table = request.path_params["table_name"]
 
@@ -221,7 +221,7 @@ async def pipeline_put_route(request: Request) -> JSONResponse:
     body = await request.json()
     raw_stages = body.get("stages")
     if not isinstance(raw_stages, list):
-        raise InvalidRequestError("parametro 'stages' mancante o non è una lista")
+        raise InvalidRequestError("missing 'stages' parameter or it isn't a list")
     root = request.app.state.root
     table = request.path_params["table_name"]
 

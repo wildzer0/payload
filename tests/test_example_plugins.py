@@ -12,12 +12,12 @@ from payload.writers.hex_writer import HexWriter
 
 def test_csv_reader_parses_values_and_comments(tmp_path):
     csv_file = tmp_path / "t.csv"
-    csv_file.write_text("value,comment\n0x0A,soglia min\n0x1B,\n0x2C,soglia max\n")
+    csv_file.write_text("value,comment\n0x0A,min threshold\n0x1B,\n0x2C,max threshold\n")
 
     ir = CsvReader().parse(csv_file, {})
 
     assert ir.data == bytes([0x0A, 0x1B, 0x2C])
-    assert ir.comments == [(0, "soglia min"), (2, "soglia max")]
+    assert ir.comments == [(0, "min threshold"), (2, "max threshold")]
 
 
 def test_csv_reader_accepts_decimal_values(tmp_path):
@@ -55,17 +55,17 @@ def test_csv_reader_sniff_detects_value_header(tmp_path):
 
 
 def test_csv_reader_sniff_returns_false_on_unreadable_path(tmp_path):
-    directory = tmp_path / "una_cartella"
+    directory = tmp_path / "a_folder"
     directory.mkdir()
     assert CsvReader().sniff(directory) is False
 
 
 def test_csv_reader_skips_rows_with_empty_value(tmp_path):
     csv_file = tmp_path / "t.csv"
-    # riga vuota "vera" (senza virgole) viene scartata dal modulo csv
-    # stesso, prima ancora di arrivare al reader — qui invece la riga
-    # esiste con una colonna 'value' vuota, per esercitare lo skip
-    # esplicito del reader
+    # a "truly" empty row (no commas) gets discarded by the csv module
+    # itself, before it even reaches the reader — here instead the row
+    # exists with an empty 'value' column, to exercise the reader's
+    # explicit skip
     csv_file.write_text("value,comment\n0x0A,x\n,\n0x0B,y\n")
     ir = CsvReader().parse(csv_file, {})
     assert ir.data == bytes([0x0A, 0x0B])
@@ -73,7 +73,7 @@ def test_csv_reader_skips_rows_with_empty_value(tmp_path):
 
 def test_csv_reader_invalid_value_raises(tmp_path):
     csv_file = tmp_path / "t.csv"
-    csv_file.write_text("value\nnon_un_numero\n")
+    csv_file.write_text("value\nnot_a_number\n")
     with pytest.raises(ReaderParseError):
         CsvReader().parse(csv_file, {})
 
@@ -109,7 +109,7 @@ def test_hex_writer_produces_valid_checksum(tmp_path):
 
 def test_hex_writer_splits_across_multiple_lines(tmp_path):
     out = tmp_path / "t.hex"
-    HexWriter().emit(_ir(bytes(range(20))), out, {})  # 20 bytes > 16 per riga
+    HexWriter().emit(_ir(bytes(range(20))), out, {})  # 20 bytes > 16 per line
 
     lines = out.read_text().splitlines()
     assert len(lines) == 3  # 16 bytes + 4 bytes + EOF
@@ -119,4 +119,4 @@ def test_hex_writer_splits_across_multiple_lines(tmp_path):
 def test_hex_writer_rejects_oversized_table(tmp_path):
     out = tmp_path / "t.hex"
     with pytest.raises(WriterEmitError):
-        HexWriter().emit(_ir(bytes(0x10000)), out, {})  # 65536 bytes, oltre il limite
+        HexWriter().emit(_ir(bytes(0x10000)), out, {})  # 65536 bytes, over the limit

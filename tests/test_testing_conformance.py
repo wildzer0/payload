@@ -1,9 +1,9 @@
 """
-Test della suite di conformità stessa (payload/testing.py) — deve
-saper intercettare OGNI violazione del contratto Reader/Writer
-descritto in src/payload/docs/PLUGINS.md, non solo i casi già coperti in
-test_conformance.py. Ogni fake qui sotto viola esattamente UNA regola,
-per isolare quale check la intercetta."""
+Tests for the conformance suite itself (payload/testing.py) — it must
+be able to catch EVERY violation of the Reader/Writer contract
+described in src/payload/docs/PLUGINS.md, not just the cases already
+covered in test_conformance.py. Each fake below violates exactly ONE
+rule, to isolate which check catches it."""
 from pathlib import Path
 
 import pytest
@@ -24,7 +24,7 @@ def _issue_checks(issues):
     return {i.check for i in issues}
 
 
-# --- check_reader_structure -----------------------------------------------
+# --- check_reader_structure -------------------------------------------------
 
 class _NoApiVersion:
     name = "x"
@@ -40,7 +40,7 @@ def test_missing_api_version_flagged():
 class _ExtensionWithoutDot:
     name = "x"
     api_version = "1.0"
-    extensions = ["x"]  # manca il punto iniziale
+    extensions = ["x"]  # missing leading dot
     def sniff(self, path): return False
     def parse(self, path, config): raise NotImplementedError
 
@@ -77,7 +77,7 @@ class _RaisesReaderParseError:
     name = "x"
     def sniff(self, path): return False
     def parse(self, path, config):
-        raise ReaderParseError(path, "fallisce sempre, anche su un sample valido")
+        raise ReaderParseError(path, "always fails, even on a valid sample")
 
 
 def test_reader_raising_payload_error_flagged(tmp_path):
@@ -90,7 +90,7 @@ class _ReturnsNonBytesData:
     name = "x"
     def sniff(self, path): return False
     def parse(self, path, config):
-        return TableIR(name="t", data="non bytes", source_path=path, source_format=self.name)
+        return TableIR(name="t", data="not bytes", source_path=path, source_format=self.name)
 
 
 def test_reader_non_bytes_data_flagged(tmp_path):
@@ -116,7 +116,7 @@ class _WrongSourceFormat:
     name = "x"
     def sniff(self, path): return False
     def parse(self, path, config):
-        return TableIR(name="t", data=b"x", source_path=path, source_format="qualcos_altro")
+        return TableIR(name="t", data=b"x", source_path=path, source_format="something_else")
 
 
 def test_reader_wrong_source_format_flagged(tmp_path):
@@ -129,7 +129,7 @@ class _WrongSourcePath:
     name = "x"
     def sniff(self, path): return False
     def parse(self, path, config):
-        return TableIR(name="t", data=b"x", source_path=Path("/percorso/diverso"), source_format=self.name)
+        return TableIR(name="t", data=b"x", source_path=Path("/different/path"), source_format=self.name)
 
 
 def test_reader_wrong_source_path_flagged(tmp_path):
@@ -141,7 +141,7 @@ def test_reader_wrong_source_path_flagged(tmp_path):
 def test_assert_reader_conforms_raises_with_details(tmp_path):
     sample = tmp_path / "t.x"
     sample.write_text("x")
-    with pytest.raises(AssertionError, match="non è conforme"):
+    with pytest.raises(AssertionError, match="doesn.t conform"):
         assert_reader_conforms(_NoApiVersion(), sample)
 
 
@@ -170,7 +170,7 @@ def test_writer_missing_api_version_flagged():
 class _WriterBadExtension:
     name = "x"
     api_version = "1.0"
-    extension = "x"  # manca il punto iniziale
+    extension = "x"  # missing leading dot
     def emit(self, ir, out_path, config): return out_path
 
 
@@ -198,7 +198,7 @@ class _WriterRaisesPayloadError:
     name = "x"
     extension = ".x"
     def emit(self, ir, out_path, config):
-        raise WriterEmitError(self.name, "fallisce sempre")
+        raise WriterEmitError(self.name, "always fails")
 
 
 def test_writer_raising_payload_error_flagged(tmp_path):
@@ -209,7 +209,7 @@ class _WriterRaisesGenericException:
     name = "x"
     extension = ".x"
     def emit(self, ir, out_path, config):
-        raise ValueError("non dovrei sollevare questo")
+        raise ValueError("shouldn't raise this")
 
 
 def test_writer_raising_generic_exception_flagged(tmp_path):
@@ -220,7 +220,7 @@ class _WriterReturnsNonPath:
     name = "x"
     extension = ".x"
     def emit(self, ir, out_path, config):
-        return "non un Path"
+        return "not a Path"
 
 
 def test_writer_returning_non_path_flagged(tmp_path):
@@ -231,7 +231,7 @@ class _WriterDoesNotWriteFile:
     name = "x"
     extension = ".x"
     def emit(self, ir, out_path, config):
-        return out_path  # dichiara questo path ma non lo scrive mai
+        return out_path  # declares this path but never writes it
 
 
 def test_writer_declared_file_missing_flagged(tmp_path):
@@ -239,5 +239,5 @@ def test_writer_declared_file_missing_flagged(tmp_path):
 
 
 def test_assert_writer_conforms_raises_with_details(tmp_path):
-    with pytest.raises(AssertionError, match="non è conforme"):
+    with pytest.raises(AssertionError, match="doesn.t conform"):
         assert_writer_conforms(_WriterDoesNotWriteFile(), _sample_ir(), tmp_path)

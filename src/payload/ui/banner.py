@@ -1,6 +1,6 @@
-"""Piccoli tocchi estetici per rendere il tool più piacevole da usare,
-non solo funzionale. Usato da 'pld init' e opzionalmente da 'pld' senza
-sottocomandi."""
+"""Small aesthetic touches to make the tool nicer to use, not just
+functional. Used by 'pld init' and optionally by 'pld' with no
+subcommands."""
 from __future__ import annotations
 
 import random
@@ -17,12 +17,12 @@ BANNER = r"""
 """
 
 TIPS = [
-    "usa 'pld watch' per ricompilare automaticamente ad ogni salvataggio",
-    "'pld doctor' prima di un batch grosso ti evita brutte sorprese a metà",
-    "'--dry-run' ti mostra cosa succederebbe senza toccare nulla",
-    "'pld golden update' congela un riferimento SOLO quando il cambio è voluto",
-    "'pld plugin new' genera lo scaffold di un plugin già pronto da installare",
-    "'-vv' mostra anche il timing di parse/emit, utile per trovare tabelle lente",
+    "use 'pld watch' to rebuild automatically on every save",
+    "'pld doctor' before a big batch saves you from nasty surprises halfway through",
+    "'--dry-run' shows you what would happen without touching anything",
+    "'pld golden update' freezes a reference only when the change is intentional",
+    "'pld plugin new' generates the scaffold of a plugin ready to install",
+    "'-vv' also shows parse/emit timing, useful to find slow tables",
 ]
 
 

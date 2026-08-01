@@ -1,6 +1,6 @@
-"""Test dello stream SSE di build-all — usa una queue.Queue/threading.Thread
-reali (vedi routes/build.py), quindi questi test esercitano davvero il
-ponte di concorrenza, non lo mockano."""
+"""Tests for build-all's SSE stream — uses a real
+queue.Queue/threading.Thread (see routes/build.py), so these tests
+really exercise the concurrency bridge, they don't mock it."""
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -87,7 +87,7 @@ def test_build_all_stream_reports_unexpected_exception_as_error_event(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    with patch("payload.web.routes.build.run_batch_build", side_effect=RuntimeError("bug interno")):
+    with patch("payload.web.routes.build.run_batch_build", side_effect=RuntimeError("internal bug")):
         with client.stream("GET", "/api/build-all/stream") as r:
             lines = [l for l in r.iter_lines() if l]
 
@@ -110,9 +110,9 @@ def test_build_all_stream_respects_query_params(tmp_path):
 
 
 def test_build_all_stream_rejects_excessive_jobs(tmp_path):
-    """jobs alimenta ThreadPoolExecutor(max_workers=jobs) senza alcun
-    tetto naturale — un valore assurdo (typo o voluto) non deve poter
-    tentare di allocare centinaia di migliaia di thread."""
+    """jobs feeds ThreadPoolExecutor(max_workers=jobs) with no
+    natural cap — an absurd value (typo or intentional) must not be
+    able to attempt allocating hundreds of thousands of threads."""
     root = _init_project(tmp_path)
     client = _client(root)
 

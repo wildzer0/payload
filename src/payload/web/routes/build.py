@@ -1,8 +1,8 @@
-"""build (singola tabella) — controparte web di 'pld build' in cli.py.
-'GET /api/build-all/stream' è la controparte web di 'pld build-all',
-via Server-Sent Events invece che una tabella rich statica: la usa
-un GET (non POST) perché l'EventSource nativo del browser sa fare
-solo GET, niente body/header custom."""
+"""build (single table) — web counterpart of 'pld build' in cli.py.
+'GET /api/build-all/stream' is the web counterpart of 'pld build-all',
+via Server-Sent Events instead of a static rich table: it uses GET
+(not POST) because the browser's native EventSource can only do GET,
+no custom body/headers."""
 from __future__ import annotations
 
 import json
@@ -35,12 +35,12 @@ from payload.web.errors import InvalidRequestError
 from payload.web.paths import resolve
 from payload.web.sse import sse_format
 
-# ThreadPoolExecutor(max_workers=jobs) non ha un tetto proprio — un
-# valore assurdo (es. digitato per errore, o passato di proposito) può
-# far esplodere la creazione di thread. Stesso numero anche lato JS
-# (MAX_BUILD_ALL_JOBS in app.js) per il tetto del campo numerico, ma
-# quello è solo un aiuto per l'utente: questo è il controllo che conta
-# davvero, un client non deve poter bypassarlo.
+# ThreadPoolExecutor(max_workers=jobs) has no cap of its own — an
+# absurd value (e.g. typed by mistake, or passed on purpose) could
+# blow up thread creation. Same number also on the JS side
+# (MAX_BUILD_ALL_JOBS in app.js) for the numeric field's cap, but
+# that's just a courtesy for the user: this is the check that actually
+# matters, a client must not be able to bypass it.
 MAX_BUILD_ALL_JOBS = 32
 
 
@@ -48,7 +48,7 @@ async def build_route(request: Request) -> JSONResponse:
     body = await request.json()
     source = body.get("source")
     if not source:
-        raise InvalidRequestError("parametro 'source' mancante")
+        raise InvalidRequestError("missing 'source' parameter")
     root = request.app.state.root
     out_dir = resolve(root, body.get("out") or "build")
 
@@ -118,9 +118,9 @@ async def build_all_stream(request: Request) -> StreamingResponse:
     try:
         jobs = int(params.get("jobs") or 1)
     except ValueError:
-        raise InvalidRequestError("parametro 'jobs' deve essere un numero intero")
+        raise InvalidRequestError("'jobs' parameter must be an integer")
     if not (1 <= jobs <= MAX_BUILD_ALL_JOBS):
-        raise InvalidRequestError(f"parametro 'jobs' deve essere tra 1 e {MAX_BUILD_ALL_JOBS}")
+        raise InvalidRequestError(f"'jobs' parameter must be between 1 and {MAX_BUILD_ALL_JOBS}")
     filter_glob = params.get("filter")
     force = params.get("force") == "true"
     dry_run = params.get("dry_run") == "true"
@@ -145,9 +145,9 @@ async def build_all_stream(request: Request) -> StreamingResponse:
                 if duplicates:
                     raise DuplicateTableNameError(duplicates)
 
-                # le tabelle batch non sono filtrate da 'filter' (filtra
-                # file su disco per path, le batch table sono dichiarate
-                # per nome in config) — sempre incluse tutte per intero.
+                # batch tables aren't filtered by 'filter' (it filters
+                # files on disk by path, batch tables are declared by
+                # name in config) — always included in full.
                 batch_tables = resolve_batch_tables(root, base_config)
                 sources = exclude_batch_members(sources, batch_tables)
                 check_no_batch_name_collisions(sources, batch_tables)
@@ -162,8 +162,8 @@ async def build_all_stream(request: Request) -> StreamingResponse:
             except PayloadError as e:
                 q.put(("error", e.to_dict()))
             except Exception:
-                logging.getLogger("payload.web").exception("build-all: errore interno")
-                q.put(("error", {"error": "InternalError", "message": "Errore interno inatteso"}))
+                logging.getLogger("payload.web").exception("build-all: internal error")
+                q.put(("error", {"error": "InternalError", "message": "Unexpected internal error"}))
             finally:
                 q.put((DONE, None))
 

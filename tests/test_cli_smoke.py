@@ -1,14 +1,9 @@
 """
-Test a livello CLI, non solo core: usano typer.testing.CliRunner per
-invocare i comandi come farebbe davvero un utente da terminale — un
-bug come quello di 'typer.Exit catturato come errore interno' (vedi
-test_doctor_missing_toolchain_exits_cleanly_no_traceback) sarebbe stato
-beccato subito da questi test, non dai test a livello core.
-
-NOTA: scritti senza poter eseguire typer in questo ambiente di sviluppo
-(nessun accesso di rete per installarlo) — verificati con cura contro
-l'API documentata, ma vale la pena un doppio controllo lanciandoli
-davvero con `pytest tests/test_cli_smoke.py -v`.
+CLI-level tests, not just core: use typer.testing.CliRunner to invoke
+commands the way a real user would from a terminal — a bug like the
+'typer.Exit caught as an internal error' one (see
+test_doctor_missing_toolchain_exits_cleanly_no_traceback) would have
+been caught right away by these tests, not by core-level tests.
 """
 import shutil
 import subprocess
@@ -23,7 +18,7 @@ runner = CliRunner()
 
 
 def test_init_wizard_yes_uses_all_defaults(tmp_path, monkeypatch):
-    """--wizard --yes: nessuna domanda posta, tutti i default usati."""
+    """--wizard --yes: no question asked, all defaults used."""
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, ["init", "wizproj", "--wizard", "--yes"])
@@ -44,12 +39,12 @@ def test_init_local_plugins_created_by_default(tmp_path, monkeypatch):
     assert (tmp_path / "proj" / "local_plugins" / "README.md").exists()
 
 
-@pytest.mark.skipif(shutil.which("git") is None, reason="richiede git")
+@pytest.mark.skipif(shutil.which("git") is None, reason="requires git")
 def test_init_wizard_can_init_git(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    # simula le risposte al wizard: nome vuoto (usa quello posizionale),
-    # poi tutte le domande in ordine: local_plugins, example, writer,
-    # byte_order, git init
+    # simulates the wizard's answers: empty name (uses the positional
+    # one), then every question in order: local_plugins, example,
+    # writer, byte_order, git init
     result = runner.invoke(
         app, ["init", "gitproj", "--wizard"],
         input="y\ny\n\nlittle\ny\n",
@@ -76,7 +71,7 @@ def test_plugin_install_deps_no_requires(tmp_path, monkeypatch):
     result = runner.invoke(app, ["plugin", "install-deps", str(plugin_file)])
 
     assert result.exit_code == 0
-    assert "niente da installare" in result.stdout
+    assert "nothing to install" in result.stdout
 
 
 def test_local_plugin_with_requires_reported_in_status(tmp_path, monkeypatch):
@@ -84,13 +79,13 @@ def test_local_plugin_with_requires_reported_in_status(tmp_path, monkeypatch):
     runner.invoke(app, ["init", "proj"])
     proj = tmp_path / "proj"
     (proj / "local_plugins" / "needs_fake.py").write_text(
-        'REQUIRES = ["libreria_inesistente_xyz"]\n'
+        'REQUIRES = ["nonexistent_library_xyz"]\n'
     )
     monkeypatch.chdir(proj)
 
     result = runner.invoke(app, ["doctor"])
 
-    assert "local_plugin_deps" in result.stdout or "dipendenze mancanti" in result.stdout
+    assert "local_plugin_deps" in result.stdout or "missing dependencies" in result.stdout
 
 
 def test_version():
@@ -134,8 +129,8 @@ def test_build_happy_path(tmp_path, monkeypatch):
 
 
 def test_pipeline_show_implicit_pipeline(tmp_path, monkeypatch):
-    """pld pipeline show su una tabella senza [pipeline] esplicita deve
-    mostrare comunque la pipeline implicita a 2 stage (reader+writer)."""
+    """pld pipeline show on a table with no explicit [pipeline] must
+    still show the implicit 2-stage pipeline (reader+writer)."""
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init", "proj"])
     proj = tmp_path / "proj"
@@ -153,7 +148,7 @@ def test_pipeline_show_unknown_table_exits_4(tmp_path, monkeypatch):
     runner.invoke(app, ["init", "proj"])
     monkeypatch.chdir(tmp_path / "proj")
 
-    result = runner.invoke(app, ["pipeline", "show", "tabella_inesistente"])
+    result = runner.invoke(app, ["pipeline", "show", "nonexistent_table"])
 
     assert result.exit_code == 4
 
@@ -166,7 +161,7 @@ def test_status_shows_never_saved(tmp_path, monkeypatch):
     result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0
-    assert "mai salvata" in result.stdout
+    assert "never saved" in result.stdout
 
 
 def test_commit_and_log(tmp_path, monkeypatch):
@@ -176,37 +171,39 @@ def test_commit_and_log(tmp_path, monkeypatch):
     monkeypatch.chdir(proj)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
 
-    commit_result = runner.invoke(app, ["commit", "-m", "primo commit"])
+    commit_result = runner.invoke(app, ["commit", "-m", "first commit"])
     assert commit_result.exit_code == 0
 
     log_result = runner.invoke(app, ["log", "example_table"])
     assert log_result.exit_code == 0
-    assert "primo commit" in log_result.stdout
+    assert "first commit" in log_result.stdout
 
 
 def test_doctor_missing_toolchain_exits_cleanly_no_traceback(tmp_path, monkeypatch):
-    """Test di regressione per il bug 'typer.Exit catturato come errore
-    interno': con un compilatore inesistente, doctor deve uscire con
-    l'exit code giusto SENZA 'Errore interno inatteso' né traceback."""
+    """Regression test for the 'typer.Exit caught as an internal
+    error' bug: with a nonexistent compiler, doctor must exit with the
+    right exit code WITHOUT 'Unexpected internal error' or a
+    traceback."""
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init", "proj"])
     proj = tmp_path / "proj"
     (proj / "table-tool.toml").write_text(
-        '[toolchain]\ncompiler = "questo-compilatore-non-esiste-di-sicuro-xyz"\n'
+        '[toolchain]\ncompiler = "this-compiler-definitely-does-not-exist-xyz"\n'
     )
     monkeypatch.chdir(proj)
 
     result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 2
-    assert "Errore interno inatteso" not in result.stdout
+    assert "Unexpected internal error" not in result.stdout
     assert "Traceback" not in result.stdout
 
 
 def test_doctor_survives_unimplemented_local_doctor_check(tmp_path, monkeypatch):
-    """Regressione trovata dall'utente: 'pld doctor' con un plugin
-    DOCTOR_CHECK locale creato ma non implementato (scaffold con 'raise
-    NotImplementedError') doveva uscire pulito, non con un traceback."""
+    """Regression found by a user: 'pld doctor' with a local
+    DOCTOR_CHECK plugin created but not implemented (scaffold with
+    'raise NotImplementedError') was supposed to exit cleanly, not
+    with a traceback."""
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init", "proj"])
     proj = tmp_path / "proj"
@@ -244,17 +241,17 @@ def test_golden_check_missing_exits_with_expected_code(tmp_path, monkeypatch):
 
     result = runner.invoke(app, ["golden", "check", "example_table"])
 
-    assert result.exit_code == 0  # 'missing' non è un errore bloccante per golden check
-    assert "non impostato" in result.stdout or "!" in result.stdout
+    assert result.exit_code == 0  # 'missing' isn't a blocking error for golden check
+    assert "not set" in result.stdout or "!" in result.stdout
 
 
 @pytest.mark.skipif(
     shutil.which("gcc") is None or shutil.which("objcopy") is None,
-    reason="richiede gcc e objcopy reali",
+    reason="requires real gcc and objcopy",
 )
 def test_c_source_to_obj_via_cli(tmp_path, monkeypatch):
-    """Verifica end-to-end della pipeline c_source -> obj passando
-    davvero dalla CLI, non chiamando i plugin direttamente."""
+    """End-to-end verification of the c_source -> obj pipeline,
+    really going through the CLI, not calling the plugins directly."""
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init", "proj"])
     proj = tmp_path / "proj"

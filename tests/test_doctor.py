@@ -25,11 +25,11 @@ from payload.core.registry import PluginRegistry
 def test_toolchain_check_warns_when_not_configured():
     result = ToolchainCheck("compiler", "compiler").run({})
     assert result.status == CheckStatus.WARN
-    assert "non configurato" in result.message
+    assert "not configured" in result.message
 
 
 def test_toolchain_check_fails_when_binary_not_in_path():
-    config = {"toolchain": {"compiler": "questo_binario_non_esiste_di_sicuro_xyz"}}
+    config = {"toolchain": {"compiler": "this_binary_definitely_does_not_exist_xyz"}}
     result = ToolchainCheck("compiler", "compiler").run(config)
     assert result.status == CheckStatus.FAIL
 
@@ -45,15 +45,15 @@ def test_toolchain_check_warns_on_timeout():
     with patch("payload.core.doctor.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="x", timeout=5)):
         result = ToolchainCheck("compiler", "compiler").run(config)
     assert result.status == CheckStatus.WARN
-    assert "non risponde" in result.message
+    assert "not responding" in result.message
 
 
 def test_toolchain_check_fails_on_oserror():
     config = {"toolchain": {"compiler": "python3"}}
-    with patch("payload.core.doctor.subprocess.run", side_effect=OSError("permesso negato")):
+    with patch("payload.core.doctor.subprocess.run", side_effect=OSError("permission denied")):
         result = ToolchainCheck("compiler", "compiler").run(config)
     assert result.status == CheckStatus.FAIL
-    assert "non eseguibile" in result.message
+    assert "not executable" in result.message
 
 
 # --- PluginLoadCheck ---------------------------------------------------------
@@ -61,7 +61,7 @@ def test_toolchain_check_fails_on_oserror():
 def test_plugin_load_check_ok_with_no_local_plugins(tmp_path):
     result = PluginLoadCheck().run({"_project_root": str(tmp_path)})
     assert result.status == CheckStatus.OK
-    assert "plugin caricati" in result.message
+    assert "plugins loaded" in result.message
 
 
 def test_plugin_load_check_fails_on_broken_local_plugin(tmp_path):
@@ -85,21 +85,21 @@ def test_config_validity_check_ok(tmp_path):
 
 
 def test_config_validity_check_fails_on_malformed_global_config(tmp_path):
-    (tmp_path / "table-tool.toml").write_text("questo non e' toml valido [[[")
+    (tmp_path / "table-tool.toml").write_text("this is not valid toml [[[")
     result = ConfigValidityCheck().run({"_project_root": str(tmp_path)})
     assert result.status == CheckStatus.FAIL
     assert "table-tool.toml" in result.hint
 
 
 def test_config_validity_check_scans_and_flags_malformed_sidecar(tmp_path):
-    (tmp_path / "esempio.config.toml").write_text("[defaults]\nwriter = 123\n")  # tipo sbagliato
+    (tmp_path / "example.config.toml").write_text("[defaults]\nwriter = 123\n")  # wrong type
     result = ConfigValidityCheck().run({"_project_root": str(tmp_path)})
     assert result.status == CheckStatus.FAIL
-    assert "esempio.config.toml" in result.hint
+    assert "example.config.toml" in result.hint
 
 
 def test_config_validity_check_counts_valid_sidecars(tmp_path):
-    (tmp_path / "esempio.config.toml").write_text("[defaults]\nwriter = \"bin\"\n")
+    (tmp_path / "example.config.toml").write_text("[defaults]\nwriter = \"bin\"\n")
     result = ConfigValidityCheck().run({"_project_root": str(tmp_path)})
     assert result.status == CheckStatus.OK
     assert "1 sidecar" in result.message
@@ -114,11 +114,11 @@ def test_dir_writable_check_ok(tmp_path, monkeypatch):
 
 
 def test_dir_writable_check_resolves_relative_to_project_root_not_cwd(tmp_path, monkeypatch):
-    """Regressione: con _project_root diverso dalla cwd del processo
-    (es. 'pld serve' lanciato da una cartella diversa dal progetto
-    servito), le directory vanno create sotto _project_root, MAI sotto
-    la cwd — altrimenti il check inquina silenziosamente la cwd del
-    processo server con directory vuote."""
+    """Regression: with _project_root different from the process's
+    cwd (e.g. 'pld serve' launched from a folder other than the
+    project being served), directories must be created under
+    _project_root, NEVER under the cwd — otherwise the check silently
+    pollutes the server process's cwd with empty directories."""
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
@@ -138,7 +138,7 @@ def test_dir_writable_check_resolves_relative_to_project_root_not_cwd(tmp_path, 
 def test_dir_writable_check_fails_when_path_is_a_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     blocked = tmp_path / "build"
-    blocked.write_text("questo e' un file, non una cartella")
+    blocked.write_text("this is a file, not a folder")
 
     result = DirWritableCheck().run({"defaults": {"output_dir": "build", "golden_dir": "golden", "cache_dir": ".cache"}})
 
@@ -151,12 +151,12 @@ def test_dir_writable_check_fails_when_path_is_a_file(tmp_path, monkeypatch):
 def test_cache_integrity_check_ok_no_cache(tmp_path):
     result = CacheIntegrityCheck().run({"defaults": {"cache_dir": str(tmp_path / "nope")}})
     assert result.status == CheckStatus.OK
-    assert "Nessuna cache" in result.message
+    assert "No cache" in result.message
 
 
 def test_cache_integrity_check_resolves_relative_cache_dir_against_project_root(tmp_path, monkeypatch):
-    """Stessa regressione di DirWritableCheck: un cache_dir relativo va
-    risolto rispetto a _project_root, non alla cwd del processo."""
+    """Same regression as DirWritableCheck: a relative cache_dir must
+    be resolved against _project_root, not the process's cwd."""
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
@@ -168,7 +168,7 @@ def test_cache_integrity_check_resolves_relative_cache_dir_against_project_root(
     result = CacheIntegrityCheck().run({"_project_root": str(project_root), "defaults": {"cache_dir": ".cache"}})
 
     assert result.status == CheckStatus.OK
-    assert "integra" in result.message
+    assert "intact" in result.message
 
 
 def test_cache_integrity_check_ok_valid_cache(tmp_path):
@@ -177,7 +177,7 @@ def test_cache_integrity_check_ok_valid_cache(tmp_path):
     (cache_dir / ".payload_cache.json").write_text("{}")
     result = CacheIntegrityCheck().run({"defaults": {"cache_dir": str(cache_dir)}})
     assert result.status == CheckStatus.OK
-    assert "integra" in result.message
+    assert "intact" in result.message
 
 
 def test_cache_integrity_check_warns_on_corrupted_cache(tmp_path):
@@ -186,7 +186,7 @@ def test_cache_integrity_check_warns_on_corrupted_cache(tmp_path):
     (cache_dir / ".payload_cache.json").write_text("{not valid json")
     result = CacheIntegrityCheck().run({"defaults": {"cache_dir": str(cache_dir)}})
     assert result.status == CheckStatus.WARN
-    assert "corrotta" in result.message
+    assert "Corrupted" in result.message
 
 
 # --- TableNameUniquenessCheck --------------------------------------------------
@@ -209,12 +209,12 @@ def test_table_name_uniqueness_check_fails_on_duplicates(tmp_path):
     assert "sensor" in result.message
 
 
-# --- LocalPluginDepsCheck (rami non coperti in test_doctor_new_checks.py) -----
+# --- LocalPluginDepsCheck (branches not covered in test_doctor_new_checks.py) --
 
 def test_local_plugin_deps_check_ignores_underscore_prefixed_files(tmp_path):
     plugin_dir = tmp_path / "local_plugins"
     plugin_dir.mkdir()
-    (plugin_dir / "_helper.py").write_text('REQUIRES = ["libreria_inesistente_xyz"]\n')
+    (plugin_dir / "_helper.py").write_text('REQUIRES = ["nonexistent_library_xyz"]\n')
 
     result = LocalPluginDepsCheck().run({"_project_root": str(tmp_path)})
 
@@ -224,7 +224,7 @@ def test_local_plugin_deps_check_ignores_underscore_prefixed_files(tmp_path):
 def test_local_plugin_deps_check_ignores_files_without_requires(tmp_path):
     plugin_dir = tmp_path / "local_plugins"
     plugin_dir.mkdir()
-    (plugin_dir / "senza_requires.py").write_text("class X:\n    pass\n")
+    (plugin_dir / "no_requires.py").write_text("class X:\n    pass\n")
 
     result = LocalPluginDepsCheck().run({"_project_root": str(tmp_path)})
 
@@ -283,13 +283,13 @@ def test_local_plugin_stub_check_ignores_underscore_prefixed_files(tmp_path):
     assert result.status == CheckStatus.OK
 
 
-# --- GitCheck (rami non coperti dai test con git reale) -----------------------
+# --- GitCheck (branches not covered by the real-git tests) ---------------------
 
 def test_git_check_warns_when_git_missing(tmp_path):
     with patch("payload.core.doctor.shutil.which", return_value=None):
         result = GitCheck().run({"_project_root": str(tmp_path)})
     assert result.status == CheckStatus.WARN
-    assert "non trovato" in result.message
+    assert "not found" in result.message
 
 
 def test_git_check_warns_on_timeout_or_oserror(tmp_path):
@@ -297,7 +297,7 @@ def test_git_check_warns_on_timeout_or_oserror(tmp_path):
          patch("payload.core.doctor.subprocess.run", side_effect=OSError("boom")):
         result = GitCheck().run({"_project_root": str(tmp_path)})
     assert result.status == CheckStatus.WARN
-    assert "non risponde" in result.message
+    assert "not responding" in result.message
 
 
 # --- PipelineExecStagesCheck ---------------------------------------------------
@@ -315,25 +315,25 @@ def test_pipeline_exec_check_warns_and_counts_across_files(tmp_path):
         '{ type = "exec", command = "x", output_extension = ".x" }'
         ']\n'
     )
-    (tmp_path / "altro.config.toml").write_text(
+    (tmp_path / "other.config.toml").write_text(
         '[pipeline]\nstages = [{ type = "exec", command = "y", output_extension = ".y" }]\n'
     )
 
     result = PipelineExecStagesCheck().run({"_project_root": str(tmp_path)})
 
     assert result.status == CheckStatus.WARN
-    assert "2 stage 'exec'" in result.message
+    assert "2 'exec' stages" in result.message
     assert "2 file" in result.message
 
 
 def test_pipeline_exec_check_skips_malformed_sidecar(tmp_path):
-    (tmp_path / "rotto.config.toml").write_text("questo non e' toml [[[")
+    (tmp_path / "broken.config.toml").write_text("this is not toml [[[")
     result = PipelineExecStagesCheck().run({"_project_root": str(tmp_path)})
-    assert result.status == CheckStatus.OK  # il file malformato viene ignorato, non conta come errore qui
+    assert result.status == CheckStatus.OK  # the malformed file is ignored, doesn't count as an error here
 
 
 def test_pipeline_exec_check_tolerates_non_list_stages(tmp_path):
-    (tmp_path / "table-tool.toml").write_text('[pipeline]\nstages = "non una lista"\n')
+    (tmp_path / "table-tool.toml").write_text('[pipeline]\nstages = "not a list"\n')
     result = PipelineExecStagesCheck().run({"_project_root": str(tmp_path)})
     assert result.status == CheckStatus.OK
 
@@ -362,7 +362,7 @@ def test_run_doctor_includes_registry_doctor_checks(tmp_path, monkeypatch):
         name = "custom"
         api_version = "1.0"
         def run(self, config):
-            return CheckResult(self.name, CheckStatus.OK, "tutto ok")
+            return CheckResult(self.name, CheckStatus.OK, "all good")
 
     monkeypatch.chdir(tmp_path)
     registry = PluginRegistry()
@@ -375,17 +375,17 @@ def test_run_doctor_includes_registry_doctor_checks(tmp_path, monkeypatch):
 
 
 def test_run_doctor_converts_raw_exception_from_a_check_into_fail_result(tmp_path, monkeypatch):
-    """Regressione trovata dall'utente: un doctor check di terze parti
-    (es. uno scaffold locale con 'raise NotImplementedError' al posto
-    di un run() vero) non deve far esplodere 'pld doctor'/'GET
-    /api/doctor' — deve diventare un FAIL leggibile fra gli altri
-    risultati, lasciando visibili tutti gli altri check."""
+    """Regression found by a user: a third-party doctor check (e.g. a
+    local scaffold with 'raise NotImplementedError' instead of a real
+    run()) must not blow up 'pld doctor'/'GET /api/doctor' — it must
+    become a readable FAIL among the other results, leaving every
+    other check visible."""
     class _CrashingCheck:
         name = "crashing"
         api_version = "1.0"
 
         def run(self, config):
-            raise NotImplementedError("TODO: implementa il check")
+            raise NotImplementedError("TODO: implement the check")
 
     monkeypatch.chdir(tmp_path)
     registry = PluginRegistry()

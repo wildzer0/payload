@@ -106,7 +106,7 @@ def test_valid_on_error_values_accepted():
 
 def test_unknown_stage_type_rejected():
     with pytest.raises(InvalidPipelineError):
-        PipelineSpec.from_raw_stages([{"type": "qualcosa_a_caso"}])
+        PipelineSpec.from_raw_stages([{"type": "some_random_thing"}])
 
 
 def test_reader_stage_missing_name_rejected():
@@ -150,7 +150,7 @@ def test_exec_stage_missing_command_rejected():
 
 def test_stage_not_a_dict_rejected():
     with pytest.raises(InvalidPipelineError):
-        PipelineSpec.from_raw_stages(["non un dict"])
+        PipelineSpec.from_raw_stages(["not a dict"])
 
 
 def test_cache_signature_differs_for_different_pipelines():
@@ -191,7 +191,7 @@ def test_reader_writer_pairs_finds_all_pairs_in_multistage_pipeline():
     assert pairs[1][0].name == "r2" and pairs[1][1].name == "w2"
 
 
-# --- fan-out: reader -> 1+ writer terminali -------------------------------
+# --- fan-out: reader -> 1+ terminal writers ---------------------------------
 
 def test_reader_followed_by_two_writers_valid():
     spec = PipelineSpec.from_raw_stages([
@@ -203,8 +203,8 @@ def test_reader_followed_by_two_writers_valid():
 
 
 def test_reader_writer_reader_writer_still_valid():
-    """Gruppi di un solo writer restano senza restrizioni: reader/exec
-    possono ancora seguirli, comportamento invariato."""
+    """Groups of a single writer stay unrestricted: reader/exec can
+    still follow them, unchanged behavior."""
     spec = PipelineSpec.from_raw_stages([
         {"type": "reader", "name": "r1"},
         {"type": "writer", "name": "w1"},

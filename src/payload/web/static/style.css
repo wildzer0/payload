@@ -1,6 +1,6 @@
-/* payload web UI — tema chiaro di default via prefers-color-scheme,
-   sovrascrivibile manualmente con [data-theme] (persistito in
-   localStorage dal toggle in app.js). */
+/* payload web UI — light theme by default via prefers-color-scheme,
+   manually overridable with [data-theme] (persisted in localStorage
+   by the toggle in app.js). */
 
 :root {
   --bg: #f3f4f8;
@@ -96,7 +96,7 @@ body {
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden; /* rete di sicurezza: nessun elemento deve mai allargare la pagina intera */
+  overflow-x: hidden; /* safety net: no element should ever widen the whole page */
 }
 
 .app {
@@ -161,17 +161,17 @@ body {
   border-left: 2px solid transparent;
   transition: background-color 120ms ease, color 120ms ease;
 }
-/* Base per ogni <span class="icon"><svg>...</svg></span> (vedi iconSpan()
- * in app.js): senza queste due regole un'icona dentro un contenitore
- * che non è già un flex container (es. lo span di testo di un
- * .toggle-chip, o una cella di tabella) non ha ALCUN vincolo di
- * dimensione — width/height su uno span 'inline' vengono ignorati, e
- * un <svg> con solo viewBox (nessun width/height proprio) si espande
- * alla dimensione intrinseca di default invece di restare piccolo.
- * display:block sull'svg toglie anche il gap da baseline che lo fa
- * sembrare disallineato rispetto al testo accanto. I selettori più
- * specifici sotto (bottoni, nav, ecc.) restano validi e vincono per
- * specificità quando serve una dimensione diversa. */
+/* Base for every <span class="icon"><svg>...</svg></span> (see
+ * iconSpan() in app.js): without these two rules an icon inside a
+ * container that isn't already a flex container (e.g. a
+ * .toggle-chip's text span, or a table cell) has NO size constraint
+ * at all — width/height on an 'inline' span are ignored, and an
+ * <svg> with only a viewBox (no width/height of its own) expands to
+ * its default intrinsic size instead of staying small. display:block
+ * on the svg also removes the baseline gap that makes it look
+ * misaligned with the text next to it. The more specific selectors
+ * below (buttons, nav, etc.) remain valid and win by specificity when
+ * a different size is needed. */
 .icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; flex-shrink: 0; }
 .icon svg { display: block; width: 100%; height: 100%; }
 
@@ -202,13 +202,24 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
-  /* L'ellissi di default taglia dalla FINE della stringa — per un path
-     assoluto è il pezzo meno utile (la home dell'utente) a restare
-     visibile, e il nome del progetto in fondo a sparire. direction:rtl
-     sposta l'ellissi all'inizio pur mantenendo il testo leggibile in
-     LTR (text-align:left lo riancora a sinistra). */
+  /* The default ellipsis truncates from the END of the string — for
+     an absolute path that leaves the least useful part visible (the
+     user's home) and makes the project name at the end disappear.
+     direction:rtl moves the ellipsis to the start while keeping the
+     text readable in LTR (text-align:left re-anchors it to the left). */
   direction: rtl;
   text-align: left;
+}
+
+.credit {
+  padding: 6px 8px 10px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+.credit-heart {
+  color: #e0517a;
 }
 
 .theme-toggle {
@@ -240,15 +251,15 @@ body {
 .content {
   padding: 30px 40px 60px;
   max-width: 1120px;
-  /* Senza margin:auto il blocco si ferma a max-width ma resta incollato
-     al bordo sinistro della colonna 1fr — su un monitor largo tutto lo
-     spazio in eccesso finisce a destra invece di distribuirsi ai due
-     lati. Stesso pattern di GitHub/Linear/Vercel: la colonna di
-     contenuto si centra nello spazio restante, non si stira. */
+  /* Without margin:auto the block stops at max-width but stays glued
+     to the left edge of the 1fr column — on a wide monitor all the
+     extra space ends up on the right instead of being distributed on
+     both sides. Same pattern as GitHub/Linear/Vercel: the content
+     column centers itself in the remaining space, it doesn't stretch. */
   margin: 0 auto;
-  min-width: 0; /* un item di CSS grid di default ha min-width:auto: senza
-    questo, un figlio largo (es. una tabella) forza l'intera griglia .app
-    (sidebar compresa) oltre la viewport invece di scrollare al suo interno */
+  min-width: 0; /* a CSS grid item defaults to min-width:auto: without
+    this, a wide child (e.g. a table) forces the whole .app grid
+    (sidebar included) past the viewport instead of scrolling within itself */
   overflow-x: auto;
 }
 
@@ -277,8 +288,8 @@ h2:first-child { margin-top: 0; }
 }
 .card-tight { padding: 14px 16px; }
 
-/* card collassabile a scomparsa (<details class="card">) — usata per
-   sezioni secondarie/di configurazione, chiuse di default */
+/* collapsible card (<details class="card">) — used for secondary/
+   config sections, closed by default */
 details.card { padding: 0; }
 details.card > summary {
   list-style: none;
@@ -296,10 +307,10 @@ details.card > summary .chevron { width: 15px; height: 15px; flex-shrink: 0; col
 details.card[open] > summary .chevron { transform: rotate(180deg); }
 details.card > .details-body { padding: 0 22px 20px; }
 
-/* Pagina tabella: History deve restare ben visibile mentre si scorrono
- * Build/Contenuto/Pipeline/Sidecar, non sepolta in fondo alla pagina
- * dietro sezioni che si aprono/chiudono — resta agganciata (sticky) in
- * una colonna a fianco invece che impilata sotto tutto il resto. */
+/* Table page: History must stay clearly visible while Build/Source/
+ * Pipeline/Sidecar are scrolled, not buried at the bottom of the page
+ * behind sections that open/close — it stays docked (sticky) in a
+ * side column instead of stacked below everything else. */
 .table-detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 400px; align-items: start; gap: 20px; }
 .table-detail-main { min-width: 0; }
 .table-detail-side { position: sticky; top: 20px; min-width: 0; }
@@ -376,6 +387,10 @@ td.mono, .mono { font-family: var(--mono); }
 .pill-dim { background: var(--bg-subtle); color: var(--text-dim); border-color: var(--border); }
 .pill-golden { background: var(--gold-bg); color: var(--gold); border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
 .pill-current { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+/* Only states (statusPill() in app.js) — not pills that show a
+   literal value (filename, extension, version): those stay as-is,
+   uppercasing them would make them illegible. */
+.pill-status { text-transform: uppercase; letter-spacing: 0.04em; }
 
 button, .btn {
   display: inline-flex;
@@ -409,7 +424,7 @@ button.ghost:hover { background: var(--bg-subtle); border-color: transparent; }
 button.danger { color: var(--fail); }
 button.danger:hover { border-color: var(--fail); background: var(--fail-bg); }
 button:disabled { opacity: 0.5; cursor: default; transform: none !important; box-shadow: none !important; }
-button.icon-only { padding: 8px; width: 34px; height: 34px; justify-content: center; }
+button.icon-only, a.icon-only { padding: 8px; width: 34px; height: 34px; justify-content: center; }
 a.link { color: var(--accent); text-decoration: none; font-weight: 500; }
 a.link:hover { text-decoration: underline; }
 
@@ -542,7 +557,7 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
 .breadcrumb { font-size: 12.5px; color: var(--text-dim); margin-bottom: 8px; }
 .breadcrumb a { color: var(--text-dim); }
 
-/* ---------- shimmer / caricamento ---------- */
+/* ---------- shimmer / loading ---------- */
 
 .skeleton {
   border-radius: var(--radius-sm);
@@ -553,7 +568,7 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
 }
 @keyframes shimmer { to { background-position: -200% 0; } }
 
-/* ---------- transizione route ---------- */
+/* ---------- route transition ---------- */
 
 .route-fade { animation: routeFade 180ms ease-out; }
 @keyframes routeFade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
@@ -583,18 +598,24 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
   align-items: flex-start;
   gap: 10px;
   animation: toastIn 180ms ease-out;
-  overflow-wrap: anywhere; /* messaggi con path/URL lunghi senza spazi non devono sfondare il riquadro */
+  /* break-word only breaks a word if it doesn't fit on its own line
+     (e.g. a long path with no spaces) — unlike 'anywhere', it doesn't
+     break mid-word when wrapping at the earlier space would have been
+     enough, so normal text wraps readably instead of into arbitrary
+     pieces. */
+  overflow-wrap: break-word;
 }
 .toast-ok { border-left-color: var(--ok); }
 .toast-warn { border-left-color: var(--warn); }
 .toast-error { border-left-color: var(--fail); }
 .toast-body { flex: 1; min-width: 0; }
+.toast-message { font-weight: 650; }
 .toast-hint { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
 .toast-close { background: none; border: none; padding: 2px; color: var(--text-faint); cursor: pointer; line-height: 1; }
 .toast-close:hover { color: var(--text); border: none; box-shadow: none; }
 @keyframes toastIn { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
 
-/* ---------- modale di conferma ---------- */
+/* ---------- confirmation modal ---------- */
 
 .modal-overlay {
   position: fixed;
@@ -660,23 +681,24 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
 .pipeline-output-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 14px; }
 .pipeline-output-label { color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; margin-right: 2px; }
 
-/* ---------- rifiniture varie ---------- */
+/* ---------- misc touches ---------- */
 
 .divider { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .section-collapse summary { cursor: pointer; font-size: 13px; color: var(--text-dim); font-weight: 500; padding: 4px 0; }
 .section-collapse summary:hover { color: var(--text); }
 
-/* ---------- risultati di validazione (pill + testo, con respiro) ---------- */
+/* ---------- validation results (pill + text, with breathing room) ---------- */
 
 .result-line { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; margin: 8px 0; }
 .result-line ul { width: 100%; margin: 6px 0 0; }
 
-/* ---------- scheda plugin ---------- */
+/* ---------- plugin card ---------- */
 
 .plugin-meta-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
 .meta-chip {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
+  justify-self: start;
   gap: 6px;
   background: var(--bg-subtle);
   border: 1px solid var(--border);
@@ -685,10 +707,10 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
   font-size: 12.5px;
 }
 .meta-chip strong { color: var(--text-dim); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
-.meta-chip.meta-chip-control { align-items: center; padding: 4px 10px 4px 12px; }
+.meta-chip.meta-chip-control { padding: 4px 10px 4px 12px; }
 .meta-chip .inline-select { width: auto; min-width: 90px; max-width: 140px; padding: 3px 6px; font-size: 12px; border-radius: 999px; }
 
-/* ---------- dashboard: card per tabella (sostituisce la vecchia tabella HTML) ---------- */
+/* ---------- dashboard: card per table (replaces the old HTML table) ---------- */
 
 .table-summary-list { display: flex; flex-direction: column; gap: 12px; }
 .table-summary-card {
@@ -709,14 +731,20 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
 .table-summary-name { font-size: 15px; font-weight: 600; }
 .table-summary-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .table-summary-badges { display: flex; flex-wrap: wrap; gap: 6px; }
-.table-summary-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Grid, not flex-wrap: with flex-wrap each chip is as wide as its own
+   content (different sizes -> each row wraps at a different point,
+   alignment between cards changes depending on the text). A grid with
+   fixed-minimum-width columns gives every card the SAME grid (same
+   number of columns, same wrap point), because every card shares the
+   same container width. */
+.table-summary-meta { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
 
-/* ---------- history: lista verticale di snapshot ---------- */
+/* ---------- history: vertical snapshot list ---------- */
 
-/* Card, non tabella: History vive in una colonna stretta agganciata a
- * fianco (vedi .table-detail-side) — una tabella larga lì dentro
- * costringerebbe a scorrere orizzontalmente solo per leggere i dati di
- * uno snapshot, illeggibile. Ogni informazione va a capo in autonomia. */
+/* Card, not table: History lives in a narrow docked side column (see
+ * .table-detail-side) — a wide table in there would force horizontal
+ * scrolling just to read a snapshot's data, unreadable. Each piece of
+ * information wraps on its own. */
 .snapshot-list { display: flex; flex-direction: column; gap: 10px; }
 #btn-load-more-snapshots { width: 100%; justify-content: center; margin-top: 12px; }
 .snapshot-item {
@@ -764,7 +792,7 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
   color: var(--text);
 }
 
-/* ---------- documentazione ---------- */
+/* ---------- documentation ---------- */
 
 .doc-list { display: grid; gap: 12px; }
 .doc-list-item {
@@ -805,7 +833,7 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
 .doc-content a { color: var(--accent); }
 .doc-content hr { border: none; border-top: 1px solid var(--border); margin: 26px 0; }
 
-/* ---------- editor plugin locali (CodeMirror 5, vendorizzato) ---------- */
+/* ---------- local plugin editor (CodeMirror 5, vendored) ---------- */
 
 .CodeMirror.cm-s-payload {
   background: var(--bg-subtle);
@@ -834,30 +862,80 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
 .cm-s-payload .cm-meta { color: var(--text-dim); }
 .cm-s-payload .cm-builtin { color: var(--accent); }
 .cm-s-payload .cm-error-line { background: color-mix(in srgb, var(--fail) 14%, transparent); }
+
+/* ---------- import (drag&drop, see Dashboard) ---------- */
+
+.import-zone h2 { margin-top: 0; }
+.import-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 16px;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-size: 13px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+.import-drop .icon { width: 22px; height: 22px; color: var(--text-faint); }
+.import-drop:hover, .import-drop-active {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--text);
+}
+
 .local-plugin-list { display: flex; flex-direction: column; gap: 6px; }
-.local-plugin-row {
+/* Row with only 2 elements (name + a button) — unlike
+   .local-plugin-row (3 fixed columns, see below) a flex
+   space-between is enough here: with only one "gap" to distribute
+   there's no possible misalignment regardless of the name's length. */
+.orphaned-table-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  flex-wrap: wrap;
   padding: 10px 12px;
   background: var(--bg-subtle);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
 }
-.local-plugin-row-actions { display: flex; align-items: center; gap: 8px; }
+.local-plugin-row {
+  /* 3 columns with a FIXED width shared across every row (name / pill /
+     actions) — with a flex justify-content:space-between each row
+     distributes space differently depending on its own filename's
+     length, and pills/buttons end up misaligned row by row instead of
+     lining up in a column. */
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(160px, auto) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+@media (max-width: 700px) {
+  .local-plugin-row { grid-template-columns: 1fr; }
+}
+.local-plugin-row-actions { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+@media (max-width: 700px) {
+  .local-plugin-row-actions { justify-content: flex-start; }
+}
 
-/* ---------- plugin list (per categoria, 3 colonne) ---------- */
+/* ---------- plugin list (by category, 3 columns) ---------- */
 
 .plugin-columns {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 16px;
-  /* start, non stretch (il default grid): ogni colonna alta quanto il
-     proprio contenuto, altrimenti le colonne più corte si stirano fino
-     ad eguagliare la più alta e i loro stati vuoti finiscono con un
-     mare di spazio bianco intorno a una riga di testo. */
+  /* start, not stretch (grid's default): each column as tall as its
+     own content, otherwise shorter columns stretch to match the
+     tallest one and their empty states end up with a sea of white
+     space around a single line of text. */
   align-items: start;
   margin-bottom: 16px;
 }
@@ -928,9 +1006,9 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
   text-align: left;
 }
 
-/* Plugin built-in di payload: sempre in secondo piano rispetto a quelli
-   dell'utente, anche quando non ne esiste ancora nessuno — un <details>
-   chiuso di default invece di una lista alla pari. */
+/* payload's built-in plugins: always in the background compared to
+   the user's own, even when none exist yet — a <details> closed by
+   default instead of a list on equal footing. */
 .plugin-builtin-group {
   border-top: 1px solid var(--border);
   padding: 4px 12px 12px;
@@ -967,7 +1045,7 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
   opacity: 1;
 }
 
-/* ---------- config (settings-style rows, vedi viewConfig) ---------- */
+/* ---------- config (settings-style rows, see viewConfig) ---------- */
 
 .settings-section { margin-bottom: 16px; }
 .settings-section-title { margin: 0 0 4px; font-size: 15px; }
@@ -1066,11 +1144,10 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
   .page-header { flex-direction: column; }
   .stage-card { flex-wrap: wrap; }
   .stage-fields { width: 100%; }
-  /* Il bordo a sinistra + gradiente orizzontale di .nav a.active hanno
-     senso solo per una lista verticale stretta — su una riga di
-     pillole orizzontali diventano un segno storto senza significato.
-     Qui l'elemento attivo si distingue con uno sfondo pieno, come una
-     normale pillola selezionata. */
+  /* .nav a.active's left border + horizontal gradient only make sense
+     for a narrow vertical list — on a row of horizontal pills they
+     become a meaningless crooked mark. Here the active item stands
+     out with a solid background instead, like a normal selected pill. */
   .nav a.active {
     background: color-mix(in srgb, var(--accent) 14%, transparent);
     border-left-color: transparent;

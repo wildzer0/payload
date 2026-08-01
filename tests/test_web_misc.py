@@ -1,3 +1,4 @@
+import io
 import zipfile
 from pathlib import Path
 
@@ -57,7 +58,7 @@ def test_report_table_built_with_golden_and_snapshot(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
     client.put("/api/golden/example_table", json={})
 
     r = client.get("/api/report")
@@ -78,7 +79,7 @@ def test_report_resolves_reader_and_writer_by_default(tmp_path):
     assert row["resolved_reader"] == "raw_text"
     assert row["resolved_writer"] == "bin"
     assert row["reader_override"] is None
-    # 'pld init' scrive già "writer = bin" nel table-tool.toml globale
+    # 'pld init' already writes "writer = bin" in the global table-tool.toml
     assert row["writer_override"] == "bin"
     assert row["has_sidecar"] is False
     assert row["pipeline_explicit"] is False
@@ -113,19 +114,74 @@ def test_report_hides_resolved_reader_writer_when_pipeline_explicit(tmp_path):
 
 
 def test_report_degrades_gracefully_when_reader_unresolvable(tmp_path):
-    """Un override reader inesistente (typo, o plugin rimosso dopo che
-    era stato configurato) non deve rompere l'intera dashboard: la riga
-    resta, semplicemente senza un reader/writer risolto."""
+    """A nonexistent reader override (typo, or a plugin removed after
+    it was configured) must not break the whole dashboard: the row
+    stays, simply without a resolved reader/writer."""
     root = _init_project(tmp_path)
     client = _client(root)
-    client.put("/api/sidecar/example_table", json={"defaults": {"reader": "reader_che_non_esiste"}})
+    client.put("/api/sidecar/example_table", json={"defaults": {"reader": "reader_that_does_not_exist"}})
 
     r = client.get("/api/report")
 
     row = r.json()["tables"][0]
-    assert row["reader_override"] == "reader_che_non_esiste"
+    assert row["reader_override"] == "reader_that_does_not_exist"
     assert row["resolved_reader"] is None
     assert row["resolved_writer"] is None
+
+
+def test_download_unknown_table_404(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.get("/api/table/does_not_exist/download")
+
+    assert r.status_code == 404
+
+
+def test_download_no_output_yet_404(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.get("/api/table/example_table/download")
+
+    assert r.status_code == 404
+    assert r.json()["error"] == "NoBuildOutputError"
+
+
+def test_download_single_output_serves_file_directly(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
+
+    r = client.get("/api/table/example_table/download")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/octet-stream"
+    assert 'filename="example_table.bin"' in r.headers["content-disposition"]
+    assert r.content == (root / "build" / "example_table.bin").read_bytes()
+
+
+def test_download_fan_out_zips_all_outputs(tmp_path):
+    root = _init_project(tmp_path)
+    (root / "table-tool.toml").write_text(
+        (root / "table-tool.toml").read_text()
+        + '\n[pipeline]\nstages = ['
+        '{ type = "reader", name = "raw_text" }, '
+        '{ type = "writer", name = "bin" }, '
+        '{ type = "writer", name = "hex" },'
+        ']\n'
+    )
+    client = _client(root)
+    build_r = client.post("/api/build", json={"source": "example_table.raw"})
+    assert build_r.status_code == 200, build_r.text
+
+    r = client.get("/api/table/example_table/download")
+
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/zip"
+    assert 'filename="example_table-output.zip"' in r.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+        assert set(zf.namelist()) == {"example_table.bin", "example_table.hex"}
 
 
 def test_doctor_runs_checks(tmp_path):
@@ -140,10 +196,10 @@ def test_doctor_runs_checks(tmp_path):
 
 
 def test_doctor_survives_unimplemented_local_doctor_check(tmp_path):
-    """Regressione trovata dall'utente: aprire la pagina Doctor con un
-    plugin locale DOCTOR_CHECK creato ma mai implementato (scaffold con
-    'raise NotImplementedError') mandava in eccezione l'intera route
-    invece di segnalare solo QUEL check come fallito."""
+    """Regression found by a user: opening the Doctor page with a
+    local DOCTOR_CHECK plugin created but never implemented (scaffold
+    with 'raise NotImplementedError') used to throw an exception in
+    the whole route instead of only flagging THAT check as failed."""
     root = _init_project(tmp_path)
     from payload.plugin_scaffold import scaffold_local_plugin
 
@@ -157,7 +213,7 @@ def test_doctor_survives_unimplemented_local_doctor_check(tmp_path):
     crashed = next(c for c in checks if c["name"] == "new_check")
     assert crashed["status"] == "fail"
     assert "NotImplementedError" in crashed["message"]
-    # e gli altri check devono comunque essere presenti
+    # and the other checks must still be present
     assert any(c["name"] == "git" for c in checks)
 
 
@@ -169,7 +225,6 @@ def test_export_produces_zip(tmp_path):
 
     assert r.status_code == 200
     assert r.headers["content-type"] == "application/zip"
-    import io
     with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
         assert any("example_table.raw" in n for n in zf.namelist())
 

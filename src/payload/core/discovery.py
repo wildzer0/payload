@@ -1,7 +1,7 @@
-"""Discovery dei sorgenti tabella sotto una root. Condiviso da build-all
-e dal sistema di history (status/commit devono vedere esattamente lo
-stesso insieme di tabelle scoperto dal batch build, altrimenti 'pld
-status' e 'pld build-all' potrebbero disaccordare su cosa esiste)."""
+"""Discovery of table sources under a root. Shared by build-all and the
+history system (status/commit must see exactly the same set of tables
+discovered by the batch build, otherwise 'pld status' and 'pld
+build-all' could disagree about what exists)."""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -26,9 +26,9 @@ def discover_table_sources(
 ) -> list[Path]:
     pattern = filter_glob or "**/*"
     if pattern.endswith("**"):
-        # 'sensors/**' da solo matcha SOLO la cartella (comportamento
-        # documentato ma controintuitivo di pathlib.glob), non i file al
-        # suo interno — normalizziamo così l'uso intuitivo funziona.
+        # 'sensors/**' on its own matches ONLY the folder (documented
+        # but counterintuitive pathlib.glob behavior), not the files
+        # inside it — we normalize so the intuitive usage works.
         pattern = pattern + "/*"
     try:
         resolved_output = output_dir.resolve()
@@ -49,10 +49,11 @@ def discover_table_sources(
 
 
 def find_duplicate_stems(sources: list[Path]) -> dict[str, list[Path]]:
-    """Il nome tabella (filename stem) è l'identità usata per build
-    output/golden/history — due sorgenti con lo stesso stem in cartelle
-    diverse collidono silenziosamente su tutti e tre. Ritorna solo i
-    gruppi con più di un file (dict vuoto se non ci sono duplicati)."""
+    """The table name (filename stem) is the identity used for build
+    output/golden/history — two sources with the same stem in
+    different folders silently collide on all three. Returns only the
+    groups with more than one file (empty dict if there are no
+    duplicates)."""
     by_stem: dict[str, list[Path]] = defaultdict(list)
     for p in sources:
         by_stem[p.stem].append(p)
@@ -60,9 +61,9 @@ def find_duplicate_stems(sources: list[Path]) -> dict[str, list[Path]]:
 
 
 def check_no_batch_name_collisions(sources: list[Path], batch_tables: list[BatchTable]) -> None:
-    """Un nome di [[batch_table]] che collide con lo stem di un file
-    sorgente reale è la stessa ambiguità di due file con lo stesso
-    stem — entrambi indicizzano build/golden/history per nome."""
+    """A [[batch_table]] name that collides with a real source file's
+    stem is the same ambiguity as two files with the same stem — both
+    index build/golden/history by name."""
     batch_names = {bt.name for bt in batch_tables}
     duplicates = {
         p.stem: [p, f"[[batch_table]] '{p.stem}'"]
@@ -73,21 +74,21 @@ def check_no_batch_name_collisions(sources: list[Path], batch_tables: list[Batch
 
 
 def exclude_batch_members(sources: list[Path], batch_tables: list[BatchTable]) -> list[Path]:
-    """Un file dichiarato come sorgente di una [[batch_table]] non deve
-    comparire ANCHE come tabella a sé stante nella discovery normale —
-    altrimenti (es. sources = ["ROW*.txt"] con .txt riconosciuta da un
-    reader) ogni ROW1.txt/ROW2.txt verrebbe scoperto due volte: una
-    volta come parte del batch 'rows', una volta come tabella
-    standalone 'ROW1'/'ROW2', con build/output duplicati e confusi."""
+    """A file declared as a source of a [[batch_table]] must not ALSO
+    show up as a standalone table in normal discovery — otherwise
+    (e.g. sources = ["ROW*.txt"] with .txt recognized by a reader)
+    each ROW1.txt/ROW2.txt would be discovered twice: once as part of
+    the 'rows' batch, once as a standalone table 'ROW1'/'ROW2', with
+    duplicated and confusing build/output."""
     member_paths = {p for bt in batch_tables for p in bt.source_paths}
     return [s for s in sources if s not in member_paths]
 
 
 def discover_for_history(root: Path) -> tuple[list[Path], list[BatchTable], "PayloadConfig"]:
-    """Helper condiviso da CLI e web UI: stesso identico insieme di
-    tabelle (file singoli + tabelle batch dichiarate in
-    [[batch_table]]) che vedrebbe build-all, così 'pld status'/'pld
-    commit' e la dashboard web non disaccordano mai su cosa esiste."""
+    """Shared helper for the CLI and the web UI: the exact same set of
+    tables (single files + batch tables declared in [[batch_table]])
+    that build-all would see, so 'pld status'/'pld commit' and the web
+    dashboard never disagree about what exists."""
     registry = load_plugins(project_root=root)
     config = load_config(root)
     known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
@@ -106,11 +107,11 @@ def discover_for_history(root: Path) -> tuple[list[Path], list[BatchTable], "Pay
 
 @dataclass
 class TableRef:
-    """Riferimento normalizzato a UNA tabella, indipendentemente dal
-    fatto che sia un singolo file (source_paths ha 1 elemento,
-    is_batch=False, batch=None) o una tabella batch (N elementi,
-    is_batch=True, batch=il BatchTable con gli eventuali override
-    reader/writer/byte_order/stages) — vedi src/payload/docs/BATCH.md."""
+    """Normalized reference to ONE table, regardless of whether it's a
+    single file (source_paths has 1 element, is_batch=False,
+    batch=None) or a batch table (N elements, is_batch=True, batch=the
+    BatchTable with any reader/writer/byte_order/stages overrides) —
+    see src/payload/docs/BATCH.md."""
 
     name: str
     source_paths: list[Path]
@@ -121,11 +122,11 @@ class TableRef:
 def resolve_table_ref(
     sources: list[Path], batch_tables: list[BatchTable], table_name: str
 ) -> "TableRef | None":
-    """Sostituisce lo scan inline 'next((s for s in sources if s.stem
-    == table_name), None)' duplicato in CLI/web — ora con un secondo
-    ramo per le tabelle batch. Le tabelle batch sono controllate prima:
-    il loro nome è dichiarato esplicitamente in config, non dedotto da
-    un filename, quindi non c'è ambiguità da risolvere."""
+    """Replaces the inline scan 'next((s for s in sources if s.stem ==
+    table_name), None)' duplicated across CLI/web — now with a second
+    branch for batch tables. Batch tables are checked first: their
+    name is declared explicitly in config, not derived from a
+    filename, so there's no ambiguity to resolve."""
     for bt in batch_tables:
         if bt.name == table_name:
             return TableRef(name=bt.name, source_paths=bt.source_paths, is_batch=True, batch=bt)
@@ -136,10 +137,10 @@ def resolve_table_ref(
 
 
 def all_table_refs(sources: list[Path], batch_tables: list[BatchTable]) -> list[TableRef]:
-    """Tutte le tabelle del progetto come TableRef, stesso ordine di
-    'sources' seguito dalle tabelle batch — usato da build-all/status/
-    commit/report/export, che devono iterare TUTTE le tabelle invece di
-    risolverne una per nome."""
+    """All the project's tables as TableRef, same order as 'sources'
+    followed by the batch tables — used by build-all/status/commit/
+    report/export, which must iterate over ALL tables instead of
+    resolving one by name."""
     refs = [TableRef(name=s.stem, source_paths=[s], is_batch=False) for s in sources]
     refs += [TableRef(name=bt.name, source_paths=bt.source_paths, is_batch=True, batch=bt) for bt in batch_tables]
     return refs

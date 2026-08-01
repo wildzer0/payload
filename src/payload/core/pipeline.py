@@ -1,10 +1,10 @@
 """
-Pipeline: sorgente -> [stage] -> [stage] -> ... -> output.
+Pipeline: source -> [stage] -> [stage] -> ... -> output.
 
-Modello unico (vedi src/payload/docs/PIPELINE.md): anche un singolo reader+writer
-e' internamente una pipeline a 2 stage, costruita implicitamente da
---from/--to quando non c'e' una pipeline esplicita in config. Un solo
-motore di esecuzione per ogni build, niente casi speciali in parallelo.
+Single model (see src/payload/docs/PIPELINE.md): even a single reader+writer
+is internally a 2-stage pipeline, built implicitly from --from/--to
+when there's no explicit pipeline in config. One execution engine for
+every build, no special cases running in parallel.
 """
 from __future__ import annotations
 
@@ -38,8 +38,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# usato dal logging setup per taggare ogni riga di log con la tabella corrente,
-# anche in build paralleli (thread pool) — vedi core/logging_setup.py
+# used by the logging setup to tag every log line with the current table,
+# even in parallel builds (thread pool) — see core/logging_setup.py
 current_table: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "current_table", default=None
 )
@@ -52,27 +52,27 @@ def resolve_pipeline_spec(
     reader_name: str | None,
     writer_name: str | None,
 ) -> PipelineSpec:
-    """Pipeline esplicita da config se presente, altrimenti quella
-    implicita a 2 stage costruita da --from/--to — stessa identica
-    risoluzione di prima dell'introduzione della pipeline."""
+    """Explicit pipeline from config if present, otherwise the
+    implicit 2-stage one built from --from/--to — the exact same
+    resolution as before the pipeline was introduced."""
     if config.pipeline_stages:
         if reader_name or writer_name:
             logger.warning(
-                "Pipeline esplicita configurata per questa tabella: --from/--to ignorati"
+                "Explicit pipeline configured for this table: --from/--to ignored"
             )
         return PipelineSpec.from_raw_stages(config.pipeline_stages)
 
-    # Stessa priorità del writer sotto: esplicito (--from) prima di
-    # config.defaults.reader, che a sua volta prevale sull'auto-
-    # risoluzione da estensione/sniff che find_reader() farebbe con
+    # Same priority as the writer below: explicit (--from) before
+    # config.defaults.reader, which in turn takes precedence over the
+    # extension/sniff auto-resolution that find_reader() would do with
     # explicit=None.
     reader = registry.find_reader(source_path, reader_name or config.defaults.reader)
 
-    # Risoluzione del writer, in ordine di priorità:
-    # 1. esplicito (--to)
-    # 2. config.defaults.writer, SOLO se qualcuno l'ha impostato davvero
-    # 3. suggerimento del reader (reader.default_writer)
-    # 4. errore chiaro, invece di indovinare
+    # Writer resolution, in priority order:
+    # 1. explicit (--to)
+    # 2. config.defaults.writer, ONLY if someone actually set it
+    # 3. the reader's suggestion (reader.default_writer)
+    # 4. a clear error, instead of guessing
     wname = writer_name or config.defaults.writer or getattr(reader, "default_writer", None)
     if wname is None:
         raise WriterNotSpecifiedError(source_path, reader.name)
@@ -83,14 +83,14 @@ def resolve_pipeline_spec(
 
 
 def validate_pipeline_against_registry(spec: PipelineSpec, registry: PluginRegistry) -> None:
-    """Nomi di stage sconosciuti e compatibilità reader/writer, per
-    OGNI coppia adiacente nella pipeline — controllato PRIMA di
-    eseguire qualunque stage, non a metà di una build costosa."""
+    """Unknown stage names and reader/writer compatibility, for EVERY
+    adjacent pair in the pipeline — checked BEFORE running any stage,
+    not midway through an expensive build."""
     for i, stage in enumerate(spec.stages):
         if isinstance(stage, ReaderStage) and stage.name not in registry.readers:
-            raise InvalidPipelineError(i, f"reader sconosciuto: '{stage.name}' (vedi 'pld plugins')")
+            raise InvalidPipelineError(i, f"unknown reader: '{stage.name}' (see 'pld plugins')")
         if isinstance(stage, WriterStage) and stage.name not in registry.writers:
-            raise InvalidPipelineError(i, f"writer sconosciuto: '{stage.name}' (vedi 'pld plugins')")
+            raise InvalidPipelineError(i, f"unknown writer: '{stage.name}' (see 'pld plugins')")
 
     for reader_stage, writer_stage in spec.reader_writer_pairs():
         writer = registry.writers[writer_stage.name]
@@ -98,21 +98,21 @@ def validate_pipeline_against_registry(spec: PipelineSpec, registry: PluginRegis
         if compatible is not None and reader_stage.name not in compatible:
             raise WriterEmitError(
                 writer_stage.name,
-                f"non compatibile con il reader '{reader_stage.name}' — "
-                f"formati compatibili: {', '.join(compatible)}",
+                f"not compatible with reader '{reader_stage.name}' — "
+                f"compatible formats: {', '.join(compatible)}",
             )
 
 
 def final_output_paths(
     spec: PipelineSpec, table_stem: str, out_dir: Path, registry: PluginRegistry
 ) -> list[Path]:
-    """Un path per ogni stage terminale della pipeline — normalmente
-    uno solo, ma un fan-out (reader -> più writer consecutivi) ne
-    produce uno per writer, tutti dalla stessa IR. table_stem è il nome
-    logico della tabella (stem del sorgente per una tabella normale,
-    BatchTable.name per una tabella batch — vedi core/batch_tables.py):
-    questa funzione non ha bisogno di sapere quale dei due sia, solo il
-    nome che finisce nel filename di output."""
+    """One path per terminal stage of the pipeline — normally just
+    one, but a fan-out (reader -> several consecutive writers)
+    produces one per writer, all from the same IR. table_stem is the
+    table's logical name (the source's stem for a normal table,
+    BatchTable.name for a batch table — see core/batch_tables.py):
+    this function doesn't need to know which of the two it is, only
+    the name that ends up in the output filename."""
     last = spec.stages[-1]
     if isinstance(last, WriterStage):
         start = spec.terminal_writer_start()
@@ -120,28 +120,28 @@ def final_output_paths(
             out_dir / f"{table_stem}{registry.writers[s.name].extension}"
             for s in spec.stages[start:]
         ]
-    # ExecStage come ultimo stage: validate_alternation garantisce che
-    # output_extension sia sempre presente a questo punto.
+    # ExecStage as the last stage: validate_alternation guarantees
+    # output_extension is always present at this point.
     return [out_dir / f"{table_stem}{last.output_extension}"]
 
 
 def resolve_table_outputs(
     source_path: Path, registry: PluginRegistry, config: "PayloadConfig", out_dir: Path
 ) -> tuple[list[Path], str | None, list[str]]:
-    """Risolve la pipeline configurata ORA per la tabella e ritorna
-    (output_paths, reader_name, writer_names) — usato da status/commit
-    per sapere ESATTAMENTE quali file appartengono alla configurazione
-    attuale, invece di un semplice glob '{stem}.*' che raccoglierebbe
-    anche output orfani lasciati da un writer/pipeline precedente (es.
-    dopo un cambio di writer, o dopo un restore a uno snapshot con un
-    set di output diverso): senza questo, un commit successivo li
-    riassorbirebbe per sbaglio come se facessero ancora parte dello
-    stato attuale della tabella.
+    """Resolves the pipeline configured RIGHT NOW for the table and
+    returns (output_paths, reader_name, writer_names) — used by
+    status/commit to know EXACTLY which files belong to the current
+    configuration, instead of a plain '{stem}.*' glob that would also
+    pick up orphaned outputs left by a previous writer/pipeline (e.g.
+    after changing writer, or after restoring to a snapshot with a
+    different set of outputs): without this, a later commit would
+    accidentally reabsorb them as if they were still part of the
+    table's current state.
 
-    Se la pipeline non si risolve (config incompleta, plugin mancante),
-    ritorna ([], None, []) — chi chiama ricade sul comportamento
-    precedente (glob non filtrato) per non bloccare status/commit su un
-    errore che riguarda propriamente solo la build."""
+    If the pipeline doesn't resolve (incomplete config, missing
+    plugin), returns ([], None, []) — the caller falls back to the
+    previous behavior (unfiltered glob) so as not to block status/
+    commit on an error that's really only relevant to the build."""
     try:
         spec = resolve_pipeline_spec(source_path, registry, config, None, None)
         validate_pipeline_against_registry(spec, registry)
@@ -154,20 +154,21 @@ def resolve_table_outputs(
 
 
 def _clean_stale_outputs(out_dir: Path, table_stem: str, keep_names: set[str]) -> None:
-    """Rimuove dalla cartella di output i file di QUESTA tabella che non
-    fanno più parte della pipeline appena risolta — es. si è cambiato
-    writer (anche solo per questa singola build, con --to/--from) e il
-    file del writer precedente è rimasto lì: altrimenti resterebbe un
-    orfano pronto a essere riassorbito per sbaglio nel prossimo commit
-    (che guarda semplicemente cosa c'è sul disco). Un fan-out (reader ->
-    più writer in UNA pipeline) non è toccato: tutti i suoi output sono
-    in keep_names, dato che vengono dalla stessa risoluzione."""
+    """Removes files belonging to THIS table from the output folder
+    that are no longer part of the just-resolved pipeline — e.g. the
+    writer was changed (even just for this single build, with
+    --to/--from) and the previous writer's file was left there:
+    otherwise it would stay orphaned, ready to be accidentally
+    reabsorbed by the next commit (which simply looks at what's on
+    disk). A fan-out (reader -> several writers in ONE pipeline) is
+    untouched: all of its outputs are in keep_names, since they come
+    from the same resolution."""
     if not out_dir.exists():
         return
     for existing in out_dir.glob(f"{table_stem}.*"):
         if existing.is_file() and existing.name not in keep_names:
             existing.unlink()
-            logger.debug("Rimosso output orfano di una build precedente: %s", existing)
+            logger.debug("Removed orphaned output from a previous build: %s", existing)
 
 
 def describe_pipeline(spec: PipelineSpec) -> str:
@@ -184,31 +185,31 @@ def describe_table_build(
     source_paths: list[Path], registry: PluginRegistry, config: "PayloadConfig",
     output_paths: list[Path], out_dir: Path, table_name: str | None = None,
 ) -> dict:
-    """Descrive ESATTAMENTE come sono stati prodotti gli output che si
-    stanno per committare — usato per annotare uno snapshot in modo
-    fedele a cosa è successo davvero, non a cosa la config risolverebbe
-    ORA (che potrebbe non corrispondere: un override ad-hoc --to/--from
-    passato a QUESTA build specifica non viene mai scritto in config).
+    """Describes EXACTLY how the outputs about to be committed were
+    produced — used to annotate a snapshot faithfully to what actually
+    happened, not to what the config would resolve to RIGHT NOW (which
+    might not match: an ad-hoc --to/--from override passed to THIS
+    specific build is never written back to config).
 
-    Il writer è dedotto dall'ESTENSIONE dei file che si stanno
-    realmente committando — un file '.h' è stato per forza scritto dal
-    writer che dichiara quell'estensione, indipendentemente da cosa
-    dice la config in questo momento. Il reader resta invece una
-    risoluzione best-effort dalla config: non c'è modo di recuperare a
-    posteriori un eventuale reader passato come override ad-hoc, il
-    file sorgente non porta con sé quell'informazione.
+    The writer is inferred from the EXTENSION of the files actually
+    being committed — a '.h' file was necessarily written by the
+    writer that declares that extension, regardless of what the config
+    says at this moment. The reader, on the other hand, is a
+    best-effort resolution from config: there's no way to retroactively
+    recover an ad-hoc override reader passed for this build, the
+    source file doesn't carry that information with it.
 
-    missing_outputs: confronta gli output ATTESI dalla pipeline
-    risolta ORA con quelli che si stanno realmente committando — utile
-    a marcare uno snapshot nato da un fan-out parziale (vedi
-    FanOutWriteError): se un writer del gruppo è fallito, il suo file
-    semplicemente non esiste su disco e non finisce in output_paths,
-    ma la pipeline configurata continua ad aspettarselo. Committare
-    comunque lo stato parziale non deve passare inosservato.
+    missing_outputs: compares the outputs EXPECTED by the pipeline as
+    resolved RIGHT NOW against what's actually being committed —
+    useful to flag a snapshot born from a partial fan-out (see
+    FanOutWriteError): if one writer in the group failed, its file
+    simply doesn't exist on disk and doesn't end up in output_paths,
+    but the configured pipeline still expects it. Committing the
+    partial state anyway must not go unnoticed.
 
-    source_paths/table_name: come build() — table_name=None deduce lo
-    stem dal (singolo) source_paths[0], una tabella batch lo passa
-    sempre esplicito (il nome non è dedotto da nessun filename)."""
+    source_paths/table_name: same as build() — table_name=None derives
+    the stem from the (single) source_paths[0], a batch table always
+    passes it explicitly (the name isn't derived from any filename)."""
     table_name = table_name or source_paths[0].stem
     pipeline_explicit = bool(config.pipeline_stages)
     reader = None
@@ -242,10 +243,9 @@ def describe_table_build(
 
 
 def _stage_artifact_dir(cache: BuildCache) -> Path:
-    """Dove vivono i checkpoint di stage persistenti — DIVERSO da tmp/,
-    che viene ripulita ad ogni build: i checkpoint devono sopravvivere
-    tra una build e l'altra, altrimenti la cache per stage non
-    servirebbe a nulla."""
+    """Where persistent stage checkpoints live — DIFFERENT from tmp/,
+    which gets cleaned up on every build: checkpoints must survive
+    across builds, otherwise per-stage caching would be pointless."""
     d = cache.cache_dir / "stage_artifacts"
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -264,10 +264,10 @@ def _persist_stage_checkpoint(
     source_bytes: bytes,
     cache: BuildCache,
 ) -> None:
-    """Persiste l'output di uno stage NON terminale (writer/exec, con
-    qualcosa dopo di sé nella pipeline) FUORI da tmp/ — che viene
-    ripulita ad ogni build — così sopravvive alla build successiva ed è
-    riusabile come checkpoint."""
+    """Persists the output of a NON-terminal stage (writer/exec, with
+    something after it in the pipeline) OUTSIDE tmp/ — which gets
+    cleaned on every build — so it survives to the next build and is
+    reusable as a checkpoint."""
     artifact_dir = _stage_artifact_dir(cache)
     persisted_path = artifact_dir / f"{table_name}_stage{stage_index}{emitted_path.suffix}"
     if emitted_path != persisted_path:
@@ -276,18 +276,18 @@ def _persist_stage_checkpoint(
         source_bytes, spec.signature_prefix(stage_index), config_dict
     )
     cache.update(_stage_checkpoint_key(table_name, stage_index), checkpoint_key, persisted_path)
-    logger.debug("Checkpoint stage %d salvato: %s", stage_index, persisted_path)
+    logger.debug("Stage %d checkpoint saved: %s", stage_index, persisted_path)
 
 
 def _find_resumable_checkpoint(
     spec: PipelineSpec, table_name: str, source_bytes: bytes, config_dict: dict, cache: BuildCache
 ) -> tuple[int, Path] | None:
-    """Cerca il checkpoint valido più avanzato da cui riprendere,
-    partendo dall'ultimo stage e scendendo — il primo che trova valido
-    è il migliore possibile, permette di saltare tutti gli stage prima
-    di lui. Solo stage che producono un FILE (writer/exec) sono
-    checkpoint validi: un reader produce IR in memoria, non c'è nulla
-    da persistere/riusare a quel punto."""
+    """Looks for the most advanced valid checkpoint to resume from,
+    starting from the last stage and going backward — the first valid
+    one found is the best possible, letting all the stages before it
+    be skipped. Only stages that produce a FILE (writer/exec) are
+    valid checkpoints: a reader produces IR in memory, there's nothing
+    to persist/reuse at that point."""
     for i in range(len(spec.stages) - 1, -1, -1):
         if not isinstance(spec.stages[i], (WriterStage, ExecStage)):
             continue
@@ -309,27 +309,28 @@ def _run_exec_stage(stage: ExecStage, input_path: Path, output_path: Path, table
         )
     except (KeyError, IndexError) as e:
         raise ToolchainExecutionError(
-            [stage.command], -1, f"placeholder sconosciuto nel comando: {e}"
+            [stage.command], -1, f"unknown placeholder in the command: {e}"
         ) from e
 
-    logger.debug("Eseguo stage exec: %s", formatted_command)
-    # shell=True e' voluto qui: uno stage 'exec' e' letteralmente un
-    # comando shell scritto dall'utente in config (pipe, redirect,
-    # eseguibili con argomenti — vedi src/payload/docs/PIPELINE.md, sezione
-    # Sicurezza, per le implicazioni).
+    logger.debug("Running exec stage: %s", formatted_command)
+    # shell=True is intentional here: an 'exec' stage is literally a
+    # shell command written by the user in config (pipes, redirects,
+    # executables with arguments — see src/payload/docs/PIPELINE.md, Security
+    # section, for the implications).
     result = subprocess.run(formatted_command, shell=True, capture_output=True, text=True)
 
     if result.returncode != 0:
         if stage.on_error == "warn":
             logger.warning(
-                "Stage exec fallito (on_error='warn', proseguo con l'input invariato): %s",
+                "Exec stage failed (on_error='warn', continuing with the input unchanged): %s",
                 result.stderr.strip() or f"exit {result.returncode}",
             )
-            # copia (non solo 'ricorda') l'input nella posizione attesa:
-            # se questo era l'ultimo stage, output_path e' final_out_path,
-            # fuori da tmp/ — lasciare il risultato dentro tmp/ lo farebbe
-            # sparire al cleanup di fine build, rompendo il contratto
-            # "ogni stage produce un file nella propria posizione attesa"
+            # copy (not just "remember") the input to the expected
+            # location: if this was the last stage, output_path is
+            # final_out_path, outside tmp/ — leaving the result inside
+            # tmp/ would make it disappear at end-of-build cleanup,
+            # breaking the contract "every stage produces a file at its
+            # own expected location"
             shutil.copy2(input_path, output_path)
             return output_path
         raise ToolchainExecutionError([formatted_command], result.returncode, result.stderr)
@@ -337,7 +338,7 @@ def _run_exec_stage(stage: ExecStage, input_path: Path, output_path: Path, table
     if not output_path.exists():
         raise ToolchainExecutionError(
             [formatted_command], result.returncode,
-            f"il comando e' terminato con successo ma non ha prodotto il file atteso: {output_path}",
+            f"the command finished successfully but didn't produce the expected file: {output_path}",
         )
 
     return output_path
@@ -368,7 +369,7 @@ def _execute_stages(
         if resumable is not None:
             checkpoint_index, checkpoint_path = resumable
             logger.debug(
-                "Ripreso da checkpoint stage %d/%d (%d stage saltati): %s",
+                "Resumed from stage checkpoint %d/%d (%d stages skipped): %s",
                 checkpoint_index + 1, n_stages, checkpoint_index + 1, checkpoint_path,
             )
             current_path = checkpoint_path
@@ -391,24 +392,25 @@ def _execute_stages(
             except PayloadError:
                 raise
             except Exception as e:
-                # Un plugin (spesso un local_plugin appena creato dallo
-                # scaffold, mai completato) può sollevare QUALSIASI
-                # eccezione — senza questo, un 'raise NotImplementedError'
-                # dimenticato in parse()/parse_many() finirebbe crudo
-                # davanti all'utente come se fosse un bug interno di payload.
+                # A plugin (often a local_plugin just created from the
+                # scaffold, never finished) can raise ANY exception —
+                # without this, a forgotten 'raise NotImplementedError'
+                # in parse()/parse_many() would land raw in front of the
+                # user as if it were an internal payload bug.
                 raise ReaderParseError(
                     current_path if current_path is not None else Path(f"<batch:{table_name}>"),
-                    f"il reader '{stage.name}' ha sollevato un errore inatteso ({type(e).__name__}): {e}",
-                    hint="Se è un plugin locale appena creato, potrebbe essere ancora uno scaffold incompleto",
+                    f"reader '{stage.name}' raised an unexpected error ({type(e).__name__}): {e}",
+                    hint="If this is a newly created local plugin, it might still be an incomplete scaffold",
                 ) from e
-            logger.debug("Parse completato in %.3fs", time.perf_counter() - t0)
+            logger.debug("Parse completed in %.3fs", time.perf_counter() - t0)
             current_path = None
             i += 1
 
         elif isinstance(stage, WriterStage):
-            # Un reader alimenta l'intero gruppo di writer consecutivi
-            # che lo segue con la STESSA IR (fan-out) — parse() sopra è
-            # già stato chiamato una sola volta per l'intero gruppo.
+            # A reader feeds the entire group of consecutive writers
+            # that follows it with the SAME IR (fan-out) — parse()
+            # above has already been called exactly once for the whole
+            # group.
             fan_out_size = n_stages - terminal_start
             fan_out_succeeded: list[Path] = []
             fan_out_failures: list[tuple[str, str]] = []
@@ -416,14 +418,14 @@ def _execute_stages(
                 writer_stage = spec.stages[i]
                 writer = registry.writers[writer_stage.name]
                 in_terminal_group = i >= terminal_start
-                # Un vero fan-out (più di un writer terminale) tratta ogni
-                # writer come indipendente: se uno fallisce, gli altri
-                # vengono comunque tentati, altrimenti un solo writer
-                # difettoso nasconderebbe che gli altri N-1 sono stati
-                # scritti su disco con successo (vedi FanOutWriteError,
-                # sollevata solo a gruppo terminato). Un writer singolo
-                # o non-terminale mantiene il comportamento invariato:
-                # fallisce e basta, non c'è nulla di "parziale" da salvare.
+                # A real fan-out (more than one terminal writer) treats
+                # each writer as independent: if one fails, the others
+                # are still attempted, otherwise a single faulty writer
+                # would hide the fact that the other N-1 were
+                # successfully written to disk (see FanOutWriteError,
+                # raised only once the group is done). A single or
+                # non-terminal writer keeps the previous behavior:
+                # it just fails, there's nothing "partial" to save.
                 resilient = in_terminal_group and fan_out_size > 1
                 stage_out = (
                     final_out_paths[i - terminal_start] if in_terminal_group
@@ -442,19 +444,19 @@ def _execute_stages(
                     i += 1
                     continue
                 except Exception as e:
-                    # Stesso discorso del reader sopra: un plugin
-                    # incompleto/buggy non deve mai produrre un
-                    # traceback crudo, wrappiamo in un errore chiaro.
+                    # Same reasoning as the reader above: an incomplete/
+                    # buggy plugin must never produce a raw traceback,
+                    # we wrap it in a clear error.
                     if not resilient:
                         raise WriterEmitError(
                             writer_stage.name,
-                            f"errore inatteso ({type(e).__name__}): {e}",
-                            hint="Se è un plugin locale appena creato, potrebbe essere ancora uno scaffold incompleto",
+                            f"unexpected error ({type(e).__name__}): {e}",
+                            hint="If this is a newly created local plugin, it might still be an incomplete scaffold",
                         ) from e
                     fan_out_failures.append((writer_stage.name, f"{type(e).__name__}: {e}"))
                     i += 1
                     continue
-                logger.debug("Emit completato in %.3fs", time.perf_counter() - t0)
+                logger.debug("Emit completed in %.3fs", time.perf_counter() - t0)
 
                 if in_terminal_group:
                     results.append(emitted)
@@ -462,9 +464,10 @@ def _execute_stages(
                         fan_out_succeeded.append(emitted)
                 else:
                     current_path = emitted
-                    # Non terminale = c'è dell'altro dopo (reader/exec):
-                    # checkpoint utile, coperto dalla cache di tabella
-                    # solo se questo era l'ultimo stage, che qui non è.
+                    # Non-terminal = there's more after it (reader/exec):
+                    # a useful checkpoint, covered by the table cache
+                    # only if this was the last stage, which it isn't
+                    # here.
                     if cache is not None:
                         _persist_stage_checkpoint(
                             spec, table_name, i, emitted, config_dict, source_bytes, cache
@@ -504,22 +507,23 @@ def build(
     keep_intermediate: bool = False,
     table_name: str | None = None,
 ) -> tuple[list[Path], bool]:
-    """Ritorna (output_paths, was_built). was_built=False se servito da
-    cache. output_paths ha un solo elemento nel caso comune, più di uno
-    se la pipeline termina in un fan-out (reader -> più writer).
+    """Returns (output_paths, was_built). was_built=False if served
+    from cache. output_paths has a single element in the common case,
+    more than one if the pipeline ends in a fan-out (reader -> several
+    writers).
 
-    source_paths: normalmente un solo file (il caso comune, comportamento
-    identico in tutto e per tutto a prima); più di uno per una tabella
-    batch (vedi src/payload/docs/BATCH.md) — in quel caso il reader
-    risolto DEVE esporre parse_many(paths, config), altrimenti
-    ReaderBatchUnsupportedError. table_name: None deduce lo stem dal
-    (singolo) source_paths[0], come sempre; una tabella batch lo passa
-    sempre esplicito, dato che non c'è nessuno stem da cui dedurlo.
+    source_paths: normally a single file (the common case, behavior
+    identical in every respect to before); more than one for a batch
+    table (see src/payload/docs/BATCH.md) — in that case the resolved
+    reader MUST expose parse_many(paths, config), otherwise
+    ReaderBatchUnsupportedError. table_name: None derives the stem
+    from the (single) source_paths[0], as always; a batch table always
+    passes it explicitly, since there's no stem to derive it from.
 
-    cli_opts: override una tantum da --opt chiave=valore, validi solo
-    per questa invocazione. keep_intermediate: non ripulisce tmp/ dopo
-    la build, utile per ispezionare i file intermedi di una pipeline
-    multi-stage in fase di debug."""
+    cli_opts: one-off overrides from --opt key=value, valid only for
+    this invocation. keep_intermediate: doesn't clean up tmp/ after the
+    build, useful for inspecting the intermediate files of a
+    multi-stage pipeline while debugging."""
     is_batch = len(source_paths) > 1
     missing = next((p for p in source_paths if not p.exists()), None)
     if missing is not None:
@@ -577,7 +581,7 @@ def build(
         if cache is not None:
             cache.update(table_name, cache_key, result_paths)
 
-        logger.info("Build completata: %s -> %s", table_name, result_paths)
+        logger.info("Build complete: %s -> %s", table_name, result_paths)
         return result_paths, True
     finally:
         current_table.reset(token)

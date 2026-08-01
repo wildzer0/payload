@@ -1,8 +1,8 @@
 """
-Test CLI per i comandi restanti: view, build-all, watch (on_change),
-pipeline show (rami rimanenti), golden (update/check/diff completi),
-plugin (info/install-deps/validate/new-local), clean, init (rami
-rimanenti), entry point da riga di comando."""
+CLI tests for the remaining commands: view, build-all, watch (on_change),
+pipeline show (remaining branches), golden (full update/check/diff),
+plugin (info/install-deps/validate/new-local), clean, init (remaining
+branches), command-line entry point."""
 import subprocess
 import sys
 from unittest.mock import patch
@@ -26,13 +26,13 @@ def _init_project(tmp_path, monkeypatch, name="proj"):
 
 def test_view_shows_bytes_and_comments(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
-    (proj / "t.raw").write_text("0x0A, 0x1B  # soglia\n")
+    (proj / "t.raw").write_text("0x0A, 0x1B  # threshold\n")
 
     result = runner.invoke(app, ["view", "t.raw"])
 
     assert result.exit_code == 0
     assert "0A" in result.stdout
-    assert "soglia" in result.stdout
+    assert "threshold" in result.stdout
 
 
 # --- build: check-golden ----------------------------------------------------
@@ -52,9 +52,9 @@ def test_build_check_golden_mismatch_on_tampered_output_raises(tmp_path, monkeyp
     proj = _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
     runner.invoke(app, ["commit", "-m", "v1", "--golden"])
-    (proj / "build" / "example_table.bin").write_bytes(b"manomesso a mano")
+    (proj / "build" / "example_table.bin").write_bytes(b"tampered by hand")
 
-    # sorgente invariato -> cache hit, il build non riscrive l'output manomesso
+    # source unchanged -> cache hit, the build doesn't rewrite the tampered output
     result = runner.invoke(app, ["build", "example_table.raw", "--to", "bin", "--check-golden"])
 
     assert result.exit_code == 3
@@ -69,7 +69,7 @@ def test_build_all_success(tmp_path, monkeypatch):
     result = runner.invoke(app, ["build-all"])
 
     assert result.exit_code == 0
-    assert "2 tabelle processate" in result.stdout
+    assert "2 tables processed" in result.stdout
     assert (proj / "build" / "example_table.bin").exists()
     assert (proj / "build" / "second.bin").exists()
 
@@ -88,9 +88,9 @@ def test_build_all_golden_mismatch_reported_not_fatal(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
     runner.invoke(app, ["commit", "-m", "v1", "--golden"])
-    (proj / "build" / "example_table.bin").write_bytes(b"manomesso a mano")
+    (proj / "build" / "example_table.bin").write_bytes(b"tampered by hand")
 
-    # sorgente invariato -> cache hit, build-all non riscrive l'output manomesso
+    # source unchanged -> cache hit, build-all doesn't rewrite the tampered output
     result = runner.invoke(app, ["build-all", "--check-golden"])
 
     assert result.exit_code == 0
@@ -107,9 +107,10 @@ def test_build_all_real_failure_raises_batch_error(tmp_path, monkeypatch):
 
 
 def test_build_all_shows_random_tip_when_lucky(tmp_path, monkeypatch):
-    """Il tip a fondo pagina è mostrato solo probabilisticamente (30%) —
-    lo forziamo qui invece di affidarci al caso, altrimenti la riga
-    risulterebbe scoperta o meno a seconda della fortuna del run."""
+    """The tip at the bottom of the page is shown only
+    probabilistically (30%) — we force it here instead of relying on
+    chance, otherwise the line would be covered or not depending on
+    the run's luck."""
     _init_project(tmp_path, monkeypatch)
     with patch("payload.cli.random.random", return_value=0.0):
         result = runner.invoke(app, ["build-all"])
@@ -126,7 +127,7 @@ def test_build_all_multiple_jobs(tmp_path, monkeypatch):
     assert result.exit_code == 0
 
 
-# --- watch: on_change e build iniziale parzialmente fallita -----------------
+# --- watch: on_change and a partially failed initial build -----------------
 
 def test_watch_initial_build_partial_failure_reported(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
@@ -136,7 +137,7 @@ def test_watch_initial_build_partial_failure_reported(tmp_path, monkeypatch):
     result = runner.invoke(app, ["watch", "."])
 
     assert result.exit_code == 0
-    assert "tabelle fallite" in result.stdout
+    assert "tables failed" in result.stdout
 
 
 def test_watch_on_change_rebuilds_and_prints(tmp_path, monkeypatch, capsys):
@@ -156,9 +157,9 @@ def test_watch_on_change_rebuilds_and_prints(tmp_path, monkeypatch, capsys):
 
 
 def test_watch_on_change_skips_batch_table_member_file(tmp_path, monkeypatch, capsys):
-    """Regressione: un file che fa parte di una [[batch_table]] non
-    deve essere ricostruito come tabella a sé quando cambia — vedi
-    src/payload/docs/BATCH.md, sezione limiti del watch live-reload."""
+    """Regression: a file that's part of a [[batch_table]] must not
+    be rebuilt as a standalone table when it changes — see
+    src/payload/docs/BATCH.md, watch live-reload limits section."""
     proj = _init_project(tmp_path, monkeypatch)
     (proj / "ROW1.txt").write_text("0x01\n")
     (proj / "ROW2.txt").write_text("0x02\n")
@@ -177,11 +178,11 @@ def test_watch_on_change_skips_batch_table_member_file(tmp_path, monkeypatch, ca
 
     captured["on_change"](proj / "ROW1.txt")
     out = capsys.readouterr().out
-    assert "fa parte di una tabella batch" in out
+    assert "is part of a batch table" in out
     assert not (proj / "build" / "ROW1.bin").exists()
 
 
-# --- pipeline show: rami rimanenti -----------------------------------------
+# --- pipeline show: remaining branches --------------------------------------
 
 def test_pipeline_show_explicit_exec_stage_and_checkpoint_states(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
@@ -196,12 +197,12 @@ def test_pipeline_show_explicit_exec_stage_and_checkpoint_states(tmp_path, monke
     before = runner.invoke(app, ["pipeline", "show", "example_table"])
     assert before.exit_code == 0
     assert "on_error=warn" in before.stdout
-    assert "nessuno" in before.stdout  # nessun checkpoint per lo stage writer non terminale, ancora
+    assert "none" in before.stdout  # no checkpoint yet for the non-terminal writer stage
 
     runner.invoke(app, ["build", "example_table.raw"])
 
     after = runner.invoke(app, ["pipeline", "show", "example_table"])
-    assert "valido" in after.stdout
+    assert "valid" in after.stdout
 
 
 # --- golden set/check/diff/clear ---------------------------------------------
@@ -240,7 +241,7 @@ def test_golden_check_single_table_mismatch_raises(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
     runner.invoke(app, ["commit", "-m", "v1", "--golden"])
-    (proj / "build" / "example_table.bin").write_bytes(b"altro contenuto")
+    (proj / "build" / "example_table.bin").write_bytes(b"other content")
 
     result = runner.invoke(app, ["golden", "check", "example_table"])
 
@@ -266,7 +267,7 @@ def test_golden_diff_no_difference(tmp_path, monkeypatch):
     result = runner.invoke(app, ["golden", "diff", "example_table"])
 
     assert result.exit_code == 0
-    assert "Nessuna differenza" in result.stdout
+    assert "No difference" in result.stdout
 
 
 def test_golden_diff_shows_byte_differences(tmp_path, monkeypatch):
@@ -278,7 +279,7 @@ def test_golden_diff_shows_byte_differences(tmp_path, monkeypatch):
     result = runner.invoke(app, ["golden", "diff", "example_table"])
 
     assert result.exit_code == 0
-    assert "Diff per" in result.stdout
+    assert "Diff for" in result.stdout
 
 
 def test_golden_clear_removes_pointer(tmp_path, monkeypatch):
@@ -290,25 +291,25 @@ def test_golden_clear_removes_pointer(tmp_path, monkeypatch):
     assert result.exit_code == 0
 
     after = runner.invoke(app, ["golden", "check", "example_table"])
-    assert "non impostato" in after.stdout
+    assert "not set" in after.stdout
 
 
 def test_golden_clear_idempotent(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
     result = runner.invoke(app, ["golden", "clear", "example_table"])
     assert result.exit_code == 0
-    assert "Nessun golden" in result.stdout
+    assert "No golden set" in result.stdout
 
 
 def test_golden_check_unknown_table_exits_4(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
-    result = runner.invoke(app, ["golden", "check", "non_esiste"])
+    result = runner.invoke(app, ["golden", "check", "does_not_exist"])
     assert result.exit_code == 4
 
 
 def test_golden_diff_unknown_table_exits_4(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
-    result = runner.invoke(app, ["golden", "diff", "non_esiste"])
+    result = runner.invoke(app, ["golden", "diff", "does_not_exist"])
     assert result.exit_code == 4
 
 
@@ -328,7 +329,7 @@ def test_golden_check_all_tables_exits_3_if_any_bad(tmp_path, monkeypatch):
     (proj / "second.raw").write_text("0x02\n")
     runner.invoke(app, ["build-all"])
     runner.invoke(app, ["commit", "-m", "v1", "--golden"])
-    (proj / "build" / "second.bin").write_bytes(b"manomesso")
+    (proj / "build" / "second.bin").write_bytes(b"tampered")
 
     result = runner.invoke(app, ["golden", "check"])
 
@@ -345,16 +346,16 @@ def test_clean_golden_confirmation_prompt_declined(tmp_path, monkeypatch):
     result = runner.invoke(app, ["clean", "--target", "golden"], input="n\n")
 
     assert result.exit_code == 0
-    assert "Annullato" in result.stdout
+    assert "Cancelled" in result.stdout
     after = runner.invoke(app, ["golden", "check", "example_table"])
-    assert "match" in after.stdout  # non toccato, confermato annullato
+    assert "match" in after.stdout  # untouched, confirmed cancelled
 
 
 # --- plugin info -------------------------------------------------------------
 
 def test_plugin_info_unknown_exits_4(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
-    result = runner.invoke(app, ["plugin", "info", "non_esiste"])
+    result = runner.invoke(app, ["plugin", "info", "does_not_exist"])
     assert result.exit_code == 4
 
 
@@ -362,15 +363,15 @@ def test_plugin_info_reader_shows_extensions_and_default_writer(tmp_path, monkey
     _init_project(tmp_path, monkeypatch)
     result = runner.invoke(app, ["plugin", "info", "raw_text"])
     assert result.exit_code == 0
-    assert "estensioni" in result.stdout
-    assert "writer suggerito" in result.stdout
+    assert "extensions" in result.stdout
+    assert "suggested writer" in result.stdout
 
 
 def test_plugin_info_writer_shows_extension(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
     result = runner.invoke(app, ["plugin", "info", "bin"])
     assert result.exit_code == 0
-    assert "estensione output" in result.stdout
+    assert "output extension" in result.stdout
 
 
 def test_plugin_info_shows_compatible_readers_when_restricted(tmp_path, monkeypatch):
@@ -393,63 +394,63 @@ def test_plugin_info_shows_compatible_readers_when_restricted(tmp_path, monkeypa
     result = runner.invoke(app, ["plugin", "info", "picky"])
 
     assert result.exit_code == 0
-    assert "compatibile solo con" in result.stdout
+    assert "only compatible with" in result.stdout
     assert "raw_text" in result.stdout
 
 
-# --- plugin install-deps: rami rimanenti ------------------------------------
+# --- plugin install-deps: remaining branches --------------------------------
 
 def test_plugin_install_deps_already_satisfied(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     f = tmp_path / "p.py"
-    f.write_text('REQUIRES = ["json", "os"]\n')  # stdlib, sempre soddisfatte
+    f.write_text('REQUIRES = ["json", "os"]\n')  # stdlib, always satisfied
 
     result = runner.invoke(app, ["plugin", "install-deps", str(f)])
 
     assert result.exit_code == 0
-    assert "già installate" in result.stdout
+    assert "already installed" in result.stdout
 
 
 def test_plugin_install_deps_declined_confirmation(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     f = tmp_path / "p.py"
-    f.write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
+    f.write_text('REQUIRES = ["nonexistent_library_xyz_123"]\n')
 
     result = runner.invoke(app, ["plugin", "install-deps", str(f)], input="n\n")
 
     assert result.exit_code == 0
-    assert "Annullato" in result.stdout
+    assert "Cancelled" in result.stdout
 
 
 def test_plugin_install_deps_yes_success(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     f = tmp_path / "p.py"
-    f.write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
+    f.write_text('REQUIRES = ["nonexistent_library_xyz_123"]\n')
 
     with patch("payload.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 0)):
         result = runner.invoke(app, ["plugin", "install-deps", str(f), "--yes"])
 
     assert result.exit_code == 0
-    assert "installate" in result.stdout
+    assert "installed" in result.stdout
 
 
 def test_plugin_install_deps_pip_failure_exits_1(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     f = tmp_path / "p.py"
-    f.write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
+    f.write_text('REQUIRES = ["nonexistent_library_xyz_123"]\n')
 
     with patch("payload.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 1)):
         result = runner.invoke(app, ["plugin", "install-deps", str(f), "--yes"])
 
     assert result.exit_code == 1
-    assert "fallita" in result.stdout
+    assert "failed" in result.stdout
 
 
 # --- plugin validate ---------------------------------------------------------
 
 def test_plugin_validate_unknown_exits_4(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
-    result = runner.invoke(app, ["plugin", "validate", "non_esiste"])
+    result = runner.invoke(app, ["plugin", "validate", "does_not_exist"])
     assert result.exit_code == 4
 
 
@@ -457,7 +458,7 @@ def test_plugin_validate_reader_without_sample_skips_behavior_checks(tmp_path, m
     _init_project(tmp_path, monkeypatch)
     result = runner.invoke(app, ["plugin", "validate", "raw_text"])
     assert result.exit_code == 0
-    assert "salto i check comportamentali" in result.stdout
+    assert "skipping behavioral checks" in result.stdout
 
 
 def test_plugin_validate_reader_with_sample_conforms(tmp_path, monkeypatch):
@@ -468,34 +469,34 @@ def test_plugin_validate_reader_with_sample_conforms(tmp_path, monkeypatch):
     result = runner.invoke(app, ["plugin", "validate", "raw_text", "--sample", str(sample)])
 
     assert result.exit_code == 0
-    assert "conforme" in result.stdout
+    assert "conforms" in result.stdout
 
 
 def test_plugin_validate_writer_conforms(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
     result = runner.invoke(app, ["plugin", "validate", "bin"])
     assert result.exit_code == 0
-    assert "conforme" in result.stdout
+    assert "conforms" in result.stdout
 
 
 def test_plugin_validate_non_conforming_plugin_exits_1(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
     plugin_dir = proj / "local_plugins"
     plugin_dir.mkdir(exist_ok=True)
-    (plugin_dir / "incompleto.py").write_text(
+    (plugin_dir / "incomplete.py").write_text(
         "class IncompleteReader:\n"
-        "    name = 'incompleto'\n"
+        "    name = 'incomplete'\n"
         "    extensions = ['.inc']\n"
         "    api_version = '1.0'\n"
-        "    # manca 'sniff' e 'parse'\n"
+        "    # missing 'sniff' and 'parse'\n"
         "\n"
         "READER = IncompleteReader\n"
     )
 
-    result = runner.invoke(app, ["plugin", "validate", "incompleto"])
+    result = runner.invoke(app, ["plugin", "validate", "incomplete"])
 
     assert result.exit_code == 1
-    assert "violazioni" in result.stdout
+    assert "violations" in result.stdout
 
 
 # --- plugin new-local ----------------------------------------------------
@@ -536,7 +537,7 @@ def test_plugin_new_local_refuses_existing_file(tmp_path, monkeypatch):
     runner.invoke(app, ["plugin", "new-local", "dup", "--kind", "reader"])
     result = runner.invoke(app, ["plugin", "new-local", "dup", "--kind", "reader"])
     assert result.exit_code == 2
-    assert "esiste già" in result.stdout
+    assert "already exists" in result.stdout
 
 
 # --- clean -----------------------------------------------------------------
@@ -548,12 +549,12 @@ def test_clean_unknown_target_exits_2(tmp_path, monkeypatch):
 
 
 def test_clean_nothing_to_clean(tmp_path, monkeypatch):
-    # 'init' crea già build/ (vuota) ma non .payload_cache/, creata
-    # solo al primo salvataggio della cache
+    # 'init' already creates build/ (empty) but not .payload_cache/,
+    # which is only created the first time the cache is saved
     _init_project(tmp_path, monkeypatch)
     result = runner.invoke(app, ["clean", "--target", "cache"])
     assert result.exit_code == 0
-    assert "Niente da pulire" in result.stdout
+    assert "Nothing to clean" in result.stdout
 
 
 def test_clean_golden_target_clears_pointers_not_a_directory(tmp_path, monkeypatch):
@@ -565,7 +566,7 @@ def test_clean_golden_target_clears_pointers_not_a_directory(tmp_path, monkeypat
 
     assert result.exit_code == 0
     after = runner.invoke(app, ["golden", "check", "example_table"])
-    assert "non impostato" in after.stdout
+    assert "not set" in after.stdout
 
 
 def test_clean_declined_confirmation(tmp_path, monkeypatch):
@@ -575,7 +576,7 @@ def test_clean_declined_confirmation(tmp_path, monkeypatch):
     result = runner.invoke(app, ["clean", "--target", "build"], input="n\n")
 
     assert result.exit_code == 0
-    assert "Annullato" in result.stdout
+    assert "Cancelled" in result.stdout
     assert (proj / "build").exists()
 
 
@@ -599,10 +600,10 @@ def test_clean_all_target(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert not (proj / "build").exists()
     after = runner.invoke(app, ["golden", "check", "example_table"])
-    assert "non impostato" in after.stdout
+    assert "not set" in after.stdout
 
 
-# --- init: rami rimanenti -----------------------------------------------
+# --- init: remaining branches --------------------------------------------
 
 def test_init_wizard_prompts_for_name_when_omitted(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
@@ -613,14 +614,14 @@ def test_init_wizard_prompts_for_name_when_omitted(tmp_path, monkeypatch):
 
 def test_init_refuses_existing_nonempty_named_dir_without_force(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    target = tmp_path / "esiste_gia"
+    target = tmp_path / "already_exists"
     target.mkdir()
-    (target / "qualcosa.txt").write_text("x")
+    (target / "something.txt").write_text("x")
 
-    result = runner.invoke(app, ["init", "esiste_gia"])
+    result = runner.invoke(app, ["init", "already_exists"])
 
     assert result.exit_code == 2
-    assert "esiste già" in result.stdout
+    assert "already exists" in result.stdout
 
 
 def test_init_wizard_git_not_found(tmp_path, monkeypatch):
@@ -631,22 +632,22 @@ def test_init_wizard_git_not_found(tmp_path, monkeypatch):
             input="y\ny\n\nlittle\ny\n",
         )
     assert result.exit_code == 0
-    assert "git non trovato" in result.stdout
+    assert "git not found" in result.stdout
 
 
 def test_init_wizard_git_init_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with patch("payload.cli.shutil.which", return_value="/usr/bin/git"), \
-         patch("payload.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 1, stderr="fallito")):
+         patch("payload.cli.subprocess.run", return_value=subprocess.CompletedProcess([], 1, stderr="failed")):
         result = runner.invoke(
             app, ["init", "proj", "--wizard"],
             input="y\ny\n\nlittle\ny\n",
         )
     assert result.exit_code == 0
-    assert "'git init' fallito" in result.stdout
+    assert "'git init' failed" in result.stdout
 
 
-# --- entry point da riga di comando -----------------------------------------
+# --- command-line entry point ------------------------------------------------
 
 def test_module_entry_point_runs_as_script():
     result = subprocess.run(

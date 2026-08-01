@@ -1,9 +1,10 @@
 """
-Test CLI per le tabelle batch ([[batch_table]], vedi
-src/payload/docs/BATCH.md) — stesso pattern (CliRunner) di
-test_cli_history_commands.py, ma usa il reader raw_text REALE (che
-implementa parse_many) invece di plugin fake, dato che 'pld init'
-produce già un progetto configurato con quel reader e writer 'bin'.
+CLI tests for batch tables ([[batch_table]], see
+src/payload/docs/BATCH.md) — same pattern (CliRunner) as
+test_cli_history_commands.py, but uses the REAL raw_text reader (which
+implements parse_many) instead of fake plugins, since 'pld init'
+already produces a project configured with that reader and the 'bin'
+writer.
 """
 from typer.testing import CliRunner
 
@@ -50,7 +51,7 @@ def test_build_unknown_name_is_neither_file_nor_batch_table(tmp_path, monkeypatc
     result = runner.invoke(app, ["build", "does_not_exist"])
 
     assert result.exit_code == 4
-    assert "non trovato" in (result.stdout + result.stderr)
+    assert "not found" in (result.stdout + result.stderr)
 
 
 def test_build_all_includes_batch_tables_and_excludes_member_files(tmp_path, monkeypatch):
@@ -62,8 +63,8 @@ def test_build_all_includes_batch_tables_and_excludes_member_files(tmp_path, mon
 
     assert result.exit_code == 0, result.stdout
     assert (proj / "build" / "rows.bin").exists()
-    # ROW1.txt/ROW2.txt non devono essere buildati ANCHE come tabelle
-    # a sé stanti (sarebbero "ROW1"/"ROW2", duplicati/confusi)
+    # ROW1.txt/ROW2.txt must not ALSO be built as standalone tables
+    # (they would be "ROW1"/"ROW2", duplicated/confusing)
     assert not (proj / "build" / "ROW1.bin").exists()
     assert not (proj / "build" / "ROW2.bin").exists()
 
@@ -86,14 +87,14 @@ def test_commit_batch_table(tmp_path, monkeypatch):
     _add_batch_table(proj)
     runner.invoke(app, ["build-all"])
 
-    result = runner.invoke(app, ["commit", "-m", "primo batch"])
+    result = runner.invoke(app, ["commit", "-m", "first batch"])
 
     assert result.exit_code == 0, result.stdout
     assert "rows" in result.stdout
 
     log_result = runner.invoke(app, ["log", "rows"])
     assert log_result.exit_code == 0
-    assert "primo batch" in log_result.stdout
+    assert "first batch" in log_result.stdout
 
 
 def test_commit_then_status_clean_for_batch_table(tmp_path, monkeypatch):
@@ -105,8 +106,8 @@ def test_commit_then_status_clean_for_batch_table(tmp_path, monkeypatch):
 
     result = runner.invoke(app, ["status"])
 
-    assert "modificata" not in result.stdout
-    assert "mai salvata" not in result.stdout
+    assert "No changes to save." in result.stdout
+    assert "never saved" not in result.stdout
 
 
 def test_status_dirty_after_editing_one_member_file(tmp_path, monkeypatch):
@@ -119,7 +120,7 @@ def test_status_dirty_after_editing_one_member_file(tmp_path, monkeypatch):
     (proj / "ROW2.txt").write_text("0x99\n")
 
     result = runner.invoke(app, ["status"])
-    assert "modificata" in result.stdout
+    assert "changed" in result.stdout
 
 
 def test_diff_batch_table_shows_changed_member_file(tmp_path, monkeypatch):
@@ -147,7 +148,7 @@ def test_diff_batch_table_no_difference(tmp_path, monkeypatch):
     result = runner.invoke(app, ["diff", "rows"])
 
     assert result.exit_code == 0
-    assert "Nessuna differenza" in result.stdout
+    assert "No difference" in result.stdout
 
 
 def test_restore_batch_table_writes_back_all_members(tmp_path, monkeypatch):
@@ -206,7 +207,7 @@ def test_golden_diff_batch_table(tmp_path, monkeypatch):
     result = runner.invoke(app, ["golden", "diff", "rows"])
 
     assert result.exit_code == 0
-    assert "Nessuna differenza" in result.stdout
+    assert "No difference" in result.stdout
 
 
 def test_report_shows_batch_table(tmp_path, monkeypatch):
@@ -276,13 +277,12 @@ def test_pipeline_show_batch_table_uses_inline_reader_writer_override(tmp_path, 
 
 
 def test_watch_initial_sweep_includes_batch_table(tmp_path, monkeypatch):
-    """La build iniziale di 'pld watch' include le tabelle batch (il
-    live-reload no, vedi BATCH.md) — verificato tramite --filter
-    puntato a una cartella inesistente per far terminare subito il
-    watch loop dopo la build iniziale non è praticabile (watch blocca);
-    verifichiamo invece che l'esclusione dei membri dalla discovery
-    'grezza' iniziale non faccia crashare nulla chiamando build-all
-    (stesso codepath di preparazione)."""
+    """'pld watch's initial build includes batch tables (live-reload
+    doesn't, see BATCH.md) — verifying this via --filter pointed at a
+    nonexistent folder to make the watch loop end right after the
+    initial build isn't practical (watch blocks); instead we verify
+    that excluding members from the initial 'raw' discovery doesn't
+    crash anything by calling build-all (same preparation codepath)."""
     proj = _init_project(tmp_path, monkeypatch)
     _write_rows(proj)
     _add_batch_table(proj)

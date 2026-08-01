@@ -37,7 +37,20 @@ def test_health_reports_configured_root(tmp_path):
     client = TestClient(create_app(tmp_path))
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok", "root": str(tmp_path)}
+    assert r.json() == {
+        "status": "ok", "root": str(tmp_path),
+        "project_name": tmp_path.name, "project_description": "",
+    }
+
+
+def test_health_reports_project_name_from_config(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('[project]\nname = "Sensor Calibration"\ndescription = "bench rig"\n')
+    client = TestClient(create_app(tmp_path))
+
+    r = client.get("/api/health")
+
+    assert r.json()["project_name"] == "Sensor Calibration"
+    assert r.json()["project_description"] == "bench rig"
 
 
 def test_index_serves_frontend_shell(tmp_path):
@@ -63,7 +76,7 @@ def test_not_found_error_maps_to_404():
 
 
 def test_build_error_maps_to_422():
-    client = _client_for(ReaderParseError(Path("t.raw"), "valore non valido"))
+    client = _client_for(ReaderParseError(Path("t.raw"), "invalid value"))
     assert client.get("/boom").status_code == 422
 
 
@@ -88,7 +101,7 @@ def test_golden_stale_maps_to_409():
 
 
 def test_snapshot_not_found_maps_to_404():
-    client = _client_for(SnapshotNotFoundError("t", reason="mai salvata"))
+    client = _client_for(SnapshotNotFoundError("t", reason="never saved"))
     assert client.get("/boom").status_code == 404
 
 
@@ -108,9 +121,9 @@ def test_plugin_api_version_error_overridden_to_500():
 
 
 def test_unexpected_exception_becomes_generic_500():
-    client = _client_for(RuntimeError("bug interno mai previsto"))
+    client = _client_for(RuntimeError("internal bug never anticipated"))
     r = client.get("/boom")
     assert r.status_code == 500
     body = r.json()
     assert body["error"] == "InternalError"
-    assert "bug interno" not in body["message"]  # niente dettagli interni esposti al client
+    assert "internal bug" not in body["message"]  # no internal details exposed to the client

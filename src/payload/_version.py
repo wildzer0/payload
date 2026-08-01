@@ -1,6 +1,6 @@
-"""Versione del pacchetto, letta dai metadata di installazione invece
-di essere duplicata a mano — pyproject.toml resta l'unica fonte di
-verità, niente rischio di disallineamento tra i due file."""
+"""Package version, read from the installation metadata instead of
+being duplicated by hand — pyproject.toml stays the single source of
+truth, no risk of the two files drifting apart."""
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
@@ -8,6 +8,6 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("payload")
 except PackageNotFoundError:  # pragma: no cover
-    # pacchetto non installato (es. eseguito direttamente da sorgente
-    # senza 'pip install -e .') — fallback per non rompere in sviluppo
+    # package not installed (e.g. run directly from source without
+    # 'pip install -e .') — fallback so it doesn't break in development
     __version__ = "0.0.0+dev"

@@ -3,7 +3,7 @@ name = "payload"
 version = "0.2.0"
 description = "Tool da terminale per gestire tabelle di sistemi embedded"
 requires-python = ">=3.10"
-license = { text = "Proprietary" }
+license = { text = "Elastic-2.0" }
 dependencies = [
     "typer>=0.12",
     "rich>=13.0",
@@ -17,6 +17,7 @@ dev = [
     "pytest>=8.0",
     "pytest-cov",
     "httpx2>=2.0",   # richiesto da starlette.testclient.TestClient (usato per testare 'pld serve') — 'httpx' classico è deprecato da starlette a favore di questo
+    "python-multipart>=0.0.9",   # richiesto da Request.form() nei test di /api/table/import (upload multipart)
 ]
 build = [
     "pyinstaller>=6.6",
@@ -24,6 +25,7 @@ build = [
 serve = [
     "starlette>=0.37",
     "uvicorn>=0.29",   # deliberatamente NON 'uvicorn[standard]': niente uvloop/httptools (dipendenze compilate)
+    "python-multipart>=0.0.9",   # richiesto da Request.form() per il multipart/form-data di /api/table/import (upload file)
 ]
 
 [project.scripts]

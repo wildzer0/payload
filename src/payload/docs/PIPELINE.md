@@ -1,101 +1,99 @@
-# La pipeline — come funziona
+# The pipeline — how it works
 
-Questo documento descrive il modello con cui `payload` esegue **ogni**
-build, dalla più semplice (un reader + un writer) alla più complessa
-(più stage con trasformazioni esterne in mezzo).
+This document describes the model `payload` uses to run **every**
+build, from the simplest (a reader + a writer) to the most complex
+(several stages with external transformations in between).
 
-Nota su `exec` e Windows: il comando dentro uno stage `exec` gira
-tramite la shell dell'host, quindi la sua sintassi segue le regole di
-`cmd.exe`/PowerShell su Windows e della shell POSIX su Linux/macOS —
-uno stesso comando `exec` non è automaticamente portabile tra i due.
-
----
-
-## Il concetto in una riga
-
-```
-sorgente → [stage] → [stage] → [stage] → ... → output finale
-```
-
-**Non esiste più una build "semplice" come caso a parte.** Anche
-`pld build tabella.raw --to bin` (un reader + un writer) è internamente
-una pipeline di 2 stage — solo che non devi scriverla esplicitamente,
-perché il tool la costruisce da solo a partire da `--from`/`--to`. Lo
-stesso identico motore di esecuzione gestisce sia questo caso implicito
-sia una pipeline a 6 stage scritta a mano in un sidecar. Un solo
-percorso di codice, zero casi speciali da mantenere in parallelo.
+Note on `exec` and Windows: the command inside an `exec` stage runs
+through the host's shell, so its syntax follows `cmd.exe`/PowerShell
+rules on Windows and POSIX shell rules on Linux/macOS — the same
+`exec` command isn't automatically portable between the two.
 
 ---
 
-## I tre tipi di stage
+## The concept in one line
 
-| Tipo | Firma | Cosa fa |
+```
+source → [stage] → [stage] → [stage] → ... → final output
+```
+
+**There's no longer a "simple" build as a special case.** Even
+`pld build table.raw --to bin` (a reader + a writer) is internally a
+2-stage pipeline — you just don't have to write it explicitly, because
+the tool builds it on its own from `--from`/`--to`. The exact same
+execution engine handles both this implicit case and a 6-stage
+pipeline written by hand in a sidecar. One code path, zero special
+cases to maintain in parallel.
+
+---
+
+## The three stage types
+
+| Type | Signature | What it does |
 |---|---|---|
-| `reader` | file → dati in memoria | Legge un file, produce `TableIR` (esattamente come i reader oggi) |
-| `writer` | dati in memoria → file | Scrive `TableIR` su disco (esattamente come i writer oggi) |
-| `exec` | file → file | Esegue un comando esterno (shell/software host) su un file, produce un altro file |
+| `reader` | file → in-memory data | Reads a file, produces `TableIR` (exactly like readers today) |
+| `writer` | in-memory data → file | Writes `TableIR` to disk (exactly like writers today) |
+| `exec` | file → file | Runs an external command (shell/host tool) on a file, produces another file |
 
-`exec` è il pezzo nuovo: non tocca mai `TableIR`, lavora solo su file —
-è il modo in cui uno strumento esterno (un firmatario, un compressore,
-un tool proprietario dell'host) entra nella pipeline senza che
-`payload` debba sapere nulla del suo formato interno.
+`exec` is the new piece: it never touches `TableIR`, it only works on
+files — it's how an external tool (a signer, a compressor, a
+proprietary host tool) enters the pipeline without `payload` having to
+know anything about its internal format.
 
 ---
 
-## Le regole di alternanza
+## The alternation rules
 
-Non ogni sequenza di stage è valida. Le regole, pensate per essere
-verificabili **prima** di lanciare qualunque build (non a metà):
+Not every sequence of stages is valid. The rules, designed to be
+checkable **before** launching any build (not midway through one):
 
-1. **Il primo stage deve essere un `reader`** — la pipeline parte
-   sempre dal file sorgente della tabella.
-2. **Un `reader` deve essere seguito immediatamente da un `writer`** —
-   un reader produce dati in memoria (`TableIR`); l'unica cosa che può
-   consumarli è un writer. Non esiste "reader dopo reader": non c'è
-   nulla che un secondo reader potrebbe leggere da un `TableIR` ancora
-   in memoria, deve prima essere scritto su disco.
-3. **Dopo un `writer`, puoi mettere**: un `reader` (per rileggere quel
-   file e continuare a lavorarci come dati), un `exec` (per
-   trasformarlo restando a livello di file), oppure **niente** — quel
-   `writer` produce l'output finale.
-4. **Dopo un `exec`, puoi mettere**: un `reader`, un altro `exec`,
-   oppure **niente** — quell'`exec` produce l'output finale.
-5. **La pipeline deve avere almeno 2 stage**: un `reader` e un
-   `writer` — il minimo indispensabile, che è esattamente il
-   comportamento di oggi.
-6. **Fan-out**: un `reader` può essere seguito da **più `writer`
-   consecutivi**, non solo uno — tutti alimentati dalla stessa IR
-   parsata una sola volta (vedi sezione dedicata sotto). L'unico
-   vincolo: un gruppo di 2+ writer consecutivi dev'essere l'**ultimo**
-   della pipeline — non può esserci un `reader`/`exec` dopo un
-   fan-out. Un gruppo di un solo writer resta senza questa
-   restrizione (comportamento di sempre).
+1. **The first stage must be a `reader`** — the pipeline always starts
+   from the table's source file.
+2. **A `reader` must be immediately followed by a `writer`** — a
+   reader produces in-memory data (`TableIR`); the only thing that can
+   consume it is a writer. There's no "reader after reader": there's
+   nothing a second reader could read from a `TableIR` still in
+   memory, it has to be written to disk first.
+3. **After a `writer`, you can put**: a `reader` (to re-read that file
+   and keep working with it as data), an `exec` (to transform it while
+   staying at the file level), or **nothing** — that `writer` produces
+   the final output.
+4. **After an `exec`, you can put**: a `reader`, another `exec`, or
+   **nothing** — that `exec` produces the final output.
+5. **The pipeline must have at least 2 stages**: a `reader` and a
+   `writer` — the bare minimum, which is exactly today's behavior.
+6. **Fan-out**: a `reader` can be followed by **several consecutive
+   `writer`s**, not just one — all fed from the same IR, parsed only
+   once (see the dedicated section below). The only constraint: a
+   group of 2+ consecutive writers must be the **last** thing in the
+   pipeline — no `reader`/`exec` can come after a fan-out. A group of
+   a single writer has no such restriction (the usual behavior).
 
-In breve, come state machine:
+In short, as a state machine:
 
 ```
-[inizio] → reader → writer → { fine | reader | exec | altro writer* }
+[start] → reader → writer → { end | reader | exec | another writer* }
                                             ↑___________|
-                              exec → { fine | reader | exec }
+                              exec → { end | reader | exec }
 
-  * "altro writer" (fan-out) è permesso solo se porta fino alla fine
-    della pipeline — niente reader/exec dopo un gruppo di 2+ writer.
+  * "another writer" (fan-out) is only allowed if it leads all the way
+    to the end of the pipeline — no reader/exec after a group of 2+ writers.
 ```
 
-Una config che viola queste regole (es. due `reader` di fila, o che
-finisce con un `reader`, o un `exec` dopo un fan-out) viene rifiutata
-**in fase di validazione**, prima di toccare qualunque file — stesso
-principio già usato per la validazione del config esistente
+A config that violates these rules (e.g. two `reader`s in a row, or
+one that ends with a `reader`, or an `exec` after a fan-out) is
+rejected **at validation time**, before touching any file — the same
+principle already used for validating the existing config
 (`InvalidConfigError`).
 
 ---
 
-## Fan-out: più writer dallo stesso parse
+## Fan-out: several writers from the same parse
 
-Caso d'uso comune: vuoi produrre `.bin` **e** `.hex` **e** un header
-`.h` dalla stessa tabella, senza rileggere/riparsare il sorgente tre
-volte (con un reader costoso — es. `c_source`, che compila con gcc —
-la differenza è reale, non solo stilistica).
+Common use case: you want to produce `.bin` **and** `.hex` **and** a
+`.h` header from the same table, without re-reading/re-parsing the
+source three times (with an expensive reader — e.g. `c_source`, which
+compiles with gcc — the difference is real, not just stylistic).
 
 ```toml
 [pipeline]
@@ -107,45 +105,45 @@ stages = [
 ]
 ```
 
-Il reader viene eseguito **una sola volta**; l'IR risultante viene
-passata, invariata, a ciascuno dei tre writer, che scrivono ciascuno
-il proprio file (`tabella.bin`, `tabella.hex`, `tabella.h`) nella
-directory di output. La compatibilità reader/writer viene verificata
-per **ogni** writer del gruppo, non solo il primo — un writer con
-`compatible_readers` che esclude il reader usato blocca la build prima
-di scrivere qualunque file, come per una pipeline lineare.
+The reader runs **exactly once**; the resulting IR is passed,
+unchanged, to each of the three writers, which each write their own
+file (`table.bin`, `table.hex`, `table.h`) into the output directory.
+Reader/writer compatibility is checked for **every** writer in the
+group, not just the first — a writer whose `compatible_readers`
+excludes the reader used blocks the build before any file gets
+written, just like a linear pipeline.
 
-`build()` ritorna quindi sempre una **lista** di path (un elemento nel
-caso comune, uno per writer con un fan-out) — vedi `core/pipeline.py`,
-`final_output_paths()`.
+`build()` therefore always returns a **list** of paths (one element in
+the common case, one per writer with a fan-out) — see
+`core/pipeline.py`, `final_output_paths()`.
 
-**Fallimento parziale**: se un fan-out ha **più di un** writer
-terminale, ciascuno è trattato come indipendente — un writer che
-fallisce a runtime (es. un errore del toolchain) NON blocca gli altri,
-che vengono comunque tentati e scrivono il proprio file normalmente.
-La build fallisce comunque alla fine (non è un successo silenzioso),
-ma con `FanOutWriteError`, che elenca esplicitamente quali writer sono
-riusciti (con i path scritti) e quali sono falliti (con il motivo) —
-senza questo, un fan-out a 3 writer con 1 solo fallito nasconderebbe
-che gli altri 2 sono realmente su disco. Un fan-out con un solo writer
-terminale (cioè: non è affatto un fan-out) non ha questo trattamento:
-fallisce e basta, non c'è nulla di "parziale" da riportare. Se poi
-committi uno stato nato da un fallimento parziale, lo snapshot lo
-segnala (`missing_outputs`, vedi `pld commit`/`pld log` in USAGE.md) —
-non passa inosservato nemmeno più avanti.
+**Partial failure**: if a fan-out has **more than one** terminal
+writer, each is treated independently — a writer that fails at
+runtime (e.g. a toolchain error) does NOT block the others, which are
+still attempted and write their own file normally. The build still
+fails at the end (it's not a silent success), but with
+`FanOutWriteError`, which explicitly lists which writers succeeded
+(with the paths written) and which failed (with the reason) — without
+this, a 3-writer fan-out with only 1 failure would hide the fact that
+the other 2 really are on disk. A fan-out with a single terminal
+writer (i.e.: not actually a fan-out) doesn't get this treatment: it
+just fails, there's nothing "partial" to report. If you then commit a
+state born from a partial failure, the snapshot flags it
+(`missing_outputs`, see `pld commit`/`pld log` in USAGE.md) — it
+doesn't go unnoticed further down the line either.
 
-**Cosa NON è supportato**: un fan-out con **continuazione per ramo** —
-es. `writer bin -> exec firma-v1` e, in parallelo, `writer hex -> exec
-firma-v2`, ognuno con i propri stage successivi indipendenti. Ogni
-writer del fan-out è sempre uno stage **terminale**: se ti serve una
-trasformazione diversa per ciascun output, usa pipeline separate (una
-per output, con lo stesso reader ripetuto).
+**What's NOT supported**: a fan-out with **per-branch continuation** —
+e.g. `writer bin -> exec sign-v1` and, in parallel, `writer hex -> exec
+sign-v2`, each with its own independent later stages. Every writer in
+a fan-out is always a **terminal** stage: if you need a different
+transformation for each output, use separate pipelines (one per
+output, with the same reader repeated).
 
 ---
 
-## Sintassi in config
+## Config syntax
 
-### Pipeline esplicita, in `table-tool.toml` o in un sidecar
+### Explicit pipeline, in `table-tool.toml` or in a sidecar
 
 ```toml
 [pipeline]
@@ -158,133 +156,132 @@ stages = [
 ]
 ```
 
-Se una tabella ha un `[pipeline]` nel proprio sidecar, quello vince —
-`--from`/`--to` da CLI vengono ignorati per quella build (con un
-warning, non un errore silenzioso: la pipeline esplicita dichiara
-già tutto quello che serve, mescolare i due sistemi di specifica
-sarebbe ambiguo).
+If a table has a `[pipeline]` in its own sidecar, that one wins —
+`--from`/`--to` from the CLI are ignored for that build (with a
+warning, not a silent error: an explicit pipeline already declares
+everything it needs, mixing the two ways of specifying it would be
+ambiguous).
 
-### Forma implicita (shorthand) — quello che usi già oggi
+### Implicit form (shorthand) — what you already use today
 
 ```bash
-pld build tabella.raw --to bin
+pld build table.raw --to bin
 ```
 
-Internamente diventa:
+Internally this becomes:
 ```python
 PipelineSpec(stages=[
-    ReaderStage(name="raw_text"),   # risolto per estensione, come oggi
-    WriterStage(name="bin"),         # da --to, o da default_writer del reader
+    ReaderStage(name="raw_text"),   # resolved by extension, as today
+    WriterStage(name="bin"),         # from --to, or the reader's default_writer
 ])
 ```
 
-Nessuna sintassi nuova da imparare per il caso comune — la pipeline
-esplicita è lì per quando ti serve davvero, non un requisito per ogni
-tabella.
+No new syntax to learn for the common case — the explicit pipeline is
+there for when you really need it, not a requirement for every table.
 
 ---
 
-## File intermedi
+## Intermediate files
 
-Ogni stage che non produce l'output finale scrive comunque un file
-reale su disco (mai solo in memoria tra un writer e un exec, per
-esempio) — sono ispezionabili, e ogni comando fallito dice esattamente
-su quale file stava lavorando.
+Every stage that doesn't produce the final output still writes a real
+file to disk (never just in memory between a writer and an exec, for
+example) — they're inspectable, and any failed command says exactly
+which file it was working on.
 
-Dove vivono: in una cartella `tmp/` accanto al sorgente (stessa
-convenzione già adottata per `c_source`/`obj`), **ripulita
-automaticamente a fine build**. Con `--keep-intermediate` (su `pld
-build`/`pld build-all`), la cartella resta per ispezione manuale —
-utile in debug quando un `exec` produce un risultato inatteso e vuoi
-vedere l'input esatto che ha ricevuto.
+Where they live: in a `tmp/` folder next to the source (the same
+convention already used by `c_source`/`obj`), **cleaned up
+automatically at the end of the build**. With `--keep-intermediate`
+(on `pld build`/`pld build-all`), the folder is kept for manual
+inspection — useful when debugging an `exec` that produces an
+unexpected result and you want to see the exact input it received.
 
 ---
 
-## Stage `exec` — i dettagli
+## `exec` stages — the details
 
 ```toml
 { type = "exec", command = "sign_tool.exe {input} {output}", on_error = "fail" }
 ```
 
-**Placeholder disponibili** nel comando: `{input}` (path del file
-corrente), `{output}` (path che il tool si aspetta come risultato —
-generato automaticamente in `tmp/`), `{table_name}` (nome della
-tabella).
+**Available placeholders** in the command: `{input}` (path of the
+current file), `{output}` (the path the tool is expected to produce as
+a result — generated automatically in `tmp/`), `{table_name}` (the
+table's name).
 
-**Dopo l'esecuzione**, il tool verifica che `{output}` esista davvero
-sul disco — se il comando ritorna 0 ma non ha prodotto il file
-atteso, è un errore chiaro (`ToolchainExecutionError`), non un
-crash a sorpresa nello stage successivo che si aspetta di trovarlo.
+**After running**, the tool checks that `{output}` really exists on
+disk — if the command returns 0 but didn't produce the expected file,
+that's a clear error (`ToolchainExecutionError`), not a surprise crash
+in the next stage that expects to find it.
 
-**`on_error`**: `"fail"` (default, ferma la build) o `"warn"` (logga e
-prosegue con l'ultimo file valido — pensato per stage non essenziali
-tipo una notifica, dove un fallimento non deve bloccare l'output
-principale).
+**`on_error`**: `"fail"` (default, stops the build) or `"warn"` (logs
+and continues with the last valid file — meant for non-essential
+stages like a notification, where a failure shouldn't block the main
+output).
 
 ---
 
-## Sicurezza — da non sottovalutare
+## Security — don't underestimate this
 
-Uno stage `exec` esegue codice arbitrario letto da un file di config.
-Se quel `table-tool.toml`/sidecar arriva da qualcun altro (un collega,
-un repo condiviso, un tool esterno che genera config), stai eseguendo
-comandi arbitrari senza necessariamente accorgertene.
+An `exec` stage runs arbitrary code read from a config file. If that
+`table-tool.toml`/sidecar comes from someone else (a colleague, a
+shared repo, an external tool that generates config), you're running
+arbitrary commands without necessarily realizing it.
 
-**`pld doctor` segnala sempre, in modo visibile, quanti stage `exec`
-sono configurati nel progetto** — check `pipeline_exec`, scansiona il
-config globale e tutti i sidecar: `"3 stage 'exec' configurati in 2
-file"`, con l'elenco dei file coinvolti nell'hint. Informativo (`WARN`,
-non `FAIL`), ma reso impossibile da ignorare — esegui `pld doctor`
-prima di lanciare una build su una config di cui non ti fidi al 100%.
+**`pld doctor` always visibly flags how many `exec` stages are
+configured in the project** — the `pipeline_exec` check scans the
+global config and every sidecar: `"3 'exec' stages configured across 2
+files"`, with the list of files involved in the hint. Informational
+(`WARN`, not `FAIL`), but made impossible to miss — run `pld doctor`
+before launching a build on a config you don't 100% trust.
 
 ---
 
 ## Cache
 
-Due livelli, entrambi attivi automaticamente (nessuna config da
-attivare):
+Two levels, both active automatically (no config needed to enable
+them):
 
-**Cache dell'intera pipeline** — se sorgente, l'intera lista di stage e
-config sono identici a un run precedente, l'output finale viene
-riusato senza eseguire nulla. Stessa logica di sempre, ora sulla firma
-di tutti gli stage invece che solo reader+writer.
+**Whole-pipeline cache** — if the source, the entire list of stages,
+and the config are identical to a previous run, the final output is
+reused without running anything. Same logic as always, now over the
+signature of every stage instead of just reader+writer.
 
-**Cache per singolo stage** — ad ogni stage `writer`/`exec` che *non* è
-l'ultimo, il suo output viene persistito (fuori da `tmp/`, che viene
-ripulita ad ogni build) insieme a una chiave calcolata sul **prefisso**
-di pipeline fino a quel punto. Alla build successiva, se un prefisso
-coincide con uno già cachato, l'esecuzione **riprende da lì** — gli
-stage precedenti (inclusa un'eventuale compilazione `.c` costosa) non
-vengono rieseguiti, anche se gli stage *successivi* sono cambiati.
+**Per-stage cache** — for every `writer`/`exec` stage that is *not*
+the last one, its output is persisted (outside `tmp/`, which gets
+cleaned on every build) together with a key computed on the pipeline
+**prefix** up to that point. On the next build, if a prefix matches
+one already cached, execution **resumes from there** — the earlier
+stages (including a possibly expensive `.c` compilation) don't get
+re-run, even if the *later* stages have changed.
 
 ```
-reader(c_source) → writer(bin) → exec(sign v1)     [primo run: tutto eseguito]
-reader(c_source) → writer(bin) → exec(sign v2)     [secondo run: reader+writer
-                                                      SALTATI, riparte da exec]
+reader(c_source) → writer(bin) → exec(sign v1)     [first run: everything runs]
+reader(c_source) → writer(bin) → exec(sign v2)     [second run: reader+writer
+                                                      SKIPPED, resumes from exec]
 ```
 
-`--force` bypassa anche i checkpoint di stage, non solo la cache finale.
-`pld pipeline show <tabella>` mostra quali stage hanno un checkpoint
-valido in questo momento.
+`--force` bypasses the stage checkpoints too, not just the final
+cache. `pld pipeline show <table>` shows which stages currently have a
+valid checkpoint.
 
 ---
 
 ## `--dry-run`
 
-Mostra ogni stage che verrebbe eseguito, in ordine, **senza eseguire
-gli `exec`** — un comando esterno può avere effetti collaterali reali
-(upload, comunicazione con hardware), un dry-run non deve mai
-rischiare di innescarli per sbaglio. Per `reader`/`writer` mostra solo
-cosa verrebbe scritto, come già oggi.
+Shows every stage that would run, in order, **without running the
+`exec`s** — an external command can have real side effects (upload,
+talking to hardware), a dry run must never risk triggering them by
+accident. For `reader`/`writer` it only shows what would be written,
+as it already does today.
 
 ---
 
-## Limiti noti
+## Known limits
 
-- **Fan-out con continuazione per ramo**: non supportato, vedi sezione
-  "Fan-out" sopra — ogni writer di un fan-out è sempre uno stage
-  terminale.
-- **Stage condizionali** (es. "esegui questo stage solo se una certa
-  condizione è vera"): non esiste una sintassi per questo in
-  `[pipeline] stages`. Se ti serve, gestiscilo a monte con config
-  diverse (globale vs. sidecar) per le tabelle che ne hanno bisogno.
+- **Fan-out with per-branch continuation**: not supported, see the
+  "Fan-out" section above — every writer in a fan-out is always a
+  terminal stage.
+- **Conditional stages** (e.g. "run this stage only if some condition
+  is true"): there's no syntax for this in `[pipeline] stages`. If you
+  need it, handle it upstream with different configs (global vs.
+  sidecar) for the tables that need it.

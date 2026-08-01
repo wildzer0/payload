@@ -25,7 +25,7 @@ def _write_table_refs(tmp_path: Path, n: int) -> list[TableRef]:
     refs = []
     for i in range(n):
         p = tmp_path / f"table{i}.fake"
-        p.write_text(f"contenuto {i}")
+        p.write_text(f"content {i}")
         refs.append(_ref(p))
     return refs
 
@@ -49,7 +49,7 @@ def test_run_batch_build_collects_failures_without_raising(tmp_path):
     good = tmp_path / "good.fake"
     good.write_text("ok")
     bad = tmp_path / "bad.broken"
-    bad.write_text("irrilevante")
+    bad.write_text("irrelevant")
     registry = _registry()
     cache = BuildCache(tmp_path / "cache")
 
@@ -63,9 +63,9 @@ def test_run_batch_build_collects_failures_without_raising(tmp_path):
 
 
 def test_run_batch_build_detects_golden_stale_when_source_changed(tmp_path):
-    """Golden è uno snapshot: se il sorgente cambia dopo che golden è
-    stato impostato, il confronto sull'output non è più affidabile —
-    'stale' conta come mismatch nel riepilogo del batch build."""
+    """Golden is a snapshot: if the source changes after golden was
+    set, comparing the output is no longer reliable — 'stale' counts
+    as a mismatch in the batch build summary."""
     src = tmp_path / "t.fake"
     src.write_text("v1")
     registry = _registry()
@@ -77,7 +77,7 @@ def test_run_batch_build_detects_golden_stale_when_source_changed(tmp_path):
     snap = history.commit("t", [src], [out_dir / "t.fakeout"], "v1")
     set_golden(history, "t", snap.id)
 
-    src.write_text("v2")  # sorgente cambiato dopo il golden
+    src.write_text("v2")  # source changed after the golden
 
     summary = run_batch_build(
         [_ref(src)], tmp_path, registry, cache, out_dir,
@@ -89,8 +89,8 @@ def test_run_batch_build_detects_golden_stale_when_source_changed(tmp_path):
 
 
 def test_run_batch_build_detects_golden_mismatch_on_tampered_output(tmp_path):
-    """Sorgente invariato ma l'output su disco è diverso da quello che
-    lo snapshot golden aveva registrato: una vera regressione."""
+    """Source unchanged but the output on disk differs from what the
+    golden snapshot recorded: a real regression."""
     src = tmp_path / "t.fake"
     src.write_text("v1")
     registry = _registry()
@@ -102,9 +102,9 @@ def test_run_batch_build_detects_golden_mismatch_on_tampered_output(tmp_path):
     snap = history.commit("t", [src], [out_dir / "t.fakeout"], "v1")
     set_golden(history, "t", snap.id)
 
-    (out_dir / "t.fakeout").write_bytes(b"manomesso a mano, non dal writer")
+    (out_dir / "t.fakeout").write_bytes(b"tampered by hand, not by the writer")
 
-    # sorgente invariato -> cache hit, il build NON riscrive l'output manomesso
+    # source unchanged -> cache hit, the build does NOT rewrite the tampered output
     summary = run_batch_build(
         [_ref(src)], tmp_path, registry, cache, out_dir,
         writer_name="fake_writer", check_golden_flag=True,
@@ -139,7 +139,7 @@ def test_run_batch_build_saves_cache_once(tmp_path):
     run_batch_build(tables, tmp_path, registry, cache, tmp_path / "out", writer_name="fake_writer")
 
     assert cache.path.exists()
-    # una nuova istanza caricata dallo stesso dir vede la cache già salvata su disco
+    # a new instance loaded from the same dir sees the cache already saved on disk
     reloaded_cache = BuildCache(tmp_path / "cache")
     second = run_batch_build(tables, tmp_path, registry, reloaded_cache, tmp_path / "out", writer_name="fake_writer")
     assert second.built == 0
@@ -147,15 +147,15 @@ def test_run_batch_build_saves_cache_once(tmp_path):
 
 
 def test_run_batch_build_batch_table_uses_effective_config_overrides(tmp_path):
-    """Una tabella batch (is_batch=True) deve risolvere reader/writer
-    dagli override della [[batch_table]], non dalla config globale —
-    stesso meccanismo di effective_config() usato dal CLI."""
+    """A batch table (is_batch=True) must resolve reader/writer from
+    the [[batch_table]] overrides, not from the global config — same
+    mechanism as effective_config() used by the CLI."""
     from payload.core.batch_tables import BatchTable
 
     row1 = tmp_path / "ROW1.fakebatch"
     row2 = tmp_path / "ROW2.fakebatch"
-    row1.write_text("uno")
-    row2.write_text("due")
+    row1.write_text("one")
+    row2.write_text("two")
     (tmp_path / "table-tool.toml").touch()
     registry = _registry()
     registry.register_reader(FakeBatchReader())

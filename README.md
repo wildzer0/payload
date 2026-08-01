@@ -1,38 +1,40 @@
+<img src="src/payload/web/static/logo.svg" alt="payload logo" width="360">
+
 # payload (`pld`)
 
-Tool da terminale per creare, compilare, ispezionare e validare tabelle
-per sistemi embedded, con formati di input e output estensibili via plugin.
+Terminal tool for creating, building, inspecting, and validating tables
+for embedded systems, with input/output formats extensible via plugins.
 
 ## Pipeline
 
 ```
-sorgente (.c | .raw | ...) → [Reader plugin] → TableIR → [Writer plugin] → output (.o | .bin | ...)
+source (.c | .raw | ...) → [Reader plugin] → TableIR → [Writer plugin] → output (.o | .bin | ...)
 ```
 
-## Documentazione
+## Documentation
 
-- **[src/payload/docs/USAGE.md](src/payload/docs/USAGE.md)** — guida utente: ogni comando con
-  tutte le opzioni, riferimento del config file, exit code, workflow
-  end-to-end. Parti da qui se vuoi *usare* il tool.
-- **[src/payload/docs/PLUGINS.md](src/payload/docs/PLUGINS.md)** — guida sviluppatore: contratto
-  Reader/Writer/TableIR spiegato per intero, esempi commentati, come
-  validare un plugin. Parti da qui se vuoi *estendere* il tool.
-- **[src/payload/docs/PIPELINE.md](src/payload/docs/PIPELINE.md)** — pipeline configurabile
-  (stage reader/writer/exec): come funziona, sintassi, esempi.
-- **[src/payload/docs/BATCH.md](src/payload/docs/BATCH.md)** — tabelle batch: una tabella
-  costruita da più file sorgente invece di uno solo (`[[batch_table]]`).
+- **[src/payload/docs/USAGE.md](src/payload/docs/USAGE.md)** — user guide: every command with
+  all its options, config file reference, exit codes, end-to-end
+  workflows. Start here if you want to *use* the tool.
+- **[src/payload/docs/PLUGINS.md](src/payload/docs/PLUGINS.md)** — developer guide: the full
+  Reader/Writer/TableIR contract, commented examples, how to validate
+  a plugin. Start here if you want to *extend* the tool.
+- **[src/payload/docs/PIPELINE.md](src/payload/docs/PIPELINE.md)** — configurable pipeline
+  (reader/writer/exec stages): how it works, syntax, examples.
+- **[src/payload/docs/BATCH.md](src/payload/docs/BATCH.md)** — batch tables: a table
+  built from several source files instead of one (`[[batch_table]]`).
 
-Le stesse guide sono incluse nel pacchetto installato e consultabili
-anche senza repository locale, dalla sezione "Documentazione" di `pld serve`.
+The same guides are bundled with the installed package and browsable
+even without a local repository, from the "Documentation" section of `pld serve`.
 
-## Installazione (sviluppo)
+## Installation (development)
 
 ```bash
 pip install -e ".[dev]"
 pld --version
 ```
 
-## Avvio rapido
+## Quick start
 
 ```bash
 pld init
@@ -40,48 +42,56 @@ pld doctor
 pld build example_table.raw --to bin
 ```
 
-## Licenza
+## License
 
-Proprietaria, uso interno — vedi [LICENSE](LICENSE).
+Proprietary, internal use — see [LICENSE](LICENSE).
 
-## Test
+## Tests
 
 ```bash
 pytest
 ```
 
-Con `pytest-cov` configurato (report a schermo). La suite è al 100% di
-copertura riga per riga. I test del core usano plugin fake in-memory
-(`tests/fakes.py`) o subprocess mockati e non richiedono toolchain di
-compilazione; `tests/test_c_source_and_obj.py` e
-`tests/test_cli_smoke.py::test_c_source_to_obj_via_cli` sono gli unici
-che usano `gcc`/`objcopy` reali (integrazione, non necessari per la
-copertura) e vengono saltati automaticamente se assenti.
+`pytest-cov` is configured (on-screen report). The suite is at 100%
+line coverage. Core tests use fake in-memory plugins (`tests/fakes.py`)
+or mocked subprocesses and don't require a compilation toolchain;
+`tests/test_c_source_and_obj.py` and
+`tests/test_cli_smoke.py::test_c_source_to_obj_via_cli` are the only
+ones that use real `gcc`/`objcopy` (integration, not needed for
+coverage) and are skipped automatically if unavailable.
 
-## Build e distribuzione
+## Build and distribution
 
 ```bash
 python -m pip wheel . -w dist/ --no-deps --no-build-isolation
 pip install dist/payload-0.1.0-py3-none-any.whl
 ```
 
-La wheel è `py3-none-any` (nessuna dipendenza compilata) — la stessa
-identica wheel installa ovunque, vedi
-[src/payload/docs/USAGE.md](src/payload/docs/USAGE.md#ambienti-aziendalirete-chiusa) per
-scenari offline/aziendali.
+The wheel is `py3-none-any` (no compiled dependency) — the exact same
+wheel installs anywhere, see
+[src/payload/docs/USAGE.md](src/payload/docs/USAGE.md#corporate-environmentsclosed-network) for
+offline/corporate scenarios.
 
-Per una distribuzione senza `pip` (un singolo `pld.exe` su Windows, con
-Python e dipendenze già dentro), vedi
-[src/payload/docs/USAGE.md](src/payload/docs/USAGE.md#distribuzione-come-exe-standalone-windows)
-— compilata automaticamente da `.github/workflows/build-exe.yml`.
+For a `pip`-free distribution (a single `pld.exe` on Windows, with
+Python and dependencies already bundled in), see
+[src/payload/docs/USAGE.md](src/payload/docs/USAGE.md#standalone-exe-distribution-windows)
+— built automatically by `.github/workflows/build-exe.yml`.
 
 
-## Plugin inclusi
+## Included plugins
 
-- `readers/raw_text.py` — formato testuale minimale con commenti
-- `readers/csv_reader.py` — CSV strutturato, con gestione offset/gap
-- `readers/c_source.py` — compila un `.c` (toolchain reale) ed estrae i bytes di una sezione dati
-- `writers/bin_writer.py` — dump binario grezzo
-- `writers/hex_writer.py` — formato Intel HEX standard (checksum incluso)
-- `writers/obj_writer.py` — `.o` linkabile con sezione dedicata, simboli `__start_`/`__stop_` generati dal linker finale
-- `writers/header_writer.py` — header C (`static const uint8_t[]`), zero configurazione di toolchain richiesta
+- `readers/raw_text.py` — minimal text format with comments
+- `readers/csv_reader.py` — structured CSV, with offset/gap handling
+- `readers/c_source.py` — compiles a `.c` file (real toolchain) and extracts the bytes of a data section
+- `writers/bin_writer.py` — raw binary dump
+- `writers/hex_writer.py` — standard Intel HEX format (checksum included)
+- `writers/obj_writer.py` — linkable `.o` with a dedicated section, `__start_`/`__stop_` symbols generated by the final linker
+- `writers/header_writer.py` — C header (`static const uint8_t[]`), zero toolchain configuration required
+
+## License
+
+[Elastic License 2.0](LICENSE).
+
+---
+
+Made with ❤️ by MDR · © 2026

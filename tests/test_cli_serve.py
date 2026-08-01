@@ -1,6 +1,6 @@
-"""Test del comando 'pld serve' — uvicorn.run() è sempre mockato: è
-bloccante per progettazione (stesso motivo per cui 'pld watch' usa
-watch_loop mockato nei suoi test, vedi tests/test_watch.py)."""
+"""Test for the 'pld serve' command — uvicorn.run() is always mocked:
+it's blocking by design (same reason 'pld watch' uses a mocked
+watch_loop in its tests, see tests/test_watch.py)."""
 import sys
 from unittest.mock import patch
 
@@ -21,7 +21,7 @@ def _init_project(tmp_path, monkeypatch, name="proj"):
 
 def test_serve_missing_deps_shows_clear_error(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
-    monkeypatch.setitem(sys.modules, "uvicorn", None)  # forza ImportError su 'import uvicorn'
+    monkeypatch.setitem(sys.modules, "uvicorn", None)  # forces ImportError on 'import uvicorn'
 
     result = runner.invoke(app, ["serve"])
 
@@ -50,7 +50,7 @@ def test_serve_default_host_no_warning(tmp_path, monkeypatch):
         result = runner.invoke(app, ["serve"])
 
     assert result.exit_code == 0
-    assert "ATTENZIONE" not in (result.stdout + result.stderr)
+    assert "WARNING" not in (result.stdout + result.stderr)
 
 
 def test_serve_non_localhost_host_warns(tmp_path, monkeypatch):
@@ -60,5 +60,5 @@ def test_serve_non_localhost_host_warns(tmp_path, monkeypatch):
         result = runner.invoke(app, ["serve", "--host", "0.0.0.0"])
 
     assert result.exit_code == 0
-    assert "ATTENZIONE" in result.stderr
-    assert "esposto" in result.stderr
+    assert "WARNING" in result.stderr
+    assert "exposed" in result.stderr

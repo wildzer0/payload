@@ -38,7 +38,7 @@ def test_doc_detail_returns_real_markdown_content(tmp_path):
 
     assert r.status_code == 200
     body = r.json()
-    assert body["title"] == "Pipeline configurabile"
+    assert body["title"] == "Configurable pipeline"
     assert "reader" in body["content"]
     assert len(body["content"]) > 500
 
@@ -51,7 +51,7 @@ def test_doc_detail_batch_returns_real_markdown_content(tmp_path):
 
     assert r.status_code == 200
     body = r.json()
-    assert body["title"] == "Tabelle batch"
+    assert body["title"] == "Batch tables"
     assert "parse_many" in body["content"]
     assert len(body["content"]) > 500
 
@@ -60,6 +60,6 @@ def test_doc_detail_unknown_slug_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.get("/api/docs/non_esiste")
+    r = client.get("/api/docs/does_not_exist")
 
     assert r.status_code == 404

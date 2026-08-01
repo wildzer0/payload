@@ -1,13 +1,13 @@
 """
-Suite di conformità per plugin reader/writer.
+Conformance suite for reader/writer plugins.
 
-Non verifica "esistono dei test" (impossibile a runtime — i test non
-vengono distribuiti col pacchetto installato). Verifica invece che il
-plugin rispetti davvero il contratto descritto in src/payload/docs/PLUGINS.md,
-sia a livello strutturale (attributi richiesti) sia comportamentale
-(parse/emit producono quello che devono produrre).
+Doesn't check "do tests exist" (impossible at runtime — tests aren't
+shipped with the installed package). Instead it checks that the plugin
+really honors the contract described in src/payload/docs/PLUGINS.md,
+both structurally (required attributes) and behaviorally (parse/emit
+produce what they're supposed to produce).
 
-Uso da pytest (nel proprio plugin):
+Usage from pytest (in your own plugin):
 
     from payload.testing import assert_reader_conforms
 
@@ -16,7 +16,7 @@ Uso da pytest (nel proprio plugin):
         sample.write_text("...")
         assert_reader_conforms(MyReader(), sample)
 
-Uso da CLI: 'pld plugin validate <nome> --sample <file>'.
+Usage from the CLI: 'pld plugin validate <name> --sample <file>'.
 """
 from __future__ import annotations
 
@@ -34,68 +34,68 @@ class ConformanceIssue:
 
 
 def check_reader_structure(reader) -> list[ConformanceIssue]:
-    """Check statici, non richiedono un file di esempio."""
+    """Static checks, don't require a sample file."""
     issues = []
     if not getattr(reader, "name", None):
-        issues.append(ConformanceIssue("name", "attributo 'name' mancante o vuoto"))
+        issues.append(ConformanceIssue("name", "missing or empty 'name' attribute"))
     if not getattr(reader, "api_version", None):
-        issues.append(ConformanceIssue("api_version", "attributo 'api_version' mancante"))
+        issues.append(ConformanceIssue("api_version", "missing 'api_version' attribute"))
     extensions = getattr(reader, "extensions", None)
     if not extensions or not isinstance(extensions, list):
-        issues.append(ConformanceIssue("extensions", "deve essere una lista non vuota"))
+        issues.append(ConformanceIssue("extensions", "must be a non-empty list"))
     elif not all(isinstance(e, str) and e.startswith(".") for e in extensions):
-        issues.append(ConformanceIssue("extensions", "ogni estensione deve essere una stringa che inizia con '.'"))
+        issues.append(ConformanceIssue("extensions", "each extension must be a string starting with '.'"))
     if not hasattr(reader, "parse") or not callable(reader.parse):
-        issues.append(ConformanceIssue("parse", "metodo 'parse' mancante o non chiamabile"))
+        issues.append(ConformanceIssue("parse", "missing or non-callable 'parse' method"))
     if not hasattr(reader, "sniff") or not callable(reader.sniff):
-        issues.append(ConformanceIssue("sniff", "metodo 'sniff' mancante o non chiamabile"))
+        issues.append(ConformanceIssue("sniff", "missing or non-callable 'sniff' method"))
     return issues
 
 
 def check_reader_behavior(reader, sample_path: Path) -> list[ConformanceIssue]:
-    """Check comportamentali: richiedono un file di esempio valido."""
+    """Behavioral checks: require a valid sample file."""
     issues = []
     try:
         ir = reader.parse(sample_path, {})
     except PayloadError:
         issues.append(ConformanceIssue(
-            "parse", f"parse() ha sollevato un errore sul sample valido {sample_path}"
+            "parse", f"parse() raised an error on the valid sample {sample_path}"
         ))
         return issues
     except Exception as e:
         issues.append(ConformanceIssue(
             "parse",
-            f"parse() ha sollevato {type(e).__name__} non gestita invece di ReaderParseError: {e}",
+            f"parse() raised an unhandled {type(e).__name__} instead of ReaderParseError: {e}",
         ))
         return issues
 
     if not isinstance(ir, TableIR):
-        issues.append(ConformanceIssue("parse", f"parse() deve ritornare TableIR, non {type(ir).__name__}"))
+        issues.append(ConformanceIssue("parse", f"parse() must return TableIR, not {type(ir).__name__}"))
         return issues
     if not isinstance(ir.data, bytes):
-        issues.append(ConformanceIssue("data", f"TableIR.data deve essere bytes, non {type(ir.data).__name__}"))
+        issues.append(ConformanceIssue("data", f"TableIR.data must be bytes, not {type(ir.data).__name__}"))
     if not ir.name:
-        issues.append(ConformanceIssue("name", "TableIR.name è vuoto"))
+        issues.append(ConformanceIssue("name", "TableIR.name is empty"))
     if ir.source_format != reader.name:
         issues.append(ConformanceIssue(
-            "source_format", f"atteso '{reader.name}', trovato '{ir.source_format}'"
+            "source_format", f"expected '{reader.name}', found '{ir.source_format}'"
         ))
     if ir.source_path != sample_path:
-        issues.append(ConformanceIssue("source_path", "non corrisponde al file effettivamente letto"))
+        issues.append(ConformanceIssue("source_path", "doesn't match the file actually read"))
     return issues
 
 
 def check_writer_structure(writer) -> list[ConformanceIssue]:
     issues = []
     if not getattr(writer, "name", None):
-        issues.append(ConformanceIssue("name", "attributo 'name' mancante o vuoto"))
+        issues.append(ConformanceIssue("name", "missing or empty 'name' attribute"))
     if not getattr(writer, "api_version", None):
-        issues.append(ConformanceIssue("api_version", "attributo 'api_version' mancante"))
+        issues.append(ConformanceIssue("api_version", "missing 'api_version' attribute"))
     extension = getattr(writer, "extension", None)
     if not extension or not isinstance(extension, str) or not extension.startswith("."):
-        issues.append(ConformanceIssue("extension", "deve essere una stringa che inizia con '.'"))
+        issues.append(ConformanceIssue("extension", "must be a string starting with '.'"))
     if not hasattr(writer, "emit") or not callable(writer.emit):
-        issues.append(ConformanceIssue("emit", "metodo 'emit' mancante o non chiamabile"))
+        issues.append(ConformanceIssue("emit", "missing or non-callable 'emit' method"))
     return issues
 
 
@@ -105,32 +105,32 @@ def check_writer_behavior(writer, sample_ir: TableIR, tmp_dir: Path) -> list[Con
     try:
         result = writer.emit(sample_ir, out_path, {})
     except PayloadError:
-        issues.append(ConformanceIssue("emit", "emit() ha sollevato un errore su una IR valida"))
+        issues.append(ConformanceIssue("emit", "emit() raised an error on a valid IR"))
         return issues
     except Exception as e:
         issues.append(ConformanceIssue(
-            "emit", f"emit() ha sollevato {type(e).__name__} non gestita invece di WriterEmitError: {e}"
+            "emit", f"emit() raised an unhandled {type(e).__name__} instead of WriterEmitError: {e}"
         ))
         return issues
 
     if not isinstance(result, Path):
-        issues.append(ConformanceIssue("emit", f"emit() deve ritornare un Path, non {type(result).__name__}"))
+        issues.append(ConformanceIssue("emit", f"emit() must return a Path, not {type(result).__name__}"))
         return issues
     if not result.exists():
-        issues.append(ConformanceIssue("emit", f"il file dichiarato {result} non esiste su disco"))
+        issues.append(ConformanceIssue("emit", f"the declared file {result} doesn't exist on disk"))
     return issues
 
 
 def assert_reader_conforms(reader, sample_path: Path) -> None:
-    """Da usare in pytest: solleva AssertionError con dettaglio se non conforme."""
+    """For use in pytest: raises AssertionError with detail if non-conforming."""
     issues = check_reader_structure(reader) + check_reader_behavior(reader, sample_path)
     if issues:
         details = "\n".join(f"  - [{i.check}] {i.detail}" for i in issues)
-        raise AssertionError(f"{reader.name} non è conforme al contratto Reader:\n{details}")
+        raise AssertionError(f"{reader.name} doesn't conform to the Reader contract:\n{details}")
 
 
 def assert_writer_conforms(writer, sample_ir: TableIR, tmp_dir: Path) -> None:
     issues = check_writer_structure(writer) + check_writer_behavior(writer, sample_ir, tmp_dir)
     if issues:
         details = "\n".join(f"  - [{i.check}] {i.detail}" for i in issues)
-        raise AssertionError(f"{writer.name} non è conforme al contratto Writer:\n{details}")
+        raise AssertionError(f"{writer.name} doesn't conform to the Writer contract:\n{details}")

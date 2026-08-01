@@ -26,36 +26,36 @@ def test_read_requires_static_empty_if_absent(tmp_path):
 
 
 def test_read_requires_static_works_even_if_module_would_fail_to_import(tmp_path):
-    """Il punto centrale del meccanismo: la lettura è statica (AST), non
-    esecuzione — funziona anche se il modulo importerebbe qualcosa che
-    non esiste, perché non lo eseguiamo mai per leggere REQUIRES."""
+    """The core point of the mechanism: reading is static (AST), not
+    execution — it works even if the module would import something
+    that doesn't exist, because we never execute it to read REQUIRES."""
     f = tmp_path / "plugin.py"
     f.write_text(
-        'import questo_modulo_non_esiste_di_sicuro\n'
-        'REQUIRES = ["questo_modulo_non_esiste_di_sicuro"]\n'
+        'import this_module_definitely_does_not_exist\n'
+        'REQUIRES = ["this_module_definitely_does_not_exist"]\n'
     )
 
-    assert read_requires_static(f) == ["questo_modulo_non_esiste_di_sicuro"]
+    assert read_requires_static(f) == ["this_module_definitely_does_not_exist"]
 
 
 def test_read_requires_static_returns_empty_on_syntax_error(tmp_path):
     f = tmp_path / "plugin.py"
-    f.write_text("questo non e' python valido [[[")
+    f.write_text("this is not valid python [[[")
 
     assert read_requires_static(f) == []
 
 
 def test_missing_requirements_skips_unparseable_requirement_string():
-    # una stringa che non inizia con un carattere valido per un nome
-    # pacchetto (qui uno specifier senza nome) non genera un match e va
-    # semplicemente ignorata, non trattata come dipendenza mancante
+    # a string that doesn't start with a valid character for a
+    # package name (here a specifier with no name) doesn't produce a
+    # match and is simply ignored, not treated as a missing dependency
     missing = missing_requirements([">=1.0"])
     assert missing == []
 
 
 def test_missing_requirements_detects_absent_package():
-    missing = missing_requirements(["libreria_sicuramente_inesistente_xyz"])
-    assert missing == ["libreria_sicuramente_inesistente_xyz"]
+    missing = missing_requirements(["library_definitely_nonexistent_xyz"])
+    assert missing == ["library_definitely_nonexistent_xyz"]
 
 
 def test_missing_requirements_ignores_stdlib_present():
@@ -64,15 +64,15 @@ def test_missing_requirements_ignores_stdlib_present():
 
 
 def test_missing_requirements_handles_version_specifiers():
-    missing = missing_requirements(["json>=1.0", "libreria_inesistente_xyz>=2.0"])
-    assert missing == ["libreria_inesistente_xyz>=2.0"]
+    missing = missing_requirements(["json>=1.0", "nonexistent_library_xyz>=2.0"])
+    assert missing == ["nonexistent_library_xyz>=2.0"]
 
 
 def test_load_plugins_strict_raises_on_missing_deps(tmp_path):
     plugin_dir = tmp_path / "local_plugins"
     plugin_dir.mkdir()
     (plugin_dir / "bad.py").write_text(
-        'REQUIRES = ["libreria_inesistente_xyz"]\n\n'
+        'REQUIRES = ["nonexistent_library_xyz"]\n\n'
         'class W:\n    name = "w"\n    extension = ".w"\n    api_version = "1.0"\n'
         '    def emit(self, ir, out_path, config):\n        return out_path\n\n'
         'WRITER = W\n'
@@ -86,7 +86,7 @@ def test_load_plugins_non_strict_tracks_missing_deps_without_raising(tmp_path):
     plugin_dir = tmp_path / "local_plugins"
     plugin_dir.mkdir()
     (plugin_dir / "bad.py").write_text(
-        'REQUIRES = ["libreria_inesistente_xyz"]\n\n'
+        'REQUIRES = ["nonexistent_library_xyz"]\n\n'
         'class W:\n    name = "w"\n    extension = ".w"\n    api_version = "1.0"\n'
         '    def emit(self, ir, out_path, config):\n        return out_path\n\n'
         'WRITER = W\n'
@@ -96,7 +96,7 @@ def test_load_plugins_non_strict_tracks_missing_deps_without_raising(tmp_path):
 
     assert "w" not in registry.writers
     assert len(registry.load_failures) == 1
-    assert "libreria_inesistente_xyz" in registry.load_failures[0][2]
+    assert "nonexistent_library_xyz" in registry.load_failures[0][2]
 
 
 def test_plugin_with_satisfied_requires_loads_normally(tmp_path):
@@ -115,16 +115,16 @@ def test_plugin_with_satisfied_requires_loads_normally(tmp_path):
 
 
 def test_doctor_plugins_check_not_fail_for_missing_local_deps(tmp_path):
-    """Regressione: una dipendenza mancante di un plugin locale non deve
-    far FALLIRE il check 'plugins' — è già coperta con la severità
-    giusta (WARN) da 'local_plugin_deps'. Contarla due volte con
-    severità diverse sarebbe contraddittorio e romperebbe 'pld doctor'
-    per un problema facilmente risolvibile con install-deps."""
+    """Regression: a missing dependency of a local plugin must not
+    make the 'plugins' check FAIL — it's already covered with the
+    right severity (WARN) by 'local_plugin_deps'. Counting it twice
+    with different severities would be contradictory and would break
+    'pld doctor' for a problem easily fixed with install-deps."""
     from payload.core.doctor import PluginLoadCheck
 
     plugin_dir = tmp_path / "local_plugins"
     plugin_dir.mkdir()
-    (plugin_dir / "bad.py").write_text('REQUIRES = ["libreria_inesistente_xyz"]\n')
+    (plugin_dir / "bad.py").write_text('REQUIRES = ["nonexistent_library_xyz"]\n')
 
     result = PluginLoadCheck().run({"_project_root": str(tmp_path)})
 
@@ -132,7 +132,7 @@ def test_doctor_plugins_check_not_fail_for_missing_local_deps(tmp_path):
 
 
 def test_plugin_without_requires_unaffected(tmp_path):
-    """Nessuna regressione per i plugin che non dichiarano REQUIRES."""
+    """No regression for plugins that don't declare REQUIRES."""
     plugin_dir = tmp_path / "local_plugins"
     plugin_dir.mkdir()
     (plugin_dir / "simple.py").write_text(

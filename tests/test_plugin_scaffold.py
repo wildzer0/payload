@@ -19,7 +19,7 @@ def test_scaffold_writer_uses_writer_group_and_suffix(tmp_path):
     pyproject = (out / "pyproject.toml").read_text()
     assert 'payload.writers' in pyproject
     plugin_py = (out / "src" / "payload_writer_hex2" / "plugin.py").read_text()
-    assert "Writer" in plugin_py  # nome classe finisce con 'Writer'
+    assert "Writer" in plugin_py  # class name ends with 'Writer'
 
 
 def test_scaffold_class_name_is_capitalized_correctly(tmp_path):
@@ -35,7 +35,7 @@ def test_scaffold_no_placeholders_left_unrendered(tmp_path):
     for f in out.rglob("*"):
         if f.is_file():
             content = f.read_text()
-            assert "{{" not in content, f"placeholder non renderizzato in {f}"
+            assert "{{" not in content, f"unrendered placeholder in {f}"
 
 
 def test_scaffold_invalid_kind_raises():

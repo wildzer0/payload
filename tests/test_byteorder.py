@@ -19,16 +19,16 @@ def test_pack_value_invalid_byte_order_raises():
 
 
 def test_pack_value_unsupported_width_raises():
-    with pytest.raises(ValueError, match="larghezza"):
+    with pytest.raises(ValueError, match="unsupported width"):
         pack_value(1, width=3, byte_order="little")
 
 
 def test_repack_non_contiguous_offset_raises():
     fields = [
         {"offset": 0, "width": 1, "value": 0x01},
-        {"offset": 5, "width": 1, "value": 0x02},  # buco tra offset 1 e 5
+        {"offset": 5, "width": 1, "value": 0x02},  # gap between offset 1 and 5
     ]
-    with pytest.raises(ValueError, match="non contiguo"):
+    with pytest.raises(ValueError, match="contiguous"):
         repack(fields, "little")
 
 
@@ -39,7 +39,7 @@ def test_pack_value_big_endian():
 def test_pack_unpack_roundtrip():
     for order in ("little", "big"):
         for width in (1, 2, 4, 8):
-            value = (1 << (width * 8)) - 1  # max value per quella larghezza
+            value = (1 << (width * 8)) - 1  # max value for that width
             packed = pack_value(value, width, order)
             assert unpack_value(packed, width, order) == value
 
@@ -59,7 +59,7 @@ def test_repack_empty_fields_returns_empty_bytes():
     assert repack([], "little") == b""
 
 
-# --- integrazione csv_reader + bin_writer ---------------------------------
+# --- csv_reader + bin_writer integration -----------------------------------
 
 def test_csv_reader_respects_configured_byte_order(tmp_path):
     csv_file = tmp_path / "t.csv"
@@ -108,8 +108,8 @@ def test_bin_writer_passthrough_when_same_order(tmp_path):
 
 
 def test_bin_writer_falls_back_without_structured_fields(tmp_path):
-    # un reader senza extra['fields'] (es. raw_text): il writer non può
-    # reinterpretare alla cieca, deve limitarsi a passare i bytes ricevuti
+    # a reader without extra['fields'] (e.g. raw_text): the writer can't
+    # blindly reinterpret, it must just pass through the bytes received
     from payload.readers.raw_text import RawTextReader
 
     raw_file = tmp_path / "t.raw"
@@ -119,4 +119,4 @@ def test_bin_writer_falls_back_without_structured_fields(tmp_path):
     out = tmp_path / "out.bin"
     BinWriter().emit(ir, out, {"defaults": {"byte_order": "big"}})
 
-    assert out.read_bytes() == bytes([0x0A, 0x1B])  # invariato, nessun crash
+    assert out.read_bytes() == bytes([0x0A, 0x1B])  # unchanged, no crash

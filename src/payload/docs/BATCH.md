@@ -1,35 +1,33 @@
-# Tabelle batch — una tabella costruita da più file sorgente
+# Batch tables — a table built from several source files
 
-Questo documento descrive `[[batch_table]]`: il modo di dichiarare una
-tabella logica composta da **più file sorgente dello stesso formato**
-(es. `ROW1.txt, ROW2.txt, ..., ROWn.txt`), letti insieme da un solo
-reader in un'unica `TableIR`, che poi prosegue nella normale pipeline
-writer/fan-out **senza nessuna differenza** rispetto a una tabella a
-file singolo.
+This document describes `[[batch_table]]`: the way to declare a
+logical table made up of **several source files of the same format**
+(e.g. `ROW1.txt, ROW2.txt, ..., ROWn.txt`), read together by a single
+reader into one `TableIR`, which then continues through the normal
+writer/fan-out pipeline **with no difference at all** compared to a
+single-file table.
 
 ---
 
-## Il concetto in una riga
+## The concept in one line
 
 ```
 [file1, file2, ..., fileN] → Reader.parse_many() → TableIR → [stage] → ... → output
 ```
 
-Fuori da questo primo passo, una tabella batch è indistinguibile da una
-normale: stesso motore di esecuzione (`core/pipeline.py`), stesso
-fan-out multi-writer, stesso sistema di history/golden, stessa cache
-incrementale — solo l'identità del "sorgente" è un insieme di file
-invece di uno solo.
+Past this first step, a batch table is indistinguishable from a normal
+one: same execution engine (`core/pipeline.py`), same multi-writer
+fan-out, same history/golden system, same incremental cache — only the
+"source" identity is a set of files instead of just one.
 
 ---
 
-## Perché config esplicita, non naming convention
+## Why explicit config, not a naming convention
 
-Una tabella batch **si dichiara sempre esplicitamente** in
-`table-tool.toml`, mai per convenzione sul nome file o struttura di
-cartelle — coerente con l'approccio già usato per `[pipeline.stages]`
-e i sidecar: nessuna euristica implicita che potrebbe raggruppare file
-per sbaglio.
+A batch table is **always declared explicitly** in `table-tool.toml`,
+never through a filename convention or folder structure — consistent
+with the approach already used for `[pipeline.stages]` and sidecars:
+no implicit heuristic that could accidentally group files together.
 
 ```toml
 [[batch_table]]
@@ -37,36 +35,36 @@ name = "rows"
 sources = ["ROW*.txt"]
 ```
 
-`name` è l'identità della tabella ovunque nel tool (build, history,
-golden, cache) — esattamente come lo stem del filename lo è per una
-tabella normale. Deve essere **unico in tutto il progetto**, allo
-stesso modo dei nomi tabella derivati da file: collide con uno stem
-reale o con un altro `[[batch_table]]` → `DuplicateTableNameError`.
+`name` is the table's identity everywhere in the tool (build, history,
+golden, cache) — exactly like the filename stem is for a normal table.
+It must be **unique across the whole project**, the same way table
+names derived from files are: it collides with a real stem or with
+another `[[batch_table]]` → `DuplicateTableNameError`.
 
-**Un file dichiarato come sorgente di una `[[batch_table]]` non compare
-più come tabella a sé stante** nella discovery normale, anche se la sua
-estensione è riconosciuta da un reader — altrimenti `ROW1.txt` verrebbe
-scoperto due volte: come parte del batch e come tabella standalone
-`ROW1`, con build/output duplicati.
+**A file declared as a source of a `[[batch_table]]` no longer shows
+up as a standalone table** in normal discovery, even if its extension
+is recognized by a reader — otherwise `ROW1.txt` would be discovered
+twice: once as part of the batch and once as the standalone table
+`ROW1`, with duplicated build/output.
 
 ---
 
-## Campi di `[[batch_table]]`
+## `[[batch_table]]` fields
 
-| Campo | Obbligatorio | Significato |
+| Field | Required | Meaning |
 |---|---|---|
-| `name` | sì | nome della tabella, unico nel progetto |
-| `sources` | sì | lista di path/pattern (vedi sotto per l'ordine) |
-| `reader` | no | override del reader, come `defaults.reader` |
-| `writer` | no | override del writer, come `defaults.writer` |
-| `byte_order` | no | override di `defaults.byte_order` |
-| `stages` | no | pipeline esplicita, stesso shape di `[pipeline.stages]` (vedi [PIPELINE.md](PIPELINE.md)) |
+| `name` | yes | table name, unique across the project |
+| `sources` | yes | list of paths/patterns (see below for ordering) |
+| `reader` | no | reader override, like `defaults.reader` |
+| `writer` | no | writer override, like `defaults.writer` |
+| `byte_order` | no | override of `defaults.byte_order` |
+| `stages` | no | explicit pipeline, same shape as `[pipeline.stages]` (see [PIPELINE.md](PIPELINE.md)) |
 
-Questi override vivono **inline nel blocco `[[batch_table]]`**, non in
-un sidecar: una tabella batch non ha un `source_path` singolo da cui
-risolvere un `<nome>.config.toml`. Se non specificati, si applicano i
-default globali di `[defaults]`/`[pipeline]` esattamente come per una
-tabella normale.
+These overrides live **inline in the `[[batch_table]]` block**, not in
+a sidecar: a batch table has no single `source_path` to resolve a
+`<name>.config.toml` from. If unspecified, the global
+`[defaults]`/`[pipeline]` defaults apply exactly as they would for a
+normal table.
 
 ```toml
 [[batch_table]]
@@ -77,133 +75,146 @@ writer = "hex"
 byte_order = "big"
 ```
 
-`[[batch_table]]` è letto **solo dal `table-tool.toml` globale** — una
-occorrenza in un sidecar (che comunque non avrebbe senso, dato che i
-sidecar sono per-tabella-a-file-singolo) viene semplicemente ignorata.
+`[[batch_table]]` is read **only from the global `table-tool.toml`** —
+an occurrence in a sidecar (which wouldn't make sense anyway, since
+sidecars are per-single-file-table) is simply ignored.
 
 ---
 
-## L'ordine dei file conta
+## File order matters
 
-I file vengono concatenati nell'ordine in cui compaiono in
-`sources` — importante per formati riga-per-riga come `raw_text`, dove
-l'ordine dei dati nel file finale dipende dall'ordine dei sorgenti.
-`sources` accetta **sia pattern glob che path letterali, anche mescolati
-nella stessa lista**:
+Files are concatenated in the order they appear in
+`sources` — important for line-by-line formats like `raw_text`, where
+the order of the data in the final file depends on the order of the
+sources. `sources` accepts **both glob patterns and literal paths,
+even mixed in the same list**:
 
-- **Un elemento letterale** (nessun metacarattere glob: `*`, `?`, `[`)
-  mantiene esattamente la posizione data nella lista — controllo totale
-  dell'utente.
-- **Un elemento glob** viene espanso e ordinato con un confronto
-  "natural sort" (numerico sui blocchi di cifre nel filename), **non**
-  lessicografico puro — quindi `ROW2.txt` precede `ROW10.txt` anche con
-  `sources = ["ROW*.txt"]`, mentre un ordine lessicografico piazzerebbe
-  `ROW10.txt` prima di `ROW2.txt`.
+- **A literal entry** (no glob metacharacter: `*`, `?`, `[`) keeps
+  exactly the position given in the list — full control for the user.
+- **A glob entry** is expanded and sorted with a "natural sort"
+  comparison (numeric on the digit runs in the filename), **not**
+  pure lexicographic — so `ROW2.txt` comes before `ROW10.txt` even
+  with `sources = ["ROW*.txt"]`, while a lexicographic order would put
+  `ROW10.txt` before `ROW2.txt`.
 
 ```toml
-# Espansione automatica, ordine naturale (ROW1, ROW2, ..., ROW10, ...)
+# Automatic expansion, natural order (ROW1, ROW2, ..., ROW10, ...)
 sources = ["ROW*.txt"]
 
-# Controllo esplicito dell'ordine (utile se l'ordine "giusto" non è
-# quello numerico dei filename)
+# Explicit order control (useful if the "right" order isn't the
+# numeric order of the filenames)
 sources = ["intro.txt", "ROW3.txt", "ROW1.txt", "coda.txt"]
 ```
 
-Ogni file risolto deve avere un **filename univoco entro il batch**
-(indipendentemente dalla cartella) — due sorgenti diversi con lo stesso
-nome, es. `sensori/ROW1.txt` e `attuatori/ROW1.txt` nello stesso batch,
-sono un errore di configurazione (`BatchTableError`): la storia
-(`source_blobs`, vedi sotto) è indicizzata per filename, una collisione
-perderebbe silenziosamente un file.
+Every resolved file must have a **filename unique within the batch**
+(regardless of folder) — two different sources with the same name,
+e.g. `sensors/ROW1.txt` and `actuators/ROW1.txt` in the same batch,
+are a configuration error (`BatchTableError`): the history
+(`source_blobs`, see below) is indexed by filename, a collision would
+silently lose a file.
 
 ---
 
-## Il contratto del Reader: `parse_many`
+## The Reader contract: `parse_many`
 
-Un reader deve implementare `parse_many(self, paths: list[Path], config: dict) -> TableIR`
-(in aggiunta a `parse()`, che resta obbligatorio e invariato) per
-essere utilizzabile in una tabella batch — vedi
-[PLUGINS.md](PLUGINS.md#estensione-opzionale-parse_many-tabelle-batch)
-per il contratto completo. Un reader che non lo implementa fa fallire
-la build con `ReaderBatchUnsupportedError`, un errore chiaro invece di
-un fallback che concatena bytes alla cieca (sbagliato per formati non
-riga-per-riga). `raw_text` implementa già `parse_many` — è il reader di
-riferimento per l'esempio `ROW1.txt..ROWn.txt`.
-
----
-
-## Cache, history, golden: cosa cambia
-
-Concettualmente **nulla** — solo l'identità del sorgente diventa
-plurale:
-
-- **Cache**: la chiave di freschezza incorpora l'hash di **tutti** i
-  file sorgente (nome, lunghezza e contenuto di ciascuno, in ordine),
-  non solo di uno — cambiare anche un solo file membro invalida la
-  cache dell'intera tabella.
-- **History**: uno snapshot registra un blob per **ogni** file sorgente
-  (`{filename: hash}`, stesso schema già usato per gli output) invece
-  di uno solo. `pld log`/`pld diff`/`pld restore` funzionano allo
-  stesso modo, riportando quale file membro è cambiato.
-- **Golden**: `stale` scatta se **uno qualunque** dei file sorgente è
-  cambiato dopo lo snapshot golden — stessa logica di prima, solo
-  applicata a un insieme invece che a un singolo file.
-- **Un file aggiunto o rimosso dal batch tra due commit** viene
-  rilevato come "modificata"/`dirty` anche se il contenuto degli altri
-  file non cambia — le chiavi dell'insieme sorgenti sono cambiate,
-  non solo i valori.
+A reader must implement `parse_many(self, paths: list[Path], config: dict) -> TableIR`
+(in addition to `parse()`, which stays mandatory and unchanged) to be
+usable in a batch table — see
+[PLUGINS.md](PLUGINS.md#optional-extension-parse_many-batch-tables)
+for the full contract. A reader that doesn't implement it makes the
+build fail with `ReaderBatchUnsupportedError`, a clear error instead of
+a fallback that blindly concatenates bytes (wrong for formats that
+aren't line-by-line). `raw_text` already implements `parse_many` — it's
+the reference reader for the `ROW1.txt..ROWn.txt` example.
 
 ---
 
-## Usarla da CLI e web
+## Cache, history, golden: what changes
+
+Conceptually **nothing** — only the source identity becomes plural:
+
+- **Cache**: the freshness key incorporates the hash of **all** source
+  files (name, length, and content of each, in order), not just one —
+  changing even a single member file invalidates the whole table's
+  cache.
+- **History**: a snapshot records a blob for **every** source file
+  (`{filename: hash}`, the same schema already used for outputs)
+  instead of just one. `pld log`/`pld diff`/`pld restore` work the
+  same way, reporting which member file changed.
+- **Golden**: `stale` triggers if **any** of the source files changed
+  after the golden snapshot — same logic as before, just applied to a
+  set instead of a single file.
+- **A file added or removed from the batch between two commits** is
+  detected as "changed"/`dirty` even if the content of the other files
+  didn't change — the source set's keys changed, not just the values.
+
+---
+
+## Using it from the CLI and web
 
 ```bash
-pld build rows                 # nome della [[batch_table]], non un path
-pld build-all                  # include automaticamente le tabelle batch
-pld status                     # mostra "rows" con un marcatore "(batch, N file)"
-pld commit -m "..."            # committa anche le tabelle batch modificate
+pld build rows                 # the [[batch_table]] name, not a path
+pld build-all                  # automatically includes batch tables
+pld status                     # shows "rows" with a "(batch, N files)" marker
+pld commit -m "..."            # also commits changed batch tables
 pld log rows
-pld diff rows                  # differenze per ciascun file membro cambiato
-pld restore rows <N>
+pld diff rows                  # differences for each changed member file
+pld restore rows <N>           # only if "rows" still exists — see 'pld rm' below
 pld golden set rows
+pld import a.txt b.txt --new-batch rows   # creates the "rows" [[batch_table]] from two files
+pld import c.txt --batch rows             # adds a third member
+pld rm rows --member c.txt --force        # removes a member (removing the last one removes the whole entry)
+pld rm rows --force                       # deletes all members + the [[batch_table]]
 ```
 
-Lato web, `pld serve` espone lo stesso comportamento in lettura/build
-attraverso le route esistenti (dashboard, pagina tabella, history,
-golden) — nessuna route nuova per creare/editare `[[batch_table]]` in
-questa fase: si definisce a mano in `table-tool.toml`, esattamente come
-`[pipeline.stages]` è nato config-file-only prima di ricevere un
-builder visuale in una fase successiva.
+On the web side, `pld serve` exposes the same behavior through the
+existing routes (dashboard, table page, history, golden), plus
+`/api/table/import` (creation, also via drag&drop on the Dashboard) and
+`/api/table/delete` — the only thing that stays config-file-only is
+**editing** an already-existing `[[batch_table]]` (inline
+reader/writer/byte_order/stages, or reordering `sources`): no visual
+editor for that at this stage, you edit `table-tool.toml` by hand,
+exactly like `[pipeline.stages]` started out config-file-only before
+getting a visual builder in a later phase.
 
 ---
 
-## Limiti espliciti di questa fase
+## Explicit limits at this stage
 
-- **`pld watch` non ricostruisce automaticamente una tabella batch**
-  quando cambia un file membro — il live-reload resta single-file. La
-  build iniziale di `pld watch` include comunque le tabelle batch; un
-  file membro modificato durante l'osservazione viene segnalato ma non
-  ricostruisce nulla — `pld build <nome_batch>` resta il modo di
-  aggiornarla. La webapp non ha una pagina "watch" (rimossa: è una
-  funzionalità da terminale, non da browser).
-- **`pld view` non supporta le tabelle batch** — non c'è un mapping
-  ovvio "quale file mostro" per un comando pensato per ispezionare un
-  singolo file.
-- **Nessun editor sorgente per le tabelle batch** nella web UI (route
-  `/api/source/{table}`): un editor a singolo file non si applica a N
-  file, la route rifiuta esplicitamente con un errore chiaro invece di
-  mostrare/modificare solo uno dei membri in modo fuorviante.
-- **Nessun resume da checkpoint intermedio** per una build batch
-  interrotta a metà di una pipeline multi-stage — riparte da zero al
-  prossimo tentativo (comportamento comunque corretto, solo non
-  ottimizzato come per una tabella a file singolo).
+- **`pld watch` doesn't automatically rebuild a batch table** when a
+  member file changes — live-reload stays single-file. `pld watch`'s
+  initial build still includes batch tables; a member file modified
+  while watching is flagged but doesn't trigger a rebuild —
+  `pld build <batch_name>` remains the way to update it. The web app
+  has no "watch" page (removed: it's a terminal feature, not a
+  browser one).
+- **`pld view` doesn't support batch tables** — there's no obvious
+  "which file do I show" mapping for a command meant to inspect a
+  single file.
+- **No source editor for batch tables** in the web UI (route
+  `/api/source/{table}`): a single-file editor doesn't apply to N
+  files, the route explicitly rejects it with a clear error instead of
+  showing/editing just one of the members in a misleading way.
+- **No resume from an intermediate checkpoint** for a batch build
+  interrupted midway through a multi-stage pipeline — it starts over
+  from scratch on the next attempt (still correct behavior, just not
+  as optimized as for a single-file table).
+- **`pld restore` doesn't recreate an entirely deleted batch table**
+  (`pld rm rows` without `--member`, which also removes the
+  `[[batch_table]]` from config) — unlike a single-file table, where
+  `pld restore` recreates the file from scratch even if it no longer
+  exists on disk. For a batch table, the `[[batch_table]]` needs to be
+  redeclared by hand first (or recreated with `pld import --new-batch`);
+  the snapshots/blobs still stay in the history, browsable with
+  `pld log`, there's just no command yet that puts them back in one
+  shot.
 
 ---
 
-## Esempio completo
+## Full example
 
 ```
-progetto/
+project/
 ├── table-tool.toml
 ├── ROW1.txt
 ├── ROW2.txt
@@ -221,8 +232,8 @@ sources = ["ROW*.txt"]
 ```
 
 ```bash
-pld build rows            # legge ROW1.txt, ROW2.txt, ROW3.txt in ordine naturale
+pld build rows            # reads ROW1.txt, ROW2.txt, ROW3.txt in natural order
                            # -> build/rows.bin
-pld commit -m "prima versione di rows"
+pld commit -m "first version of rows"
 pld golden set rows
 ```

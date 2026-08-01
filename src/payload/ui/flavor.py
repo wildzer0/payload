@@ -1,17 +1,17 @@
-"""Frasi random mostrate all'avvio delle operazioni lunghe (build-all, watch).
-Sostituite dal nome tabella reale non appena parte il primo task."""
+"""Random phrases shown when long operations start (build-all, watch).
+Replaced by the real table name as soon as the first task starts."""
 import random
 
 LOADING_PHRASES = [
-    "Spazzolando il gatto...",
-    "Allineando i satelliti...",
-    "Calibrando i sensori di bordo...",
-    "Convincendo il linker a cooperare...",
-    "Impacchettando i byte con cura...",
-    "Cercando segnale dallo spazio profondo...",
-    "Ricompattando la telemetria...",
-    "Sincronizzando l'orologio di bordo...",
-    "Controllando l'orbita...",
+    "Brushing the cat...",
+    "Aligning the satellites...",
+    "Calibrating onboard sensors...",
+    "Convincing the linker to cooperate...",
+    "Packing bytes with care...",
+    "Searching for deep space signal...",
+    "Recompacting telemetry...",
+    "Syncing the onboard clock...",
+    "Checking the orbit...",
 ]
 
 

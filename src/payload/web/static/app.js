@@ -1,14 +1,14 @@
-/* payload web UI — vanilla JS, nessuna dipendenza esterna. Router
- * minimale su location.hash, un helper fetch() con gestione errori
- * uniforme (lo stesso shape JSON per ogni errore, vedi web/errors.py),
- * ed EventSource per la view live di build-all. */
+/* payload web UI — vanilla JS, no external dependencies. Minimal
+ * router on location.hash, a fetch() helper with uniform error
+ * handling (the same JSON shape for every error, see web/errors.py),
+ * and EventSource for the build-all live view. */
 "use strict";
 
 const COMMIT_MESSAGE_MAX_LENGTH = 1024;
 const MAX_BUILD_ALL_JOBS = 32;
 const HISTORY_PAGE_SIZE = 4;
 
-/* ---------- tema ---------- */
+/* ---------- theme ---------- */
 
 (function initTheme() {
   const saved = localStorage.getItem("payload-theme");
@@ -24,7 +24,7 @@ function toggleTheme() {
   localStorage.setItem("payload-theme", next);
 }
 
-/* ---------- utility di rendering ---------- */
+/* ---------- rendering utilities ---------- */
 
 function escapeHtml(value) {
   const s = String(value);
@@ -32,16 +32,16 @@ function escapeHtml(value) {
 }
 
 function raw(value) {
-  // marcatore esplicito: contenuto già HTML sicuro, non va escapato
+  // explicit marker: content is already safe HTML, must not be escaped
   return { __raw: String(value) };
 }
 
 function render(strings, ...values) {
-  // Un array interpolato è sempre un elenco di frammenti HTML già
-  // pronti (da .map(x => render`...`), o letterali HTML scritti a
-  // mano) — non testo utente da scappare, per questo NON passa da
-  // escapeHtml: va sempre wrappato in raw() esplicitamente a monte se
-  // un domani servisse un array di stringhe utente grezze.
+  // An interpolated array is always a list of already-ready HTML
+  // fragments (from .map(x => render`...`), or hand-written HTML
+  // literals) — not user text to escape, which is why it does NOT go
+  // through escapeHtml: always wrap it explicitly in raw() upstream if
+  // an array of raw user strings is ever needed.
   return strings.reduce((out, s, i) => {
     const v = values[i];
     if (v === undefined) return out + s;
@@ -51,7 +51,7 @@ function render(strings, ...values) {
   }, "");
 }
 
-/* ---------- icone (SVG inline, nessun icon-font/CDN) ---------- */
+/* ---------- icons (inline SVG, no icon-font/CDN) ---------- */
 
 const ICONS = {
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
@@ -70,12 +70,13 @@ const ICONS = {
   dash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="12" x2="18" y2="12"/></svg>',
   book: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5c0-1 .8-1.5 2-1.5h6v15H6c-1.2 0-2 .5-2 1.5V5.5Z"/><path d="M20 5.5c0-1-.8-1.5-2-1.5h-6v15h6c1.2 0 2 .5 2 1.5V5.5Z"/></svg>',
   star: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6-5.9-3.3-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8Z"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M4 19h16"/></svg>',
 };
 
 function iconSpan(name) {
-  // stringa HTML semplice (non raw()): per template letterali NON
-  // taggati con render (es. il pipeline builder, costruito con
-  // stringhe pure per la sua natura molto dinamica/con re-render).
+  // plain HTML string (not raw()): for literal templates NOT tagged
+  // with render (e.g. the pipeline builder, built with plain strings
+  // due to its very dynamic/re-rendering nature).
   return `<span class="icon">${ICONS[name] || ""}</span>`;
 }
 
@@ -83,7 +84,7 @@ function icon(name) {
   return raw(iconSpan(name));
 }
 
-/* ---------- toast (sostituisce il vecchio banner unico) ---------- */
+/* ---------- toast (replaces the old single banner) ---------- */
 
 function toast(message, kind, hint) {
   const stack = document.getElementById("toast-stack");
@@ -91,16 +92,16 @@ function toast(message, kind, hint) {
   el.className = "toast toast-" + (kind || "error");
   el.innerHTML = render`
     <div class="toast-body">
-      <div>${message}</div>
+      <div class="toast-message">${message}</div>
       ${raw(hint ? render`<div class="toast-hint">${hint}</div>` : "")}
     </div>
-    <button class="toast-close" type="button" aria-label="Chiudi">${icon("close")}</button>
+    <button class="toast-close" type="button" aria-label="Close">${icon("close")}</button>
   `;
   el.querySelector(".toast-close").onclick = () => el.remove();
   stack.appendChild(el);
-  // tutti i toast spariscono da soli — quelli di errore restano più a
-  // lungo (più testo da leggere), il pulsante di chiusura resta comunque
-  // disponibile per chiuderli prima.
+  // every toast disappears on its own — error ones stay longer (more
+  // text to read), the close button remains available to dismiss them
+  // sooner regardless.
   const AUTO_DISMISS_MS = { ok: 4000, warn: 6000, error: 8000 };
   setTimeout(() => el.remove(), AUTO_DISMISS_MS[kind] || AUTO_DISMISS_MS.error);
 }
@@ -109,7 +110,7 @@ function toastError(e) {
   toast(e.message || String(e), "error", e.hint);
 }
 
-/* ---------- modale di conferma (sostituisce confirm() nativo) ---------- */
+/* ---------- confirmation modal (replaces native confirm()) ---------- */
 
 function confirmDialog(message, opts) {
   opts = opts || {};
@@ -119,8 +120,8 @@ function confirmDialog(message, opts) {
     box.innerHTML = render`
       <p>${message}</p>
       <div class="modal-actions">
-        <button type="button" id="modal-cancel">Annulla</button>
-        <button type="button" class="${opts.danger ? "danger" : "primary"}" id="modal-confirm">${opts.confirmLabel || "Conferma"}</button>
+        <button type="button" id="modal-cancel">Cancel</button>
+        <button type="button" class="${opts.danger ? "danger" : "primary"}" id="modal-confirm">${opts.confirmLabel || "Confirm"}</button>
       </div>
     `;
     overlay.hidden = false;
@@ -128,6 +129,34 @@ function confirmDialog(message, opts) {
     box.querySelector("#modal-cancel").onclick = () => cleanup(false);
     box.querySelector("#modal-confirm").onclick = () => cleanup(true);
     overlay.onclick = (ev) => { if (ev.target === overlay) cleanup(false); };
+  });
+}
+
+/* Same modal as confirmDialog, with a text field — used by import
+ * (table/batch name to assign to the dropped file). Resolves to the
+ * entered text, or null if cancelled/empty. */
+function promptDialog(message, opts) {
+  opts = opts || {};
+  const overlay = document.getElementById("modal-overlay");
+  const box = document.getElementById("modal-box");
+  return new Promise((resolveFn) => {
+    box.innerHTML = render`
+      <p>${message}</p>
+      <div class="field"><input type="text" id="modal-prompt-input" value="${opts.value || ""}" placeholder="${opts.placeholder || ""}"></div>
+      <div class="modal-actions">
+        <button type="button" id="modal-cancel">Cancel</button>
+        <button type="button" class="primary" id="modal-confirm">${opts.confirmLabel || "Confirm"}</button>
+      </div>
+    `;
+    overlay.hidden = false;
+    const input = box.querySelector("#modal-prompt-input");
+    input.focus();
+    input.select();
+    const cleanup = (result) => { overlay.hidden = true; resolveFn(result); };
+    box.querySelector("#modal-cancel").onclick = () => cleanup(null);
+    box.querySelector("#modal-confirm").onclick = () => cleanup(input.value.trim() || null);
+    input.addEventListener("keydown", (ev) => { if (ev.key === "Enter") cleanup(input.value.trim() || null); });
+    overlay.onclick = (ev) => { if (ev.target === overlay) cleanup(null); };
   });
 }
 
@@ -144,9 +173,27 @@ async function api(path, opts) {
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
   } catch (e) {
-    throw new ApiError("Impossibile contattare il server", "Il processo 'pld serve' è ancora in esecuzione?");
+    throw new ApiError("Can't reach the server", "Is the 'pld serve' process still running?");
   }
   if (res.status === 204) return null;
+  const isJson = (res.headers.get("content-type") || "").includes("application/json");
+  const data = isJson ? await res.json() : null;
+  if (!res.ok) {
+    throw new ApiError((data && data.message) || res.statusText, data && data.hint, data);
+  }
+  return data;
+}
+
+/* Like api(), but for multipart/form-data (file upload, see
+ * /api/table/import) — no manual Content-Type: the browser generates
+ * one with the correct boundary on its own when the body is a FormData. */
+async function apiUpload(path, formData) {
+  let res;
+  try {
+    res = await fetch(path, { method: "POST", body: formData });
+  } catch (e) {
+    throw new ApiError("Can't reach the server", "Is the 'pld serve' process still running?");
+  }
   const isJson = (res.headers.get("content-type") || "").includes("application/json");
   const data = isJson ? await res.json() : null;
   if (!res.ok) {
@@ -159,20 +206,20 @@ class ApiError extends Error {
   constructor(message, hint, data) {
     super(message);
     this.hint = hint;
-    this.data = data || null; // corpo JSON completo dell'errore — usato dal pipeline builder per leggere 'stage_index'
+    this.data = data || null; // full JSON error body — used by the pipeline builder to read 'stage_index'
   }
 }
 
 function statusPill(status) {
   const map = {
-    ok: ["pill-ok", "ok", "check"], match: ["pill-ok", "match", "check"], clean: ["pill-ok", "invariata", "check"],
-    warn: ["pill-warn", "warn", "warnTri"], dirty: ["pill-warn", "modificata", "warnTri"], stale: ["pill-warn", "stale", "warnTri"],
-    fail: ["pill-fail", "fail", "cross"], mismatch: ["pill-fail", "mismatch", "cross"], error: ["pill-fail", "errore", "cross"],
-    missing: ["pill-dim", "mancante", "dash"], never_saved: ["pill-dim", "mai salvata", "dash"],
+    ok: ["pill-ok", "ok", "check"], match: ["pill-ok", "match", "check"], clean: ["pill-ok", "unchanged", "check"],
+    warn: ["pill-warn", "warn", "warnTri"], dirty: ["pill-warn", "changed", "warnTri"], stale: ["pill-warn", "stale", "warnTri"],
+    fail: ["pill-fail", "fail", "cross"], mismatch: ["pill-fail", "mismatch", "cross"], error: ["pill-fail", "error", "cross"],
+    missing: ["pill-dim", "missing", "dash"], never_saved: ["pill-dim", "unsaved", "dash"],
     noop: ["pill-dim", "-", "dash"],
   };
   const [cls, label, iconName] = map[status] || ["pill-dim", status || "-", "dash"];
-  return raw(`<span class="pill ${cls}">${ICONS[iconName] || ""}${escapeHtml(label)}</span>`);
+  return raw(`<span class="pill pill-status ${cls}">${ICONS[iconName] || ""}${escapeHtml(label)}</span>`);
 }
 
 function baseName(path) {
@@ -194,18 +241,18 @@ function debounce(fn, waitMs) {
   };
 }
 
-/* ---------- autocomplete leggero (sostituisce <datalist>) ---------- */
+/* ---------- lightweight autocomplete (replaces <datalist>) ---------- */
 
-/* <datalist> nativa non è stilabile (ogni browser/OS disegna il proprio
- * popup, spesso tagliando le opzioni più lunghe) e stonava col resto
- * dell'interfaccia — questo è un dropdown assoluto, filtrato dal
- * valore digitato, con navigazione da tastiera, costruito con lo
- * stesso CSS di tutto il resto: nessuna dipendenza nuova, solo markup
- * e JS in più. 'input' deve stare dentro un elemento con classe
- * 'autocomplete-wrap' (il dropdown si ancora lì). */
+/* Native <datalist> can't be styled (every browser/OS draws its own
+ * popup, often clipping longer options) and clashed with the rest of
+ * the interface — this is an absolutely positioned dropdown, filtered
+ * by the typed value, with keyboard navigation, built with the same
+ * CSS as everything else: no new dependency, just extra markup and
+ * JS. 'input' must sit inside an element with class
+ * 'autocomplete-wrap' (the dropdown anchors there). */
 function attachAutocomplete(input, getOptions) {
   const wrap = input.closest(".autocomplete-wrap");
-  if (!wrap) return; // difesa: senza wrapper non c'è dove ancorare il dropdown
+  if (!wrap) return; // defensive: without a wrapper there's nowhere to anchor the dropdown
   const list = document.createElement("div");
   list.className = "autocomplete-list";
   list.hidden = true;
@@ -250,7 +297,7 @@ function attachAutocomplete(input, getOptions) {
     else if (ev.key === "Enter" && activeIndex >= 0) { ev.preventDefault(); select(items[activeIndex]); }
     else if (ev.key === "Escape") { close(); }
   });
-  // mousedown, non click: previene il blur dell'input prima che il click sull'opzione arrivi
+  // mousedown, not click: prevents the input's blur from firing before the click on the option arrives
   list.addEventListener("mousedown", (ev) => {
     const itemEl = ev.target.closest(".autocomplete-item");
     if (!itemEl) return;
@@ -259,7 +306,7 @@ function attachAutocomplete(input, getOptions) {
   });
 }
 
-/* ---------- helper di pagina condivisi ---------- */
+/* ---------- shared page helpers ---------- */
 
 function pageHeader(title, subtitle, actionsHtml) {
   return render`<div class="page-header"><div class="page-header-text"><h1>${title}</h1>${raw(subtitle ? render`<p class="subtitle">${subtitle}</p>` : "")}</div>${raw(actionsHtml ? `<div class="page-header-actions">${actionsHtml}</div>` : "")}</div>`;
@@ -280,22 +327,21 @@ function emptyCard(message, hint) {
   return render`<div class="card empty-state">${icon("alert")}<div>${message}</div>${raw(hint ? render`<div class="subtitle" style="margin-top:6px">${hint}</div>` : "")}</div>`;
 }
 
-/* Formattatore leggero per le docstring dei plugin: paragrafi separati
- * da riga vuota, righe che iniziano per "- "/"* " diventano un elenco
- * puntato, righe rientrate (esempi di sintassi, tipo quello di
- * raw_text/csv) diventano un <pre> che preserva gli a capo — non è
- * markdown completo (quello serve per le guide vere, vedi
- * renderMarkdown), solo il minimo per non perdere la struttura che il
- * backend già preserva via inspect.getdoc().
+/* Lightweight formatter for plugin docstrings: paragraphs separated by
+ * a blank line, lines starting with "- "/"* " become a bullet list,
+ * indented lines (syntax examples, like raw_text/csv's) become a
+ * <pre> that preserves line breaks — not full markdown (that's for
+ * the real guides, see renderMarkdown), just the minimum to not lose
+ * the structure the backend already preserves via inspect.getdoc().
  *
- * Nota: la classificazione è per RIGA, non per blocco separato da riga
- * vuota — una riga tipo "Esempio:" spesso precede l'esempio vero senza
- * una riga vuota in mezzo (vedi RawTextReader/CsvReader), quindi un
- * blocco "tutto o niente" tratterebbe l'intero paragrafo come prosa e
- * perderebbe comunque gli a capo dell'esempio. */
+ * Note: classification is per LINE, not per block separated by a
+ * blank line — a line like "Example:" often precedes the actual
+ * example with no blank line in between (see RawTextReader/CsvReader),
+ * so an "all or nothing" block would treat the whole paragraph as
+ * prose and would still lose the example's line breaks. */
 function formatDescription(text) {
   if (!text || !text.trim()) {
-    return '<p class="empty-state" style="padding:12px 0">Questo plugin non fornisce una descrizione.</p>';
+    return '<p class="empty-state" style="padding:12px 0">This plugin doesn\'t provide a description.</p>';
   }
   const allLines = text.replace(/\r\n/g, "\n").split("\n");
   while (allLines.length && allLines[0].trim() === "") allLines.shift();
@@ -340,9 +386,9 @@ function metaChip(label, value) {
   return `<span class="meta-chip"><strong>${escapeHtml(label)}</strong><span class="mono">${escapeHtml(value)}</span></span>`;
 }
 
-/* Card a scomparsa (<details>): usata per sezioni secondarie o di
- * configurazione — chiusa di default passando open:false, così
- * l'utente decide cosa vedere invece di trovarsi la pagina piena. */
+/* Collapsible card (<details>): used for secondary or config sections
+ * — closed by default by passing open:false, so the user decides what
+ * to see instead of being met with a full page. */
 function detailsCard(title, bodyHtml, opts) {
   opts = opts || {};
   const open = opts.open !== false;
@@ -354,9 +400,9 @@ function detailsCard(title, bodyHtml, opts) {
   `;
 }
 
-/* Card sempre aperta, non collassabile — usata per History sulla
- * pagina tabella: deve restare ben visibile, non nascosta dietro un
- * click come le altre sezioni secondarie. */
+/* Always-open, non-collapsible card — used for History on the table
+ * page: it needs to stay clearly visible, not hidden behind a click
+ * like the other secondary sections. */
 function pinnedCard(title, bodyHtml) {
   return `
     <div class="card">
@@ -400,30 +446,30 @@ async function router() {
         return;
       }
       content.classList.remove("route-fade");
-      void content.offsetWidth; // riavvia l'animazione CSS anche su route ripetute
+      void content.offsetWidth; // restarts the CSS animation even on repeated routes
       content.classList.add("route-fade");
       return;
     }
   }
-  document.getElementById("content").innerHTML = '<p class="empty-state">Pagina non trovata.</p>';
+  document.getElementById("content").innerHTML = '<p class="empty-state">Page not found.</p>';
 }
 
 window.addEventListener("hashchange", router);
 
 /* ---------- dashboard ---------- */
 
-/* <select> reader/writer di default per una riga della dashboard:
- * l'opzione 'auto' mostra tra parentesi cosa verrebbe risolto davvero
- * oggi (resolvedValue), le altre opzioni sono l'override esplicito —
- * un solo controllo copre sia "cosa succede" sia "cosa ho scelto".
- * Disabilitato (con badge separato in tabella) se la tabella ha una
- * pipeline esplicita: in quel caso reader/writer di default non si
- * applicano affatto, vengono ignorati dalla risoluzione. */
-/* Formato compatto per la colonna 'Ultima modifica' della dashboard:
- * la stringa ISO completa ("2026-08-01T00:21:36") è troppo lunga per
- * una colonna stretta e andava a capo rompendo l'altezza della riga —
- * qui solo giorno/mese/anno-a-2-cifre + ora:minuti, il timestamp
- * completo resta disponibile al passaggio del mouse via title. */
+/* Default reader/writer <select> for a dashboard row: the 'auto'
+ * option shows in parentheses what would actually be resolved today
+ * (resolvedValue), the other options are the explicit override — a
+ * single control covers both "what happens" and "what I chose".
+ * Disabled (with a separate badge in the table) if the table has an
+ * explicit pipeline: in that case default reader/writer don't apply
+ * at all, they're ignored by resolution. */
+/* Compact format for the dashboard's 'Last modified' column: the full
+ * ISO string ("2026-08-01T00:21:36") is too long for a narrow column
+ * and used to wrap, breaking the row height — here just
+ * day/month/2-digit-year + hour:minutes, the full timestamp remains
+ * available on hover via title. */
 function fmtShortTimestamp(iso) {
   if (!iso) return "—";
   const [datePart, timePart] = iso.split("T");
@@ -441,34 +487,72 @@ function _defaultSelectHtml(kind, tableName, options, currentValue, resolvedValu
   return `<select id="${id}" class="inline-select" data-default-kind="${kind}" data-default-table="${escapeHtml(tableName)}"${disabled ? " disabled" : ""}>${opts.join("")}</select>`;
 }
 
-/* Evidenzia lo snapshot "attuale" (accent, stesso trattamento della
- * pagina tabella) e, se la HEAD della cronologia è più avanti (la
- * tabella è ferma a un restore precedente), lo segnala con un chip
- * secondario — altrimenti sparirebbe l'informazione che esistono
- * snapshot più recenti mai "riattivati". */
+/* Highlights the "current" snapshot (accent, same treatment as the
+ * table page) and, if the history HEAD is further ahead (the table is
+ * stuck at an earlier restore), flags it with a secondary chip —
+ * otherwise the fact that more recent, never-"reactivated" snapshots
+ * exist would disappear. Both the empty state and the "behind HEAD"
+ * state are kept to short, non-wrapping content (icon + at most a
+ * number) with the explanation moved into the title tooltip, since
+ * this chip lives in a narrow grid cell where multi-word labels wrap
+ * mid-phrase and look broken. */
 function _snapshotChipHtml(t) {
-  if (!t.last_snapshot) return '<span class="pill pill-dim">mai salvata</span>';
+  if (!t.last_snapshot) {
+    return `<span class="pill pill-dim" title="No snapshot saved yet">${iconSpan("dash")}—</span>`;
+  }
   const current = `<span class="pill pill-current">#${t.last_snapshot.id}</span>`;
   const behindTip = t.tip_snapshot_id && t.tip_snapshot_id !== t.last_snapshot.id;
   const tipNote = behindTip
-    ? `<span class="pill pill-dim" title="La cronologia arriva fino allo snapshot #${t.tip_snapshot_id}">HEAD at #${t.tip_snapshot_id}</span>`
+    ? `<span class="pill pill-dim" title="History goes up to snapshot #${t.tip_snapshot_id}, this table is showing an earlier restore">${iconSpan("warnTri")}#${t.tip_snapshot_id}</span>`
     : "";
   return current + tipNote;
 }
 
-/* Card per tabella invece di una riga di una grande tabella HTML: con
- * 9 colonne di informazioni diverse (stato, golden, pipeline, sidecar,
- * reader, writer, dimensioni, data, snapshot) una tabella rigida
- * costringeva ogni cella in una larghezza fissa e il contenuto andava
- * a capo rompendo l'allineamento — qui ogni informazione è un chip che
- * si dispone (e va a capo) in autonomia via flexbox, senza mai rompere
- * l'allineamento delle righe sopra/sotto perché non esistono colonne
- * condivise tra le card. */
+/* A card per table instead of a row in one big HTML table: with 9
+ * columns of different information (status, golden, pipeline,
+ * sidecar, reader, writer, size, date, snapshot) a rigid table forced
+ * every cell into a fixed width and content wrapped, breaking
+ * alignment — here every piece of information is a chip that lays
+ * itself out (and wraps) on its own via flexbox, without ever
+ * breaking the alignment of the rows above/below because there are no
+ * columns shared between cards. */
+function _importZoneHtml() {
+  return `
+    <div class="card import-zone">
+      <h2>Import table</h2>
+      <p class="subtitle">Drag one or more files here to copy them into the project — the tool decides where, no more organizing folders by hand. Multiple files together become a batch table.</p>
+      <label class="import-drop" id="import-drop" for="import-file-input">
+        ${iconSpan("box")}
+        <span>Drag here, or click to choose one or more files</span>
+      </label>
+      <input type="file" id="import-file-input" multiple hidden>
+    </div>`;
+}
+
+function _orphanedTablesHtml(names) {
+  if (!names.length) return "";
+  const rows = names.map((n) => `
+    <div class="orphaned-table-row">
+      <span class="mono">${escapeHtml(n)}</span>
+      <button data-restore-orphan="${escapeHtml(n)}">${iconSpan("refresh")}Restore</button>
+    </div>`).join("");
+  return `
+    <div class="card">
+      <h2>Deleted but restorable tables</h2>
+      <p class="subtitle">These still have saved history but are no longer on disk (deleted with 'pld rm', the web action, or by hand) — 'Restore' brings them back to the last snapshot.</p>
+      <div class="local-plugin-list">${rows}</div>
+    </div>`;
+}
+
 async function viewDashboard() {
-  const [report, status, plugins] = await Promise.all([api("/api/report"), api("/api/status"), getPlugins()]);
+  const [report, status, plugins, tracked, health] = await Promise.all([
+    api("/api/report"), api("/api/status"), getPlugins(), api("/api/log"), api("/api/health"),
+  ]);
   const stateByName = Object.fromEntries(status.tables.map((t) => [t.name, t.state]));
   const readerNames = plugins.plugins.filter((x) => x.kind === "reader").map((x) => x.name);
   const writerNames = plugins.plugins.filter((x) => x.kind === "writer").map((x) => x.name);
+  const liveNames = new Set(report.tables.map((t) => t.name));
+  const orphanedNames = tracked.tables.filter((n) => !liveNames.has(n));
 
   const pathByName = Object.fromEntries(status.tables.map((t) => [t.name, t.path]));
   const total = report.tables.length;
@@ -485,32 +569,71 @@ async function viewDashboard() {
             ${statusPill(stateByName[t.name] || "never_saved")}
             ${statusPill(t.golden_status || "missing")}
             ${raw(t.golden_snapshot_id ? goldBadge() : "")}
-            ${raw(t.pipeline_explicit ? '<span class="pill pill-warn" title="Pipeline esplicita configurata: sovrascrive reader/writer di default">pipeline</span>' : "")}
-            ${raw(t.has_sidecar ? '<span class="pill pill-dim" title="Sidecar (<nome>.config.toml) attivo per questa tabella">override</span>' : "")}
+            ${raw(t.pipeline_explicit ? '<span class="pill pill-warn" title="Explicit pipeline configured: overrides default reader/writer">pipeline</span>' : "")}
+            ${raw(t.has_sidecar ? '<span class="pill pill-dim" title="Sidecar (<name>.config.toml) active for this table">override</span>' : "")}
           </div>
-          <button class="icon-only" data-quick-build="${t.name}" title="Build rapida (usa reader/writer di default, nessun altro parametro)">${icon("play")}</button>
+          ${raw(t.output_size != null
+            ? `<a class="btn icon-only" href="/api/table/${encodeURIComponent(t.name)}/download" title="Download the last built output" download>${iconSpan("download")}</a>`
+            : "")}
+          <button class="icon-only" data-quick-build="${t.name}" title="Quick build (uses default reader/writer, no other parameter)">${icon("play")}</button>
         </div>
       </div>
       <div class="table-summary-meta">
         <span class="meta-chip meta-chip-control"><strong>Reader</strong>${raw(_defaultSelectHtml("reader", t.name, readerNames, t.reader_override, t.resolved_reader, t.pipeline_explicit))}</span>
         <span class="meta-chip meta-chip-control"><strong>Writer</strong>${raw(_defaultSelectHtml("writer", t.name, writerNames, t.writer_override, t.resolved_writer, t.pipeline_explicit))}</span>
-        <span class="meta-chip"><strong>Dimensioni</strong><span class="mono">${fmtBytes(t.source_size)} → ${fmtBytes(t.output_size)}</span></span>
-        <span class="meta-chip" title="${t.source_mtime}"><strong>Modificato</strong><span class="mono">${fmtShortTimestamp(t.source_mtime)}</span></span>
+        <span class="meta-chip"><strong>Size</strong><span class="mono">${fmtBytes(t.source_size)} → ${fmtBytes(t.output_size)}</span></span>
+        <span class="meta-chip" title="${t.source_mtime}"><strong>Modified</strong><span class="mono">${fmtShortTimestamp(t.source_mtime)}</span></span>
         <span class="meta-chip"><strong>Snapshot</strong>${raw(_snapshotChipHtml(t))}</span>
       </div>
     </div>
   `);
 
   document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Dashboard", `${total} tabelle scoperte in questo progetto.`))}
+    ${raw(pageHeader(health.project_name, `Dashboard · ${total} tables discovered in this project.`))}
+    ${raw(_importZoneHtml())}
     <div class="stat-grid">
-      <div class="stat-card"><div class="stat-label">Tabelle totali</div><div class="stat-value">${total}</div></div>
-      <div class="stat-card"><div class="stat-label">Sincronizzate</div><div class="stat-value">${synced}</div></div>
+      <div class="stat-card"><div class="stat-label">Total tables</div><div class="stat-value">${total}</div></div>
+      <div class="stat-card"><div class="stat-label">Synced</div><div class="stat-value">${synced}</div></div>
       <div class="stat-card ${mismatches ? "stat-fail" : ""}"><div class="stat-label">Golden mismatch/stale</div><div class="stat-value">${mismatches}</div></div>
-      <div class="stat-card ${dirty ? "stat-warn" : ""}"><div class="stat-label">Da salvare</div><div class="stat-value">${dirty}</div></div>
+      <div class="stat-card ${dirty ? "stat-warn" : ""}"><div class="stat-label">To save</div><div class="stat-value">${dirty}</div></div>
     </div>
-    <div class="table-summary-list">${cards.length ? cards : ['<p class="empty-state card">Nessuna tabella trovata.</p>']}</div>
+    <div class="table-summary-list">${cards.length ? cards : ['<p class="empty-state card">No table found.</p>']}</div>
+    ${raw(_orphanedTablesHtml(orphanedNames))}
   `;
+
+  const dropZone = document.getElementById("import-drop");
+  const importFileInput = document.getElementById("import-file-input");
+  ["dragenter", "dragover"].forEach((evt) => dropZone.addEventListener(evt, (ev) => {
+    ev.preventDefault();
+    dropZone.classList.add("import-drop-active");
+  }));
+  ["dragleave", "drop"].forEach((evt) => dropZone.addEventListener(evt, (ev) => {
+    ev.preventDefault();
+    dropZone.classList.remove("import-drop-active");
+  }));
+  dropZone.addEventListener("drop", (ev) => _handleImportFiles(ev.dataTransfer.files));
+  importFileInput.addEventListener("change", () => {
+    _handleImportFiles(importFileInput.files);
+    importFileInput.value = "";
+  });
+
+  document.querySelectorAll("[data-restore-orphan]").forEach((btn) => {
+    btn.onclick = async () => {
+      const name = btn.dataset.restoreOrphan;
+      btn.disabled = true;
+      try {
+        const preview = await api("/api/restore", { body: { table_name: name } });
+        const ok = await confirmDialog(`'${name}' will be recreated from the last snapshot (#${preview.snapshot_id}).`, { confirmLabel: "Restore" });
+        if (!ok) { btn.disabled = false; return; }
+        await api("/api/restore", { body: { table_name: name, snapshot_id: preview.snapshot_id, confirm: true } });
+        toast(`'${name}' restored`, "ok");
+        viewDashboard();
+      } catch (e) {
+        toastError(e);
+        btn.disabled = false;
+      }
+    };
+  });
 
   document.querySelectorAll("[data-quick-build]").forEach((btn) => {
     btn.onclick = async () => {
@@ -518,7 +641,7 @@ async function viewDashboard() {
       btn.disabled = true;
       try {
         const r = await api("/api/build", { body: { source: pathByName[table] } });
-        toast(`Build di '${table}' completata: ${r.outputs.join(", ")} (${r.was_built ? "ricostruita" : "da cache"})`, "ok");
+        toast(`Build of '${table}' completed: ${r.outputs.join(", ")} (${r.was_built ? "rebuilt" : "from cache"})`, "ok");
         viewDashboard();
       } catch (e) {
         toastError(e);
@@ -539,21 +662,21 @@ async function viewDashboard() {
         await api("/api/sidecar/" + encodeURIComponent(table), { method: "PUT", body: { defaults } });
 
         if (kind === "reader" && sel.value) {
-          // il reader scelto esiste, ma legge DAVVERO il file di questa
-          // tabella? stessa verifica di 'Valida conformità' sui plugin,
-          // qui puntata sul reader appena impostato come default.
+          // the chosen reader exists, but does it REALLY read this
+          // table's file? same check as 'Validate conformance' on
+          // plugins, here pointed at the reader just set as default.
           try {
             const v = await api("/api/source/" + encodeURIComponent(table) + "/validate", { method: "POST" });
             if (v.conforms) {
-              toast(`Reader di default per '${table}' aggiornato: legge correttamente il file`, "ok");
+              toast(`Default reader for '${table}' updated: reads the file correctly`, "ok");
             } else {
-              toast(`Reader impostato, ma '${v.reader}' non riesce a leggere il sorgente di '${table}'`, "warn", v.issues.map((i) => i.detail).join("; "));
+              toast(`Reader set, but '${v.reader}' can't read the source of '${table}'`, "warn", v.issues.map((i) => i.detail).join("; "));
             }
           } catch (ve) {
-            toast(`Reader di default per '${table}' aggiornato (verifica non riuscita: ${ve.message})`, "warn");
+            toast(`Default reader for '${table}' updated (verification failed: ${ve.message})`, "warn");
           }
         } else {
-          toast(`${kind === "reader" ? "Reader" : "Writer"} di default per '${table}' aggiornato`, "ok");
+          toast(`Default ${kind === "reader" ? "reader" : "writer"} for '${table}' updated`, "ok");
         }
         viewDashboard();
       } catch (e) {
@@ -564,7 +687,54 @@ async function viewDashboard() {
   });
 }
 
-/* ---------- dettaglio tabella ---------- */
+/* One or more files dragged/chosen in the dashboard's drop zone — a
+ * single file asks for the table name (default: filename without
+ * extension), multiple files together ask for the name of the new
+ * batch table that will contain all of them (same choice as the CLI:
+ * 'pld import <path> [--as name]' vs 'pld import <path...> --new-batch
+ * name', see cli.py import_cmd). A name that already exists offers to
+ * overwrite instead of silently refusing. */
+async function _handleImportFiles(fileList) {
+  const files = Array.from(fileList);
+  if (!files.length) return;
+
+  const formData = new FormData();
+  if (files.length === 1) {
+    const defaultName = files[0].name.replace(/\.[^.]+$/, "");
+    const name = await promptDialog(`Table name for '${files[0].name}'?`, { value: defaultName, confirmLabel: "Import" });
+    if (name === null) return;
+    formData.append("file", files[0]);
+    if (name !== defaultName) formData.append("as_name", name);
+  } else {
+    const batchName = await promptDialog(`Name of the new batch table for these ${files.length} files?`, { placeholder: "batch_name", confirmLabel: "Import" });
+    if (!batchName) return;
+    files.forEach((f) => formData.append("file", f));
+    formData.append("new_batch", batchName);
+  }
+
+  try {
+    const r = await apiUpload("/api/table/import", formData);
+    toast(`Import completed: ${r.kind === "batch" ? r.name : r.path}`, "ok");
+    viewDashboard();
+  } catch (e) {
+    if (e.data && e.data.error === "TableAlreadyExistsError" && files.length === 1) {
+      const ok = await confirmDialog(`${e.message}. Do you want to overwrite its content?`, { danger: true, confirmLabel: "Overwrite" });
+      if (!ok) return;
+      formData.append("overwrite", "true");
+      try {
+        const r2 = await apiUpload("/api/table/import", formData);
+        toast(`'${r2.path}' updated`, "ok");
+        viewDashboard();
+      } catch (e2) {
+        toastError(e2);
+      }
+      return;
+    }
+    toastError(e);
+  }
+}
+
+/* ---------- table detail ---------- */
 
 async function viewTable(name) {
   const content = document.getElementById("content");
@@ -588,28 +758,33 @@ async function viewTable(name) {
   const historyBody = `
     <div id="golden-summary" style="margin-bottom:14px"></div>
     <div class="field">
-      <label>Messaggio di commit</label>
-      <textarea id="commit-message" class="commit-message-input mono" rows="3" maxlength="${COMMIT_MESSAGE_MAX_LENGTH}" placeholder="Descrivi cosa è cambiato…"></textarea>
+      <label>Commit message</label>
+      <textarea id="commit-message" class="commit-message-input mono" rows="3" maxlength="${COMMIT_MESSAGE_MAX_LENGTH}" placeholder="Describe what changed…"></textarea>
       <div class="field-hint"><span id="commit-message-count">0</span>/${COMMIT_MESSAGE_MAX_LENGTH}</div>
     </div>
     <div class="toggle-chip-row">
-      <label class="toggle-chip"><input type="checkbox" id="commit-golden"><span>${iconSpan("star")}Imposta anche come golden</span></label>
+      <label class="toggle-chip"><input type="checkbox" id="commit-golden"><span>${iconSpan("star")}Also set as golden</span></label>
     </div>
     <div class="build-actions">
-      <button id="btn-commit">${iconSpan("save")}Commit modifiche</button>
+      <button id="btn-commit">${iconSpan("save")}Commit changes</button>
     </div>
     <div id="history-result"></div>
   `;
 
+  const headerActionsHtml = `
+    <a class="btn icon-only" id="btn-download-output" href="/api/table/${encodeURIComponent(name)}/download" title="Download the last built output" download hidden>${iconSpan("download")}</a>
+    <button class="danger" id="btn-delete-table">${iconSpan("trash")}Delete table</button>
+  `;
+
   content.innerHTML = render`
     <div class="breadcrumb"><a class="link" href="#/">← Dashboard</a></div>
-    ${raw(pageHeader(name))}
+    ${raw(pageHeader(name, undefined, headerActionsHtml))}
     <div class="table-detail-layout">
       <div class="table-detail-main">
         ${raw(detailsCard("Build", buildBody, { open: true }))}
-        ${raw(detailsCard("Contenuto sorgente", '<div id="view-result"><p class="empty-state">—</p></div>', { open: false }))}
+        ${raw(detailsCard("Source content", '<div id="view-result"><p class="empty-state">—</p></div>', { open: false }))}
         ${raw(detailsCard("Pipeline", '<div id="pipeline-result"></div>', { open: true }))}
-        ${raw(detailsCard("Configurazione specifica di questa tabella (sidecar)", '<div id="sidecar-result"></div>', { open: false }))}
+        ${raw(detailsCard("Table-specific config (sidecar)", '<div id="sidecar-result"></div>', { open: false }))}
       </div>
       <div class="table-detail-side">
         ${raw(pinnedCard("History", historyBody))}
@@ -624,13 +799,15 @@ async function viewTable(name) {
     attachAutocomplete(document.getElementById("f-to"), () => writerNames);
   }).catch(() => {});
 
-  // I placeholder di --from/--to riflettono il reader/writer di default
-  // già impostato per questa tabella (dashboard o sidecar) — lasciare il
-  // campo vuoto userà davvero quel default, scriverci qualcosa lo
-  // sovrascrive solo per QUESTA build, senza toccare il default salvato.
+  // The --from/--to placeholders reflect the default reader/writer
+  // already set for this table (dashboard or sidecar) — leaving the
+  // field empty will really use that default, writing something in it
+  // only overrides it for THIS build, without touching the saved default.
   api("/api/report").then((report) => {
     const row = report.tables.find((t) => t.name === name);
-    if (!row || row.pipeline_explicit) return;
+    if (!row) return;
+    if (row.output_size != null) document.getElementById("btn-download-output").hidden = false;
+    if (row.pipeline_explicit) return;
     if (row.resolved_reader) document.getElementById("f-from").placeholder = row.resolved_reader;
     if (row.resolved_writer) document.getElementById("f-to").placeholder = row.resolved_writer;
   }).catch(() => {});
@@ -643,8 +820,9 @@ async function viewTable(name) {
     try {
       const r = await api("/api/build", { body });
       const status = r.dry_run
-        ? (r.was_built ? "dry-run: verrebbe ricostruita, nessun file scritto" : "dry-run: userebbe la cache, nessun file scritto")
-        : (r.was_built ? "ricostruito" : "da cache");
+        ? (r.was_built ? "dry-run: would be rebuilt, no file written" : "dry-run: would use the cache, no file written")
+        : (r.was_built ? "rebuilt" : "from cache");
+      if (!r.dry_run) document.getElementById("btn-download-output").hidden = false;
       toast(`Build ok: ${r.outputs.join(", ")} (${status})`, "ok");
       loadPipelineBuilder(name);
     } catch (e) {
@@ -657,12 +835,12 @@ async function viewTable(name) {
   commitMessageEl.addEventListener("input", () => { commitMessageCountEl.textContent = commitMessageEl.value.length; });
 
   document.getElementById("btn-commit").onclick = async () => {
-    const message = val("commit-message") || `da web UI: ${name}`;
+    const message = val("commit-message") || `from web UI: ${name}`;
     const setAsGolden = chk("commit-golden");
     try {
       const r = await api("/api/commit", { body: { message, only: [name] } });
       if (!r.committed.length) {
-        toast("Niente da salvare", "ok");
+        toast("Nothing to save", "ok");
         return;
       }
       const snapshotId = r.committed[0].snapshot_id;
@@ -672,18 +850,35 @@ async function viewTable(name) {
       }
       if (missing.length) {
         toast(
-          `Snapshot #${snapshotId} salvato, ma la pipeline è incompleta${setAsGolden ? " (★ golden)" : ""}`,
+          `Snapshot #${snapshotId} saved, but the pipeline is incomplete${setAsGolden ? " (★ golden)" : ""}`,
           "warn",
-          `Manca: ${missing.join(", ")} — un writer del gruppo non ha prodotto output`
+          `Missing: ${missing.join(", ")} — a writer in the group produced no output`
         );
       } else {
-        toast(`Snapshot #${snapshotId} salvato${setAsGolden ? " (★ golden)" : ""}`, "ok");
+        toast(`Snapshot #${snapshotId} saved${setAsGolden ? " (★ golden)" : ""}`, "ok");
       }
       commitMessageEl.value = "";
       commitMessageCountEl.textContent = "0";
       document.getElementById("commit-golden").checked = false;
       loadHistory(name);
       loadGoldenSummary(name);
+    } catch (e) {
+      toastError(e);
+    }
+  };
+
+  document.getElementById("btn-delete-table").onclick = async () => {
+    try {
+      const preview = await api("/api/table/delete", { body: { table_name: name } });
+      const lines = [`The following will be deleted: ${preview.sources.join(", ")} and its output.`];
+      lines.push("History stays intact and browsable in 'History' — you can restore it from the Dashboard.");
+      if (preview.is_batch) lines.push("Its [[batch_table]] will also be removed from table-tool.toml.");
+      if (preview.dirty) lines.push("⚠ This table has unsaved changes: they will be lost forever.");
+      const ok = await confirmDialog(lines.join(" "), { danger: true, confirmLabel: "Delete" });
+      if (!ok) return;
+      await api("/api/table/delete", { body: { table_name: name, confirm: true } });
+      toast(`'${name}' deleted (source + output)`, "ok");
+      location.hash = "#/";
     } catch (e) {
       toastError(e);
     }
@@ -699,13 +894,13 @@ let _tableSources = null;
 function findSourcePath(name) {
   return (_tableSources && _tableSources[name]) || name;
 }
-/* Popola _tableSources (nome tabella -> path assoluto) UNA VOLTA per
- * pagina, PRIMA che qualunque handler possa averne bisogno (Build in
- * primis) — deve essere chiamata da viewTable() stessa, non solo dai
- * rami che per caso passano da /api/status (es. il fallback esadecimale
- * dei sorgenti non testuali): altrimenti il Build su una tabella
- * editabile (il caso comune) userebbe il solo nome tabella invece del
- * path, e il backend risponderebbe 'file non trovato'. */
+/* Populates _tableSources (table name -> absolute path) ONCE per page,
+ * BEFORE any handler might need it (Build first and foremost) — must
+ * be called from viewTable() itself, not just from the branches that
+ * happen to go through /api/status (e.g. the hex fallback for
+ * non-text sources): otherwise Build on an editable table (the common
+ * case) would use just the table name instead of the path, and the
+ * backend would respond 'file not found'. */
 async function ensureTableSources() {
   if (_tableSources) return;
   const status = await api("/api/status");
@@ -718,11 +913,11 @@ async function getPlugins() {
   return _pluginsCache;
 }
 
-/* Da invalidare ogni volta che un plugin locale viene creato, salvato
- * o eliminato: senza questo, un plugin appena aggiunto resterebbe
- * invisibile (dashboard, select reader/writer, ecc.) finché non si
- * ricarica manualmente la pagina — il router rifà comunque il fetch a
- * ogni navigazione, basta smettere di servire dati vecchi da qui. */
+/* Must be invalidated every time a local plugin is created, saved, or
+ * deleted: without this, a just-added plugin would stay invisible
+ * (dashboard, reader/writer selects, etc.) until the page is manually
+ * reloaded — the router re-fetches on every navigation anyway, this
+ * just has to stop serving stale data. */
 function invalidatePluginsCache() {
   _pluginsCache = null;
 }
@@ -738,14 +933,13 @@ async function hexDumpHtml(name) {
     const comment = (ir.comments.find((c) => c.offset === i) || {}).text || "";
     hexLines.push(render`<div class="hex-chunk"><span class="offset">0x${i.toString(16).padStart(4, "0").toUpperCase()}</span><span>${hex}</span><span style="color:var(--text-dim)">${comment}</span></div>`);
   }
-  return `<div class="log">${hexLines.join("") || '<span class="log-empty">vuoto</span>'}</div>`;
+  return `<div class="log">${hexLines.join("") || '<span class="log-empty">empty</span>'}</div>`;
 }
 
-/* Editor del contenuto sorgente direttamente in pagina: solo per
- * formati testuali (CSV, testo grezzo, C, ...) — un file che non
- * decodifica come UTF-8 (blob binario) resta di sola lettura, mostrato
- * come esadecimale come prima, con un avviso invece che un editor che
- * lo corromperebbe al primo salvataggio. */
+/* Source content editor directly on the page: text formats only (CSV,
+ * raw text, C, ...) — a file that doesn't decode as UTF-8 (binary
+ * blob) stays read-only, shown as hex like before, with a warning
+ * instead of an editor that would corrupt it on first save. */
 async function loadSource(name) {
   const el = document.getElementById("view-result");
   try {
@@ -754,8 +948,8 @@ async function loadSource(name) {
       el.innerHTML = render`
         <textarea id="source-editor" class="source-editor mono" spellcheck="false" rows="14">${info.content}</textarea>
         <div class="source-editor-actions">
-          <button class="primary" id="btn-save-source">${icon("save")}Salva sorgente</button>
-          <button id="btn-validate-source">${icon("check")}Valida con reader di default</button>
+          <button class="primary" id="btn-save-source">${icon("save")}Save source</button>
+          <button id="btn-validate-source">${icon("check")}Validate with default reader</button>
           <span class="subtitle mono">${info.path}</span>
         </div>
         <div id="source-validate-result"></div>
@@ -765,10 +959,10 @@ async function loadSource(name) {
         try {
           const r = await api("/api/source/" + encodeURIComponent(name) + "/validate", { method: "POST" });
           if (r.conforms) {
-            resultEl.innerHTML = render`<div class="result-line">${statusPill("ok")}<span>conforme al reader '${r.reader}'</span></div>`;
+            resultEl.innerHTML = render`<div class="result-line">${statusPill("ok")}<span>conforms to reader '${r.reader}'</span></div>`;
           } else {
             const items = r.issues.map((i) => render`<li><strong>${i.check}</strong>: ${i.detail}</li>`);
-            resultEl.innerHTML = render`<div class="result-line">${statusPill("fail")}<span>non conforme al reader '${r.reader}'</span><ul>${items}</ul></div>`;
+            resultEl.innerHTML = render`<div class="result-line">${statusPill("fail")}<span>doesn't conform to reader '${r.reader}'</span><ul>${items}</ul></div>`;
           }
         } catch (e) {
           toastError(e);
@@ -777,7 +971,7 @@ async function loadSource(name) {
       document.getElementById("btn-save-source").onclick = async () => {
         try {
           await api("/api/source/" + encodeURIComponent(name), { method: "PUT", body: { content: document.getElementById("source-editor").value } });
-          toast("Sorgente salvata", "ok");
+          toast("Source saved", "ok");
           runValidate();
         } catch (e) {
           toastError(e);
@@ -787,7 +981,7 @@ async function loadSource(name) {
     } else {
       const hex = await hexDumpHtml(name);
       el.innerHTML = render`
-        <div class="result-line">${statusPill("warn")}<span>${info.reason} — non modificabile da qui, solo visualizzazione esadecimale.</span></div>
+        <div class="result-line">${statusPill("warn")}<span>${info.reason} — not editable from here, hex view only.</span></div>
         ${raw(hex)}
       `;
     }
@@ -803,13 +997,13 @@ function _stageToRawJs(stage) {
   return out;
 }
 
-/* Builder visuale della pipeline: mostra la risoluzione attuale
- * (implicita da --from/--to, o esplicita da sidecar) come lista di
- * stage modificabile — riordino/aggiunta/rimozione lato client, ma
- * NESSUNA regola di alternanza duplicata qui: 'Salva' manda la lista
- * grezza a PUT /api/pipeline/{table}, che valida con la stessa
- * PipelineSpec.from_raw_stages() del core e risponde con
- * 'stage_index' sull'errore — è quello che evidenzia la card incriminata. */
+/* Visual pipeline builder: shows the current resolution (implicit from
+ * --from/--to, or explicit from sidecar) as an editable stage list —
+ * reordering/adding/removing client-side, but NO alternation rule
+ * duplicated here: 'Save' sends the raw list to PUT
+ * /api/pipeline/{table}, which validates with the same core
+ * PipelineSpec.from_raw_stages() and responds with 'stage_index' on
+ * error — that's what highlights the offending card. */
 async function loadPipelineBuilder(name) {
   const el = document.getElementById("pipeline-result");
   try {
@@ -838,12 +1032,12 @@ async function loadPipelineBuilder(name) {
           fields = `<select data-field="name" data-idx="${i}">${optionList(names, s.name)}</select>`;
         } else {
           fields = `
-            <input type="text" data-field="command" data-idx="${i}" value="${escapeHtml(s.command || "")}" placeholder="comando esterno, es. objcopy {input} {output}" style="flex:1;min-width:220px">
+            <input type="text" data-field="command" data-idx="${i}" value="${escapeHtml(s.command || "")}" placeholder="external command, e.g. objcopy {input} {output}" style="flex:1;min-width:220px">
             <select data-field="on_error" data-idx="${i}">
               <option value="fail" ${s.on_error !== "warn" ? "selected" : ""}>on_error: fail</option>
               <option value="warn" ${s.on_error === "warn" ? "selected" : ""}>on_error: warn</option>
             </select>
-            <input type="text" data-field="output_extension" data-idx="${i}" value="${escapeHtml(s.output_extension || "")}" placeholder="estensione se finale, es. .signed.bin" style="width:200px">
+            <input type="text" data-field="output_extension" data-idx="${i}" value="${escapeHtml(s.output_extension || "")}" placeholder="extension if final, e.g. .signed.bin" style="width:200px">
           `;
         }
         return `
@@ -851,9 +1045,9 @@ async function loadPipelineBuilder(name) {
             <span class="stage-badge ${badgeCls}">${s.type}</span>
             <div class="stage-fields">${fields}</div>
             <div class="stage-actions">
-              <button type="button" class="icon-only ghost" data-move="up" data-idx="${i}" ${i === 0 ? "disabled" : ""} aria-label="Sposta su">${iconSpan("up")}</button>
-              <button type="button" class="icon-only ghost" data-move="down" data-idx="${i}" ${i === stages.length - 1 ? "disabled" : ""} aria-label="Sposta giù">${iconSpan("down")}</button>
-              <button type="button" class="icon-only ghost danger" data-remove="${i}" aria-label="Rimuovi">${iconSpan("trash")}</button>
+              <button type="button" class="icon-only ghost" data-move="up" data-idx="${i}" ${i === 0 ? "disabled" : ""} aria-label="Move up">${iconSpan("up")}</button>
+              <button type="button" class="icon-only ghost" data-move="down" data-idx="${i}" ${i === stages.length - 1 ? "disabled" : ""} aria-label="Move down">${iconSpan("down")}</button>
+              <button type="button" class="icon-only ghost danger" data-remove="${i}" aria-label="Remove">${iconSpan("trash")}</button>
             </div>
           </div>
           ${hasError ? `<div class="stage-error-msg">${escapeHtml(lastError.message)}</div>` : ""}
@@ -861,33 +1055,32 @@ async function loadPipelineBuilder(name) {
       }).join("");
 
       el.innerHTML = `
-        <div class="stage-list">${cards || '<p class="empty-state">Nessuno stage — aggiungine uno per iniziare.</p>'}</div>
+        <div class="stage-list">${cards || '<p class="empty-state">No stage — add one to get started.</p>'}</div>
         <div class="add-stage-row">
           <select id="pb-add-type">
             <option value="reader">reader</option>
             <option value="writer">writer</option>
             <option value="exec">exec</option>
           </select>
-          <button type="button" id="pb-add"><span class="icon">${ICONS.plus}</span>Aggiungi stage</button>
+          <button type="button" id="pb-add"><span class="icon">${ICONS.plus}</span>Add stage</button>
           <span style="flex:1"></span>
-          <button type="button" id="pb-reset">${iconSpan("refresh")}Ripristina implicita</button>
-          <button type="button" class="primary" id="pb-save">${iconSpan("save")}Salva pipeline</button>
+          <button type="button" id="pb-reset">${iconSpan("refresh")}Restore implicit</button>
+          <button type="button" class="primary" id="pb-save">${iconSpan("save")}Save pipeline</button>
         </div>
         <div class="pipeline-output-row">
           <span class="pipeline-output-label">Output</span>
           ${p.outputs.length
             ? p.outputs.map((o) => `<span class="pill pill-dim mono" title="${escapeHtml(o)}">${escapeHtml(baseName(o))}</span>`).join("")
             : '<span class="subtitle">—</span>'}
-          ${p.explicit ? '<span class="pill pill-warn">esplicita (sidecar)</span>' : '<span class="pill pill-dim">automatica</span>'}
+          ${p.explicit ? '<span class="pill pill-warn">explicit (sidecar)</span>' : '<span class="pill pill-dim">automatic</span>'}
         </div>
       `;
 
-      // Ogni modifica locale invalida l'errore dell'ultimo tentativo di
-      // salvataggio: sia perché gli indici degli stage possono essere
-      // cambiati (l'evidenziazione finirebbe sullo stage sbagliato),
-      // sia perché l'utente potrebbe aver già corretto il problema —
-      // il segnale d'errore deve sparire subito, non restare appiccicato
-      // finché non si preme di nuovo Salva.
+      // Every local change invalidates the last save attempt's error:
+      // both because stage indices might have changed (the highlight
+      // would land on the wrong stage), and because the user may have
+      // already fixed the problem — the error signal must disappear
+      // right away, not stay stuck until Save is pressed again.
       el.querySelectorAll("[data-move]").forEach((btn) => {
         btn.onclick = () => {
           const i = Number(btn.getAttribute("data-idx"));
@@ -928,7 +1121,7 @@ async function loadPipelineBuilder(name) {
       document.getElementById("pb-save").onclick = async () => {
         try {
           await api("/api/pipeline/" + encodeURIComponent(name), { method: "PUT", body: { stages: stages.map(_stageToRawJs) } });
-          toast("Pipeline salvata", "ok");
+          toast("Pipeline saved", "ok");
           loadPipelineBuilder(name);
         } catch (e) {
           lastError = { stage_index: e.data && typeof e.data.stage_index === "number" ? e.data.stage_index : -1, message: e.message };
@@ -938,11 +1131,11 @@ async function loadPipelineBuilder(name) {
       };
 
       document.getElementById("pb-reset").onclick = async () => {
-        const ok = await confirmDialog("Tornare alla risoluzione automatica da --from/--to? La pipeline esplicita salvata nel sidecar verrà rimossa.", { danger: true, confirmLabel: "Ripristina" });
+        const ok = await confirmDialog("Go back to automatic resolution from --from/--to? The explicit pipeline saved in the sidecar will be removed.", { danger: true, confirmLabel: "Restore" });
         if (!ok) return;
         try {
           await api("/api/pipeline/" + encodeURIComponent(name), { method: "DELETE" });
-          toast("Pipeline ripristinata alla risoluzione automatica", "ok");
+          toast("Pipeline restored to automatic resolution", "ok");
           loadPipelineBuilder(name);
         } catch (e) {
           toastError(e);
@@ -956,10 +1149,10 @@ async function loadPipelineBuilder(name) {
   }
 }
 
-/* Card sidecar: uno switch per campo (schema condiviso con la config
- * globale, vedi /api/config 'schema') — solo i campi con lo switch
- * attivo finiscono nel PUT, coerente col modello "il sidecar
- * sovrascrive solo le chiavi che dichiara" di core/config.py. */
+/* Sidecar card: one switch per field (schema shared with the global
+ * config, see /api/config 'schema') — only fields with the switch on
+ * end up in the PUT, consistent with core/config.py's "the sidecar
+ * only overrides the keys it declares" model. */
 async function loadSidecarCard(name) {
   const el = document.getElementById("sidecar-result");
   try {
@@ -974,7 +1167,7 @@ async function loadSidecarCard(name) {
       const value = has ? current[f.key] : undefined;
       let inputHtml;
       if (f.type === "list") {
-        inputHtml = `<input type="text" id="${id}" ${has ? "" : "disabled"} value="${escapeHtml((value || []).join(", "))}" placeholder="separati da virgola">`;
+        inputHtml = `<input type="text" id="${id}" ${has ? "" : "disabled"} value="${escapeHtml((value || []).join(", "))}" placeholder="comma-separated">`;
       } else if (f.key === "byte_order") {
         inputHtml = `<select id="${id}" ${has ? "" : "disabled"}><option value="little" ${value !== "big" ? "selected" : ""}>little</option><option value="big" ${value === "big" ? "selected" : ""}>big</option></select>`;
       } else {
@@ -988,14 +1181,14 @@ async function loadSidecarCard(name) {
     const hasSidecar = Object.keys(sidecar).length > 0;
 
     el.innerHTML = `
-      <p class="subtitle">Solo i campi selezionati sovrascrivono la config globale per questa tabella.</p>
+      <p class="subtitle">Only the selected fields override the global config for this table.</p>
       <h2 style="margin-top:16px">Defaults</h2>
       ${defaultsRows}
       <h2>Toolchain</h2>
       ${toolchainRows}
       <div class="toolbar" style="margin-top:14px">
-        <button type="button" class="primary" id="sc-save">${iconSpan("save")}Salva sidecar</button>
-        <button type="button" class="danger" id="sc-delete" ${hasSidecar ? "" : "disabled"}>${iconSpan("trash")}Elimina sidecar</button>
+        <button type="button" class="primary" id="sc-save">${iconSpan("save")}Save sidecar</button>
+        <button type="button" class="danger" id="sc-delete" ${hasSidecar ? "" : "disabled"}>${iconSpan("trash")}Delete sidecar</button>
       </div>
     `;
 
@@ -1018,7 +1211,7 @@ async function loadSidecarCard(name) {
       });
       try {
         await api("/api/sidecar/" + encodeURIComponent(name), { method: "PUT", body: { defaults, toolchain } });
-        toast("Sidecar salvato", "ok");
+        toast("Sidecar saved", "ok");
         loadSidecarCard(name);
       } catch (e) {
         toastError(e);
@@ -1026,11 +1219,11 @@ async function loadSidecarCard(name) {
     };
 
     document.getElementById("sc-delete").onclick = async () => {
-      const ok = await confirmDialog(`Eliminare la config specifica di '${name}'? Tornerà a usare solo la config globale.`, { danger: true, confirmLabel: "Elimina" });
+      const ok = await confirmDialog(`Delete the specific config for '${name}'? It will go back to using only the global config.`, { danger: true, confirmLabel: "Delete" });
       if (!ok) return;
       try {
         await api("/api/sidecar/" + encodeURIComponent(name), { method: "DELETE" });
-        toast("Sidecar eliminato", "ok");
+        toast("Sidecar deleted", "ok");
         loadSidecarCard(name);
       } catch (e) {
         toastError(e);
@@ -1046,29 +1239,29 @@ function goldBadge() {
 }
 
 function currentBadge() {
-  return '<span class="pill pill-current">● attuale</span>';
+  return '<span class="pill pill-current">● current</span>';
 }
 
-/* Come è stato costruito QUESTO snapshot — reader/writer sono dedotti
- * a posteriori dai file realmente committati (accurati anche con un
- * writer ad-hoc --to mai scritto in config), non da "cosa risolverebbe
- * la config ora". Per una pipeline esplicita non riassumiamo gli stage
- * in riga (fuorviante/incompleto per un fan-out o stage exec) — un
- * badge con hover (title nativo, "tipo hover") mostra la sequenza
- * completa solo quando serve davvero. */
+/* How THIS snapshot was built — reader/writer are inferred after the
+ * fact from the files actually committed (accurate even with an
+ * ad-hoc --to writer never written to config), not from "what the
+ * config would resolve now". For an explicit pipeline we don't
+ * summarize the stages inline (misleading/incomplete for a fan-out or
+ * exec stage) — a badge with hover (native title, "hover type") shows
+ * the full sequence only when it's really needed. */
 function _snapshotBuildInfoHtml(s) {
   if (s.pipeline_explicit) {
-    const detail = s.pipeline_description || "pipeline esplicita";
-    return `<span class="pill pill-dim snapshot-pipeline-badge" title="${escapeHtml(detail)}">${iconSpan("box")}pipeline esplicita</span>`;
+    const detail = s.pipeline_description || "explicit pipeline";
+    return `<span class="pill pill-dim snapshot-pipeline-badge" title="${escapeHtml(detail)}">${iconSpan("box")}explicit pipeline</span>`;
   }
   const bits = [s.reader, (s.writers && s.writers.length) ? s.writers.join(" + ") : null].filter(Boolean);
   return bits.length ? `<div class="snapshot-build-info mono">${escapeHtml(bits.join(" → "))}</div>` : "";
 }
 
-/* Riepilogo golden sopra la form di commit: stato a 4 valori (match/
- * mismatch/stale/missing) — 'stale' è il caso nuovo, il sorgente è
- * cambiato dopo il golden quindi il confronto sull'output non è più
- * affidabile, distinto da un vero mismatch. */
+/* Golden summary above the commit form: 4-value status (match/
+ * mismatch/stale/missing) — 'stale' is the new case, the source
+ * changed after golden so the output comparison is no longer
+ * reliable, distinct from a real mismatch. */
 async function loadGoldenSummary(name) {
   const el = document.getElementById("golden-summary");
   try {
@@ -1078,17 +1271,17 @@ async function loadGoldenSummary(name) {
         <strong>Golden:</strong>
         ${statusPill(g.status)}
         ${raw(g.golden_snapshot_id ? `<span class="subtitle">snapshot #${g.golden_snapshot_id}</span>` : "")}
-        ${raw(g.golden_snapshot_id ? '<button class="ghost" id="btn-golden-clear">Rimuovi</button>' : "")}
+        ${raw(g.golden_snapshot_id ? '<button class="ghost" id="btn-golden-clear">Remove</button>' : "")}
       </div>
     `;
     const clearBtn = document.getElementById("btn-golden-clear");
     if (clearBtn) {
       clearBtn.onclick = async () => {
-        const ok = await confirmDialog(`Rimuovere il riferimento golden per '${name}'? Gli snapshot restano, solo il puntatore viene tolto.`, { danger: true, confirmLabel: "Rimuovi" });
+        const ok = await confirmDialog(`Remove the golden reference for '${name}'? Snapshots stay, only the pointer is removed.`, { danger: true, confirmLabel: "Remove" });
         if (!ok) return;
         try {
           await api("/api/golden/" + encodeURIComponent(name), { method: "DELETE" });
-          toast("Golden rimosso", "ok");
+          toast("Golden removed", "ok");
           loadGoldenSummary(name);
           loadHistory(name);
         } catch (e) {
@@ -1118,28 +1311,28 @@ function _snapshotItemHtml(s, name, goldenId, headId) {
       ${raw(_snapshotBuildInfoHtml(s))}
       <div class="snapshot-item-outputs mono">${s.outputs.length ? s.outputs.join(", ") : "—"}</div>
       ${raw(isIncomplete
-        ? `<div class="snapshot-warning">${iconSpan("warnTri")}pipeline incompleta — manca ${escapeHtml(s.missing_outputs.join(", "))}</div>`
+        ? `<div class="snapshot-warning">${iconSpan("warnTri")}incomplete pipeline — missing ${escapeHtml(s.missing_outputs.join(", "))}</div>`
         : "")}
       <div class="table-actions">
         ${raw(isCurrent
-          ? `<button disabled title="È già lo snapshot attuale">Restore</button>`
+          ? `<button disabled title="Already the current snapshot">Restore</button>`
           : `<button data-restore="${s.id}">Restore</button>`)}
         ${raw(isGolden ? "" : `<button class="ghost" data-set-golden="${s.id}">${iconSpan("star")}Golden</button>`)}
-        <a class="btn" href="/api/log/${encodeURIComponent(name)}/${s.id}/download" download>${icon("save")}Scarica</a>
+        <a class="btn" href="/api/log/${encodeURIComponent(name)}/${s.id}/download" download>${icon("save")}Download</a>
       </div>
     </div>`;
 }
 
 function _loadMoreButtonHtml(offset, remaining) {
-  return `<button class="ghost" id="btn-load-more-snapshots" data-offset="${offset}">${iconSpan("down")}Carica altri (${remaining} rimanenti)</button>`;
+  return `<button class="ghost" id="btn-load-more-snapshots" data-offset="${offset}">${iconSpan("down")}Load more (${remaining} remaining)</button>`;
 }
 
-/* History è caricata a pagine (vedi HISTORY_PAGE_SIZE): con molti
- * snapshot una singola tabella renderebbe la pagina lunghissima e
- * sbilanciata rispetto alla colonna principale (History è agganciata
- * a fianco, vedi .table-detail-side). Un solo listener delegato su
- * #history-result gestisce restore/golden/carica-altri: aggiungere
- * pagine successive non richiede ri-agganciare handler sui nuovi nodi. */
+/* History is loaded in pages (see HISTORY_PAGE_SIZE): with many
+ * snapshots a single table would make the page very long and
+ * unbalanced compared to the main column (History is docked to the
+ * side, see .table-detail-side). A single delegated listener on
+ * #history-result handles restore/golden/load-more: adding further
+ * pages doesn't require re-attaching handlers to the new nodes. */
 async function loadHistory(name) {
   const el = document.getElementById("history-result");
   try {
@@ -1148,7 +1341,7 @@ async function loadHistory(name) {
       api("/api/golden/" + encodeURIComponent(name)),
     ]);
     if (!log.snapshots.length) {
-      el.innerHTML = '<p class="empty-state">Nessuno snapshot ancora.</p>';
+      el.innerHTML = '<p class="empty-state">No snapshot yet.</p>';
       return;
     }
     const goldenId = golden.golden_snapshot_id;
@@ -1164,11 +1357,11 @@ async function loadHistory(name) {
         const snapshotId = Number(restoreBtn.getAttribute("data-restore"));
         const preview = await api("/api/restore", { body: { table_name: name, snapshot_id: snapshotId } });
         const previewLabel = preview.source || preview.sources.join(", ");
-        const ok = await confirmDialog(`Sovrascrivere ${previewLabel} con lo stato dello snapshot #${snapshotId}?`, { danger: true, confirmLabel: "Sovrascrivi" });
+        const ok = await confirmDialog(`Overwrite ${previewLabel} with the state of snapshot #${snapshotId}?`, { danger: true, confirmLabel: "Overwrite" });
         if (!ok) return;
         const r = await api("/api/restore", { body: { table_name: name, snapshot_id: snapshotId, confirm: true } });
-        const removedNote = r.removed.length ? ` — rimossi (non facevano parte dello snapshot): ${r.removed.join(", ")}` : "";
-        toast(`Ripristinati: ${r.written.join(", ")}${removedNote}`, "ok");
+        const removedNote = r.removed.length ? ` — removed (weren't part of the snapshot): ${r.removed.join(", ")}` : "";
+        toast(`Restored: ${r.written.join(", ")}${removedNote}`, "ok");
         loadSource(name);
         loadPipelineBuilder(name);
         loadHistory(name);
@@ -1181,7 +1374,7 @@ async function loadHistory(name) {
         const snapshotId = Number(goldenBtn.getAttribute("data-set-golden"));
         try {
           await api("/api/golden/" + encodeURIComponent(name), { method: "PUT", body: { snapshot_id: snapshotId } });
-          toast(`Golden impostato allo snapshot #${snapshotId}`, "ok");
+          toast(`Golden set to snapshot #${snapshotId}`, "ok");
           loadHistory(name);
           loadGoldenSummary(name);
         } catch (e) {
@@ -1223,7 +1416,7 @@ function chk(id) { return document.getElementById(id).checked; }
 
 function viewBuildAll() {
   document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Build all", "Compila tutte le tabelle scoperte sotto la root del progetto."))}
+    ${raw(pageHeader("Build all", "Builds every table discovered under the project root."))}
     <div class="card">
       <div class="field-row">
         <div class="field"><label>Writer (--to)</label><div class="autocomplete-wrap"><input type="text" id="ba-to" placeholder="bin"></div></div>
@@ -1235,10 +1428,10 @@ function viewBuildAll() {
         <label class="toggle-chip"><input type="checkbox" id="ba-golden"><span>--check-golden</span></label>
       </div>
       <div class="build-actions">
-        <button class="primary" id="ba-start">${icon("play")}Avvia build-all</button>
+        <button class="primary" id="ba-start">${icon("play")}Start build-all</button>
       </div>
       <h2>Log</h2>
-      <div class="log" id="ba-log"><span class="log-empty">In attesa…</span></div>
+      <div class="log" id="ba-log"><span class="log-empty">Waiting…</span></div>
     </div>
   `;
 
@@ -1281,7 +1474,7 @@ function viewBuildAll() {
     });
     es.addEventListener("summary", (ev) => {
       const d = JSON.parse(ev.data);
-      appendLine(`— completato: ${d.built} costruite, ${d.cached} da cache, ${d.golden_mismatch} golden mismatch, ${d.errors} errori`);
+      appendLine(`— done: ${d.built} built, ${d.cached} from cache, ${d.golden_mismatch} golden mismatch, ${d.errors} errors`);
       es.close();
       btn.disabled = false;
     });
@@ -1296,7 +1489,7 @@ function viewBuildAll() {
   };
 }
 
-/* ---------- plugin ---------- */
+/* ---------- plugins ---------- */
 
 const PLUGIN_KIND_META = {
   reader: { title: "Reader", icon: "book" },
@@ -1313,30 +1506,30 @@ function _pluginCardHtml(p) {
     </a>`;
 }
 
-// I plugin built-in di payload (raw_text, bin, hex, ...) restano
-// sempre in secondo piano rispetto a quelli scritti dall'utente — anche
-// quando l'utente non ne ha ancora scritto nessuno — dentro un <details>
-// chiuso di default, invece di stare alla pari nella stessa lista.
+// payload's built-in plugins (raw_text, bin, hex, ...) always stay in
+// the background compared to the ones the user wrote — even when the
+// user hasn't written any yet — inside a <details> closed by default,
+// instead of sitting on equal footing in the same list.
 function _pluginColumnHtml(kind, plugins) {
   const meta = PLUGIN_KIND_META[kind];
   const items = plugins.filter((p) => p.kind === kind);
   const custom = items.filter((p) => !p.builtin);
   const builtin = items.filter((p) => p.builtin);
 
-  // Se non hai ancora plugin tuoi in questa categoria ma esistono dei
-  // built-in, non mostrare nessun messaggio "vuoto": l'accordion dei
-  // built-in qui sotto è già di per sé il contenuto della colonna,
-  // niente scritta di scuse che occupa spazio senza motivo.
+  // If there are no custom plugins yet in this category but built-ins
+  // exist, don't show any "empty" message: the built-in accordion
+  // below is already the column's content, no apologetic text taking
+  // up space for no reason.
   let customList = "";
   if (items.length === 0) {
-    customList = '<div class="plugin-column-list"><p class="plugin-column-empty">Nessuno registrato.</p></div>';
+    customList = '<div class="plugin-column-list"><p class="plugin-column-empty">None registered.</p></div>';
   } else if (custom.length > 0) {
     customList = `<div class="plugin-column-list">${custom.map(_pluginCardHtml).join("")}</div>`;
   }
 
   const builtinBody = builtin.length ? `
     <details class="plugin-builtin-group">
-      <summary>Built-in di payload (${builtin.length})</summary>
+      <summary>payload built-ins (${builtin.length})</summary>
       <div class="plugin-column-list-builtin">${builtin.map(_pluginCardHtml).join("")}</div>
     </details>` : "";
 
@@ -1356,30 +1549,30 @@ async function viewPlugins() {
   const localRows = local.files.map((f) => render`
     <div class="local-plugin-row">
       <span class="mono">${f.filename}</span>
-      <span>${raw(f.kinds.length ? f.kinds.map((k) => `<span class="pill pill-dim">${escapeHtml(k)}</span>`).join("") : '<span class="pill pill-fail">non caricabile</span>')}${raw(f.stub_methods.length ? `<span class="pill pill-warn" title="${escapeHtml(`Ancora da implementare: ${f.stub_methods.join(", ")}`)}">non implementato</span>` : "")}</span>
+      <span>${raw(f.kinds.length ? f.kinds.map((k) => `<span class="pill pill-dim">${escapeHtml(k)}</span>`).join("") : '<span class="pill pill-fail">not loadable</span>')}${raw(f.stub_methods.length ? `<span class="pill pill-warn" title="${escapeHtml(`Still to implement: ${f.stub_methods.join(", ")}`)}">not implemented</span>` : "")}</span>
       <div class="local-plugin-row-actions">
-        <a class="btn" href="#/local-plugin/${encodeURIComponent(f.filename)}">${icon("book")}Apri nell'editor</a>
-        <button class="danger icon-only" data-del-local-plugin="${f.filename}" title="Elimina plugin locale">${icon("trash")}</button>
+        <a class="btn" href="#/local-plugin/${encodeURIComponent(f.filename)}">${icon("book")}Open in editor</a>
+        <button class="danger icon-only" data-del-local-plugin="${f.filename}" title="Delete local plugin">${icon("trash")}</button>
       </div>
     </div>
   `);
   document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Plugin"))}
+    ${raw(pageHeader("Plugins"))}
     <div class="plugin-columns">${columns}</div>
     ${raw(detailsCard(
-      "Plugin locali (local_plugins/)",
-      `<div class="local-plugin-list">${localRows.join("") || '<p class="empty-state">Nessun plugin locale in questo progetto.</p>'}</div>`,
+      "Local plugins (local_plugins/)",
+      `<div class="local-plugin-list">${localRows.join("") || '<p class="empty-state">No local plugin in this project.</p>'}</div>`,
       { open: local.files.length > 0 },
     ))}
     <div class="card">
-      <h2>Nuovo plugin locale</h2>
+      <h2>New local plugin</h2>
       <div class="field-row">
-        <div class="field"><label>Nome</label><input type="text" id="pn-name" placeholder="my_format"></div>
-        <div class="field"><label>Tipo</label>
+        <div class="field"><label>Name</label><input type="text" id="pn-name" placeholder="my_format"></div>
+        <div class="field"><label>Kind</label>
           <select id="pn-kind"><option value="reader">reader</option><option value="writer">writer</option><option value="doctor-check">doctor-check</option></select>
         </div>
       </div>
-      <button class="primary" id="pn-create">${icon("plus")}Crea e apri nell'editor</button>
+      <button class="primary" id="pn-create">${icon("plus")}Create and open in editor</button>
     </div>
   `;
   document.getElementById("pn-create").onclick = async () => {
@@ -1387,7 +1580,7 @@ async function viewPlugins() {
       const r2 = await api("/api/plugin/new-local", { body: { name: val("pn-name"), kind: document.getElementById("pn-kind").value } });
       const createdFilename = r2.created.split(/[\\/]/).pop();
       invalidatePluginsCache();
-      toast(`Creato ${r2.created}`, "ok");
+      toast(`Created ${r2.created}`, "ok");
       location.hash = "#/local-plugin/" + encodeURIComponent(createdFilename);
     } catch (e) {
       toastError(e);
@@ -1400,12 +1593,12 @@ async function viewPlugins() {
 }
 
 async function deleteLocalPlugin(filename, onDeleted) {
-  const ok = await confirmDialog(`Eliminare definitivamente '${filename}'? L'azione non è reversibile.`, { danger: true, confirmLabel: "Elimina" });
+  const ok = await confirmDialog(`Permanently delete '${filename}'? This action can't be undone.`, { danger: true, confirmLabel: "Delete" });
   if (!ok) return;
   try {
     await api("/api/local-plugins/" + encodeURIComponent(filename), { method: "DELETE" });
     invalidatePluginsCache();
-    toast(`'${filename}' eliminato`, "ok");
+    toast(`'${filename}' deleted`, "ok");
     onDeleted();
   } catch (e) {
     toastError(e);
@@ -1416,23 +1609,23 @@ async function viewPluginDetail(name) {
   const p = await api("/api/plugin/" + encodeURIComponent(name));
 
   const chips = [
-    p.extensions ? metaChip("Estensioni", p.extensions.join(", ")) : "",
-    p.extension ? metaChip("Estensione output", p.extension) : "",
-    p.default_writer ? metaChip("Writer suggerito", p.default_writer) : "",
-    p.compatible_readers ? metaChip("Compatibile solo con", p.compatible_readers.join(", ")) : "",
+    p.extensions ? metaChip("Extensions", p.extensions.join(", ")) : "",
+    p.extension ? metaChip("Output extension", p.extension) : "",
+    p.default_writer ? metaChip("Suggested writer", p.default_writer) : "",
+    p.compatible_readers ? metaChip("Only compatible with", p.compatible_readers.join(", ")) : "",
   ].filter(Boolean).join("");
 
   document.getElementById("content").innerHTML = render`
-    <div class="breadcrumb"><a class="link" href="#/plugins">← Plugin</a></div>
-    ${raw(pageHeader(p.name, `${p.kind} · API v${p.api_version}${p.builtin ? " · built-in di payload" : ""}`))}
+    <div class="breadcrumb"><a class="link" href="#/plugins">← Plugins</a></div>
+    ${raw(pageHeader(p.name, `${p.kind} · API v${p.api_version}${p.builtin ? " · payload built-in" : ""}`))}
     <div class="card">
       ${raw(chips ? `<div class="plugin-meta-row">${chips}</div>` : "")}
       <div class="plugin-description">${raw(formatDescription(p.docstring))}</div>
     </div>
     <div class="card">
-      <h2>Valida conformità</h2>
-      <div class="field"><label>Sample file (solo reader)</label><input type="text" id="pv-sample" placeholder="esempio.raw"></div>
-      <button id="pv-run">Valida</button>
+      <h2>Validate conformance</h2>
+      <div class="field"><label>Sample file (reader only)</label><input type="text" id="pv-sample" placeholder="example.raw"></div>
+      <button id="pv-run">Validate</button>
       <div id="pv-result"></div>
     </div>
   `;
@@ -1440,20 +1633,20 @@ async function viewPluginDetail(name) {
     const r = await api("/api/plugin/validate", { body: { name, sample: val("pv-sample") || undefined } });
     const el = document.getElementById("pv-result");
     if (r.conforms) {
-      el.innerHTML = render`<div class="result-line">${statusPill("ok")}<span>conforme al contratto${r.skipped_behavior_check ? " (solo struttura, nessun sample fornito)" : ""}</span></div>`;
+      el.innerHTML = render`<div class="result-line">${statusPill("ok")}<span>conforms to the contract${r.skipped_behavior_check ? " (structure only, no sample provided)" : ""}</span></div>`;
     } else {
       const items = r.issues.map((i) => render`<li><strong>${i.check}</strong>: ${i.detail}</li>`);
-      el.innerHTML = render`<div class="result-line">${statusPill("fail")}<span>non conforme</span><ul>${items}</ul></div>`;
+      el.innerHTML = render`<div class="result-line">${statusPill("fail")}<span>doesn't conform</span><ul>${items}</ul></div>`;
     }
   };
 }
 
-/* ---------- editor plugin locali (CodeMirror 5, vendorizzato) ---------- */
+/* ---------- local plugin editor (CodeMirror 5, vendored) ---------- */
 
-/* Caricamento pigro: codemirror.js + mode/python (~420KB insieme) non
- * hanno motivo di appesantire OGNI pagina, solo quella dell'editor —
- * caricati la prima volta che serve, poi la stessa Promise risolta
- * viene riusata (niente doppio <script> se si riapre l'editor). */
+/* Lazy loading: codemirror.js + mode/python (~420KB together) have no
+ * reason to weigh down EVERY page, only the editor's — loaded the
+ * first time they're needed, then the same resolved Promise is reused
+ * (no double <script> if the editor is reopened). */
 let _cmLoadPromise = null;
 function loadCodeMirror() {
   if (_cmLoadPromise) return _cmLoadPromise;
@@ -1471,10 +1664,10 @@ function loadCodeMirror() {
       const modeScript = document.createElement("script");
       modeScript.src = "/static/vendor/codemirror/mode/python/python.js";
       modeScript.onload = () => resolveFn(window.CodeMirror);
-      modeScript.onerror = () => rejectFn(new Error("Impossibile caricare l'editor (mode Python)"));
+      modeScript.onerror = () => rejectFn(new Error("Couldn't load the editor (Python mode)"));
       document.body.appendChild(modeScript);
     };
-    coreScript.onerror = () => rejectFn(new Error("Impossibile caricare l'editor (codemirror.js)"));
+    coreScript.onerror = () => rejectFn(new Error("Couldn't load the editor (codemirror.js)"));
     document.body.appendChild(coreScript);
   });
   return _cmLoadPromise;
@@ -1492,7 +1685,7 @@ function _renderPluginTestResults(r) {
     return render`
       <div class="result-line">
         ${statusPill(res.conforms ? "ok" : "fail")}
-        <span><strong>${res.name}</strong> (${res.kind})${res.skipped_behavior_check ? " — solo struttura, nessun sample fornito" : ""}</span>
+        <span><strong>${res.name}</strong> (${res.kind})${res.skipped_behavior_check ? " — structure only, no sample provided" : ""}</span>
         ${raw(items.length ? `<ul>${items.join("")}</ul>` : "")}
       </div>
     `;
@@ -1506,18 +1699,18 @@ async function viewLocalPluginEditor(rawFilename) {
   const [fileData] = await Promise.all([api("/api/local-plugins/" + encodeURIComponent(filename)), loadCodeMirror()]);
 
   content.innerHTML = render`
-    <div class="breadcrumb"><a class="link" href="#/plugins">← Plugin</a></div>
-    ${raw(pageHeader(filename, "Editor plugin locale — modifica, verifica la sintassi e testa la conformità direttamente da qui."))}
+    <div class="breadcrumb"><a class="link" href="#/plugins">← Plugins</a></div>
+    ${raw(pageHeader(filename, "Local plugin editor — edit, check syntax, and test conformance directly from here."))}
     <div class="card">
       <div class="field-row" style="align-items:center">
-        <div class="field" style="flex:2;min-width:220px"><label>Sample file per il test (solo reader, opzionale)</label><input type="text" id="lpe-sample" placeholder="esempio.raw"></div>
-        <div class="field" style="flex:0 0 auto"><label>Sintassi</label><span class="pill pill-dim" id="lpe-syntax-status">in verifica…</span></div>
+        <div class="field" style="flex:2;min-width:220px"><label>Sample file for the test (reader only, optional)</label><input type="text" id="lpe-sample" placeholder="example.raw"></div>
+        <div class="field" style="flex:0 0 auto"><label>Syntax</label><span class="pill pill-dim" id="lpe-syntax-status">checking…</span></div>
       </div>
       <textarea id="lpe-editor"></textarea>
       <div class="toolbar" style="margin-top:12px">
-        <button class="primary" id="lpe-save">${icon("save")}Salva</button>
-        <button id="lpe-test">Testa plugin</button>
-        <button class="danger" id="lpe-delete" style="margin-left:auto">${icon("trash")}Elimina plugin</button>
+        <button class="primary" id="lpe-save">${icon("save")}Save</button>
+        <button id="lpe-test">Test plugin</button>
+        <button class="danger" id="lpe-delete" style="margin-left:auto">${icon("trash")}Delete plugin</button>
       </div>
       <div id="lpe-result"></div>
     </div>
@@ -1546,16 +1739,16 @@ async function viewLocalPluginEditor(rawFilename) {
       const r = await api("/api/local-plugins/syntax-check", { body: { content: cm.getValue() } });
       if (errorLine !== null) { cm.removeLineClass(errorLine, "background", "cm-error-line"); errorLine = null; }
       if (r.valid) {
-        setSyntaxStatus(`<span class="pill pill-ok" id="lpe-syntax-status">${iconSpan("check")}sintassi valida</span>`);
+        setSyntaxStatus(`<span class="pill pill-ok" id="lpe-syntax-status">${iconSpan("check")}valid syntax</span>`);
       } else {
-        setSyntaxStatus(`<span class="pill pill-fail" id="lpe-syntax-status">${iconSpan("cross")}riga ${r.line || "?"}: ${escapeHtml(r.message || "errore di sintassi")}</span>`);
+        setSyntaxStatus(`<span class="pill pill-fail" id="lpe-syntax-status">${iconSpan("cross")}line ${r.line || "?"}: ${escapeHtml(r.message || "syntax error")}</span>`);
         if (r.line && r.line - 1 < cm.lineCount()) {
           errorLine = r.line - 1;
           cm.addLineClass(errorLine, "background", "cm-error-line");
         }
       }
     } catch (e) {
-      // il controllo sintassi è un extra: un fallimento qui non deve interrompere l'editing
+      // syntax checking is an extra: a failure here shouldn't interrupt editing
     }
   }, 500);
 
@@ -1566,7 +1759,7 @@ async function viewLocalPluginEditor(rawFilename) {
     try {
       await api("/api/local-plugins/" + encodeURIComponent(filename), { method: "PUT", body: { content: cm.getValue() } });
       invalidatePluginsCache();
-      toast("Salvato", "ok");
+      toast("Saved", "ok");
     } catch (e) {
       toastError(e);
     }
@@ -1609,14 +1802,14 @@ async function viewDoctor() {
   `);
 
   document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Doctor", "Verifica stato del sistema (toolchain, plugin, config e directory)."))}
+    ${raw(pageHeader("Doctor", "System status check (toolchain, plugins, config, and directories)."))}
     <div class="stat-grid">
-      <div class="stat-card"><div class="stat-label">Check totali</div><div class="stat-value">${r.checks.length}</div></div>
+      <div class="stat-card"><div class="stat-label">Total checks</div><div class="stat-value">${r.checks.length}</div></div>
       <div class="stat-card"><div class="stat-label">OK</div><div class="stat-value">${counts.ok}</div></div>
       <div class="stat-card ${counts.warn ? "stat-warn" : ""}"><div class="stat-label">Warning</div><div class="stat-value">${counts.warn}</div></div>
-      <div class="stat-card ${counts.fail ? "stat-fail" : ""}"><div class="stat-label">Falliti</div><div class="stat-value">${counts.fail}</div></div>
+      <div class="stat-card ${counts.fail ? "stat-fail" : ""}"><div class="stat-label">Failed</div><div class="stat-value">${counts.fail}</div></div>
     </div>
-    <div class="doctor-list">${items.length ? items : ['<p class="empty-state">Nessun check registrato.</p>']}</div>
+    <div class="doctor-list">${items.length ? items : ['<p class="empty-state">No check registered.</p>']}</div>
   `;
 }
 
@@ -1624,50 +1817,50 @@ async function viewDoctor() {
 
 function _cfgFieldId(section, key) { return `cfg-${section}-${key}`; }
 
-// Etichette/descrizioni scritte a mano lato client: lo schema che arriva
-// da /api/config porta solo chiave e tipo (vedi config_schema() in
-// core/config.py), non un testo d'aiuto — il backend non deve conoscere
-// come la webapp preferisce spiegare ogni campo.
+// Labels/descriptions hand-written client-side: the schema coming from
+// /api/config only carries key and type (see config_schema() in
+// core/config.py), not help text — the backend shouldn't need to know
+// how the webapp prefers to explain each field.
 const CONFIG_FIELD_META = {
   "defaults.reader": {
-    label: "Reader di default",
-    desc: "Usato quando --from non è specificato e non si riesce a dedurlo dall'estensione del file. Vuoto = auto-risoluzione da estensione/sniff.",
+    label: "Default reader",
+    desc: "Used when --from isn't specified and it can't be inferred from the file extension. Empty = auto-resolution from extension/sniff.",
   },
   "defaults.writer": {
-    label: "Writer di default",
-    desc: "Usato quando --to non è specificato. Vuoto = nessuna preferenza esplicita, il reader può suggerirne uno.",
+    label: "Default writer",
+    desc: "Used when --to isn't specified. Empty = no explicit preference, the reader may suggest one.",
   },
   "defaults.output_dir": {
-    label: "Cartella di output",
-    desc: "Dove finiscono i file compilati, relativa alla root del progetto.",
+    label: "Output folder",
+    desc: "Where built files end up, relative to the project root.",
   },
   "defaults.cache_dir": {
-    label: "Cartella cache",
-    desc: "Dove payload tiene i checkpoint di build — evita ricompilazioni quando sorgente e config non sono cambiati.",
+    label: "Cache folder",
+    desc: "Where payload keeps build checkpoints — avoids rebuilding when source and config haven't changed.",
   },
   "defaults.byte_order": {
     label: "Byte order",
-    desc: "Endianness di default per reader/writer che gestiscono valori multi-byte.",
+    desc: "Default endianness for readers/writers that handle multi-byte values.",
   },
   "toolchain.compiler": {
-    label: "Compilatore",
-    desc: "Eseguibile usato dal reader 'c_source' per compilare i file .c prima di estrarne i bytes.",
+    label: "Compiler",
+    desc: "Executable used by the 'c_source' reader to compile .c files before extracting their bytes.",
   },
   "toolchain.compiler_flags": {
-    label: "Flag del compilatore",
-    desc: "Flag extra passati al compilatore, separati da virgola — es. -O2, -Wall.",
+    label: "Compiler flags",
+    desc: "Extra flags passed to the compiler, comma-separated — e.g. -O2, -Wall.",
   },
   "toolchain.objcopy": {
     label: "objcopy",
-    desc: "Eseguibile usato per estrarre la sezione dati binaria dopo la compilazione.",
+    desc: "Executable used to extract the binary data section after compilation.",
   },
   "toolchain.objcopy_target": {
     label: "objcopy target",
-    desc: "Richiesto solo dal writer 'obj' — formato di output objcopy, es. elf32-littlearm.",
+    desc: "Only required by the 'obj' writer — objcopy output format, e.g. elf32-littlearm.",
   },
   "toolchain.objcopy_arch": {
     label: "objcopy arch",
-    desc: "Richiesto solo dal writer 'obj' — architettura target, es. arm.",
+    desc: "Only required by the 'obj' writer — target architecture, e.g. arm.",
   },
 };
 
@@ -1677,24 +1870,24 @@ function _cfgFieldMarkup(section, f, currentByKey, originByKey) {
   const id = _cfgFieldId(section, f.key);
   const meta = CONFIG_FIELD_META[key] || { label: f.key, desc: "" };
   const origin = originByKey[key] || "default";
-  // "default" = mai personalizzato, sta usando il valore di fabbrica del
-  // tool. "personalizzato" = presente in table-tool.toml — NON ha nulla
-  // a che fare con eventuali modifiche non ancora salvate nel form
-  // (quello è "settings-row-dirty-note" qui sotto, tenuto volutamente
-  // separato: sono due informazioni diverse, "cosa c'è salvato" contro
-  // "cosa stai scrivendo ora").
+  // "default" = never customized, using the tool's factory value.
+  // "customized" = present in table-tool.toml — has NOTHING to do
+  // with any unsaved changes in the form (that's
+  // "settings-row-dirty-note" below, deliberately kept separate: they
+  // are two different pieces of information, "what's saved" versus
+  // "what you're writing right now").
   const originPill = origin === "default"
     ? raw('<span class="pill pill-dim">default</span>')
-    : raw('<span class="pill pill-current">personalizzato</span>');
+    : raw('<span class="pill pill-current">customized</span>');
 
   let control;
   if (f.type === "list") {
-    control = render`<input type="text" id="${id}" data-cfg-field="${key}" value="${(value || []).join(", ")}" placeholder="separati da virgola">`;
+    control = render`<input type="text" id="${id}" data-cfg-field="${key}" value="${(value || []).join(", ")}" placeholder="comma-separated">`;
   } else if (f.key === "byte_order") {
     control = `<select id="${id}" data-cfg-field="${key}"><option value="little" ${value !== "big" ? "selected" : ""}>little</option><option value="big" ${value === "big" ? "selected" : ""}>big</option></select>`;
   } else {
     const shown = value === undefined || value === null ? "" : value;
-    control = render`<input type="text" id="${id}" data-cfg-field="${key}" value="${shown}" placeholder="${f.key === "writer" || f.key === "reader" ? "nessuna preferenza" : "(default)"}">`;
+    control = render`<input type="text" id="${id}" data-cfg-field="${key}" value="${shown}" placeholder="${f.key === "writer" || f.key === "reader" ? "no preference" : "(default)"}">`;
   }
 
   return render`
@@ -1705,7 +1898,7 @@ function _cfgFieldMarkup(section, f, currentByKey, originByKey) {
       </div>
       <div class="settings-row-control">
         ${raw(control)}
-        <span class="settings-row-dirty-note" hidden>● modifica non salvata</span>
+        <span class="settings-row-dirty-note" hidden>● unsaved change</span>
       </div>
     </div>`;
 }
@@ -1723,10 +1916,10 @@ function _cfgReadFormValues(schema) {
   return { defaults, toolchain };
 }
 
-// Anteprima leggera del TOML che verrebbe scritto — non un serializzatore
-// TOML completo (non serve: solo defaults/toolchain, valori sempre
-// stringa/lista/null), solo abbastanza per far vedere all'utente cosa
-// sta per salvare prima di premere "Salva".
+// Lightweight preview of the TOML that would be written — not a full
+// TOML serializer (no need: only defaults/toolchain, values are always
+// string/list/null), just enough to show the user what's about to be
+// saved before they press "Save".
 function _cfgTomlPreview(values) {
   const fmtVal = (v) => {
     if (Array.isArray(v)) return v.length ? `[${v.map((x) => JSON.stringify(x)).join(", ")}]` : null;
@@ -1735,7 +1928,7 @@ function _cfgTomlPreview(values) {
   };
   const section = (name, obj) => {
     const lines = Object.entries(obj).map(([k, v]) => [k, fmtVal(v)]).filter(([, v]) => v !== null).map(([k, v]) => `${k} = ${v}`);
-    return `[${name}]` + (lines.length ? `\n${lines.join("\n")}` : "\n# (nessun override, tutti i default)");
+    return `[${name}]` + (lines.length ? `\n${lines.join("\n")}` : "\n# (no override, all defaults)");
   };
   return `${section("defaults", values.defaults)}\n\n${section("toolchain", values.toolchain)}`;
 }
@@ -1754,31 +1947,31 @@ async function viewConfig() {
   `);
 
   document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Configurazione", "Configurazione globale del progetto (table-tool.toml) — vale per ogni tabella che non ha un sidecar proprio."))}
+    ${raw(pageHeader("Configuration", "Global project configuration (table-tool.toml) — applies to every table that has no sidecar of its own."))}
     <div class="card settings-section">
-      <h2 class="settings-section-title">Percorsi e formati di default</h2>
-      <p class="settings-section-desc">Usati per ogni tabella che non ha una preferenza esplicita da riga di comando.</p>
+      <h2 class="settings-section-title">Default paths and formats</h2>
+      <p class="settings-section-desc">Used for every table that has no explicit command-line preference.</p>
       ${defaultsRows}
     </div>
     <div class="card settings-section">
-      <h2 class="settings-section-title">Toolchain di compilazione</h2>
-      <p class="settings-section-desc">Usati dal reader 'c_source' e dal writer 'obj' — ignorali se non li usi.</p>
+      <h2 class="settings-section-title">Build toolchain</h2>
+      <p class="settings-section-desc">Used by the 'c_source' reader and the 'obj' writer — ignore them if you don't use those.</p>
       ${toolchainRows}
       <div class="settings-toolbar">
-        <span class="settings-toolbar-status" id="cfg-dirty-status">Nessuna modifica</span>
-        <button type="button" id="cfg-reset">${icon("refresh")}Ripristina</button>
-        <button class="primary" id="cfg-save" disabled>${icon("save")}Salva</button>
+        <span class="settings-toolbar-status" id="cfg-dirty-status">No changes</span>
+        <button type="button" id="cfg-reset">${icon("refresh")}Reset</button>
+        <button class="primary" id="cfg-save" disabled>${icon("save")}Save</button>
       </div>
     </div>
     <details class="section-collapse">
-      <summary>Anteprima TOML</summary>
+      <summary>TOML preview</summary>
       <div class="card" style="margin-top:10px"><pre class="settings-preview" id="cfg-preview"></pre></div>
     </details>
     <details class="section-collapse">
-      <summary>Risoluzione dettagliata (default → globale → sidecar)</summary>
+      <summary>Detailed resolution (default → global → sidecar)</summary>
       <div class="card" style="margin-top:10px">
         <div class="table-scroll">
-          <table><thead><tr><th>Campo</th><th>Valore</th><th>Origine</th></tr></thead><tbody>${rows}</tbody></table>
+          <table><thead><tr><th>Field</th><th>Value</th><th>Origin</th></tr></thead><tbody>${rows}</tbody></table>
         </div>
       </div>
     </details>
@@ -1805,7 +1998,7 @@ async function viewConfig() {
       if (changed) changedCount += 1;
     });
 
-    dirtyStatus.textContent = changedCount ? `${changedCount} modifiche non salvate` : "Nessuna modifica";
+    dirtyStatus.textContent = changedCount ? `${changedCount} unsaved changes` : "No changes";
     dirtyStatus.className = "settings-toolbar-status" + (changedCount ? " settings-toolbar-status-dirty" : "");
     saveBtn.disabled = changedCount === 0;
   };
@@ -1818,7 +2011,7 @@ async function viewConfig() {
   document.getElementById("cfg-save").onclick = async () => {
     try {
       await api("/api/config", { method: "PUT", body: _cfgReadFormValues(schema) });
-      toast("Configurazione globale salvata", "ok");
+      toast("Global configuration saved", "ok");
       viewConfig();
     } catch (e) {
       toastError(e);
@@ -1833,16 +2026,16 @@ function viewTools() {
     ${raw(pageHeader("Export & clean"))}
     <div class="card">
       <h2>Export</h2>
-      <p class="subtitle">Scarica un archivio .zip con sorgenti e config del progetto.</p>
-      <div class="checkbox-row"><input type="checkbox" id="ex-history"><label for="ex-history">Includi .payload_history/</label></div>
-      <a class="btn" id="ex-download" href="#">Scarica .zip</a>
+      <p class="subtitle">Download a .zip archive with the project's sources and config.</p>
+      <div class="checkbox-row"><input type="checkbox" id="ex-history"><label for="ex-history">Include .payload_history/</label></div>
+      <a class="btn" id="ex-download" href="#">Download .zip</a>
     </div>
     <div class="card">
-      <h2>Pulisci</h2>
+      <h2>Clean</h2>
       <div class="field"><label>Target</label>
         <select id="cl-target"><option value="cache">cache</option><option value="build">build</option><option value="golden">golden</option><option value="all">all</option></select>
       </div>
-      <button class="danger" id="cl-run">${icon("trash")}Pulisci</button>
+      <button class="danger" id="cl-run">${icon("trash")}Clean</button>
       <div id="cl-result"></div>
     </div>
   `;
@@ -1855,23 +2048,23 @@ function viewTools() {
     const target = document.getElementById("cl-target").value;
     const el = document.getElementById("cl-result");
     const preview = await api("/api/clean", { body: { target } });
-    if (preview.status === "noop") { el.innerHTML = '<p class="empty-state">Niente da pulire.</p>'; return; }
-    const ok = await confirmDialog(`Cancellare: ${preview.directories.join(", ")}?`, { danger: true, confirmLabel: "Cancella" });
+    if (preview.status === "noop") { el.innerHTML = '<p class="empty-state">Nothing to clean.</p>'; return; }
+    const ok = await confirmDialog(`Delete: ${preview.directories.join(", ")}?`, { danger: true, confirmLabel: "Delete" });
     if (!ok) return;
     const r = await api("/api/clean", { body: { target, confirm: true } });
-    el.innerHTML = render`<p>${statusPill("ok")} rimosse: ${r.directories.join(", ")}</p>`;
+    el.innerHTML = render`<p>${statusPill("ok")} removed: ${r.directories.join(", ")}</p>`;
   };
 }
 
-/* ---------- documentazione ---------- */
+/* ---------- documentation ---------- */
 
-/* Convertitore markdown -> HTML minimale: solo il sottoinsieme usato
- * davvero dalle guide incluse nel pacchetto (titoli h1-h3, paragrafi,
- * elenchi puntati/numerati, blocchi di codice, tabelle pipe, grassetto,
- * codice inline, link) — non un parser CommonMark completo. Il testo
- * viene sempre escapato PRIMA di applicare bold/code/link (regex sui
- * delimitatori, che sopravvivono all'escaping), mai dopo: stesso
- * principio di sicurezza di escapeHtml()/render() sopra.*/
+/* Minimal markdown -> HTML converter: only the subset actually used by
+ * the guides bundled with the package (h1-h3 headings, paragraphs,
+ * bullet/numbered lists, code blocks, pipe tables, bold, inline code,
+ * links) — not a full CommonMark parser. Text is always escaped
+ * BEFORE applying bold/code/link (regexes on the delimiters, which
+ * survive escaping), never after: same security principle as
+ * escapeHtml()/render() above. */
 function renderMarkdown(md) {
   function inline(text) {
     let s = escapeHtml(text);
@@ -1909,7 +2102,7 @@ function renderMarkdown(md) {
 
     const heading = line.match(/^(#{1,3})\s+(.*)$/);
     if (heading) {
-      const level = heading[1].length + 1; // il titolo pagina è già <h1>: le sezioni partono da <h2>
+      const level = heading[1].length + 1; // the page title is already <h1>: sections start at <h2>
       out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
       i++;
       continue;
@@ -1952,7 +2145,7 @@ function renderMarkdown(md) {
     if (paraLines.length) {
       out.push(`<p>${paraLines.map(inline).join(" ")}</p>`);
     } else {
-      i++; // riga non gestita da nessun ramo sopra: salta per non restare bloccati
+      i++; // line not handled by any branch above: skip to avoid getting stuck
     }
   }
 
@@ -1968,7 +2161,7 @@ async function viewDocsList() {
     </a>
   `).join("");
   document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Documentazione", "Le guide incluse nel pacchetto — nessuna connessione di rete richiesta."))}
+    ${raw(pageHeader("Documentation", "The guides bundled with the package — no network connection required."))}
     <div class="doc-list">${raw(items)}</div>
   `;
 }
@@ -1976,7 +2169,7 @@ async function viewDocsList() {
 async function viewDocDetail(slug) {
   const r = await api("/api/docs/" + encodeURIComponent(slug));
   document.getElementById("content").innerHTML = render`
-    <div class="breadcrumb"><a class="link" href="#/docs">← Documentazione</a></div>
+    <div class="breadcrumb"><a class="link" href="#/docs">← Documentation</a></div>
     ${raw(pageHeader(r.title))}
     <div class="card"><div class="doc-content">${raw(renderMarkdown(r.content))}</div></div>
   `;

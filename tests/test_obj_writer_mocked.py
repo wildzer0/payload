@@ -1,9 +1,9 @@
 """
-Test di obj_writer con subprocess MOCKATO — vedi
-test_c_source_reader_mocked.py per la stessa motivazione: coprire ogni
-ramo senza dipendere da un objcopy reale installato sulla macchina che
-esegue i test (test_c_source_and_obj.py resta l'integrazione con
-toolchain vero, saltata se assente)."""
+obj_writer tests with subprocess MOCKED — see
+test_c_source_reader_mocked.py for the same reasoning: cover every
+branch without depending on a real objcopy installed on the machine
+running the tests (test_c_source_and_obj.py remains the integration
+test with a real toolchain, skipped if unavailable)."""
 import subprocess
 from pathlib import Path
 from unittest.mock import patch
@@ -31,12 +31,12 @@ def test_missing_objcopy_arch_raises(tmp_path):
 
 def test_objcopy_failure_raises_toolchain_error(tmp_path):
     source = tmp_path / "sensor.c"
-    source.write_text("irrilevante")
+    source.write_text("irrelevant")
     ir = TableIR(name="sensor", data=b"\x0a", source_path=source, source_format="c_source")
     config = {"toolchain": {"objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
 
     def fake_run(cmd, capture_output=True, text=True):
-        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="objcopy fallito")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="objcopy failed")
 
     with patch("payload.writers.obj_writer.subprocess.run", fake_run):
         with pytest.raises(ToolchainExecutionError):
@@ -44,27 +44,27 @@ def test_objcopy_failure_raises_toolchain_error(tmp_path):
 
 
 def test_objcopy_not_found_raises_toolchain_error_not_bare_exception(tmp_path):
-    """subprocess.run() solleva FileNotFoundError se l'eseguibile non
-    esiste proprio (non un returncode diverso da zero) — prima non era
-    gestito, arrivava all'utente come traceback Python grezzo."""
+    """subprocess.run() raises FileNotFoundError if the executable
+    genuinely doesn't exist (not a nonzero returncode) — this wasn't
+    handled before, it reached the user as a raw Python traceback."""
     source = tmp_path / "sensor.c"
-    source.write_text("irrilevante")
+    source.write_text("irrelevant")
     ir = TableIR(name="sensor", data=b"\x0a", source_path=source, source_format="c_source")
-    config = {"toolchain": {"objcopy": "objcopy-che-non-esiste", "objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
+    config = {"toolchain": {"objcopy": "objcopy-that-does-not-exist", "objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
 
     def fake_run(cmd, capture_output=True, text=True):
-        raise FileNotFoundError(2, "No such file or directory", "objcopy-che-non-esiste")
+        raise FileNotFoundError(2, "No such file or directory", "objcopy-that-does-not-exist")
 
     with patch("payload.writers.obj_writer.subprocess.run", fake_run):
         with pytest.raises(ToolchainExecutionError) as exc_info:
             ObjWriter().emit(ir, tmp_path / "out.o", config)
-    assert "objcopy-che-non-esiste" in str(exc_info.value)
-    assert not (source.parent / "tmp" / "obj_writer_scratch").exists()  # ripulita anche qui
+    assert "objcopy-that-does-not-exist" in str(exc_info.value)
+    assert not (source.parent / "tmp" / "obj_writer_scratch").exists()  # cleaned up here too
 
 
 def test_successful_emit_writes_input_and_calls_objcopy(tmp_path):
     source = tmp_path / "sensor.c"
-    source.write_text("irrilevante")
+    source.write_text("irrelevant")
     ir = TableIR(name="sensor temp!", data=b"\xde\xad\xbe\xef", source_path=source, source_format="c_source")
     config = {"toolchain": {"objcopy": "my_objcopy", "objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
     out_path = tmp_path / "out.o"
@@ -86,17 +86,17 @@ def test_successful_emit_writes_input_and_calls_objcopy(tmp_path):
     assert "-I" in captured["cmd"] and "binary" in captured["cmd"]
     assert "--rename-section" in captured["cmd"]
     assert any(f".data={section_name_for('sensor temp!')}" in part for part in captured["cmd"])
-    assert not (source.parent / "tmp" / "obj_writer_scratch").exists()  # ripulita dopo l'emit
+    assert not (source.parent / "tmp" / "obj_writer_scratch").exists()  # cleaned up after emit
 
 
 def test_scratch_dir_cleaned_up_even_on_failure(tmp_path):
     source = tmp_path / "sensor.c"
-    source.write_text("irrilevante")
+    source.write_text("irrelevant")
     ir = TableIR(name="sensor", data=b"\x0a", source_path=source, source_format="c_source")
     config = {"toolchain": {"objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
 
     def fake_run(cmd, capture_output=True, text=True):
-        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="fallito")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="failed")
 
     with patch("payload.writers.obj_writer.subprocess.run", fake_run):
         with pytest.raises(ToolchainExecutionError):

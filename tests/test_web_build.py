@@ -65,7 +65,7 @@ def test_build_unknown_source_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.post("/api/build", json={"source": "non_esiste.raw", "to": "bin"})
+    r = client.post("/api/build", json={"source": "does_not_exist.raw", "to": "bin"})
 
     assert r.status_code == 404
 
@@ -116,9 +116,9 @@ def test_build_check_golden_mismatch_on_tampered_output_409(tmp_path):
     client.post("/api/commit", json={"message": "v1"})
     log = client.get("/api/log/example_table").json()
     client.put("/api/golden/example_table", json={"snapshot_id": log["snapshots"][0]["id"]})
-    (root / "build" / "example_table.bin").write_bytes(b"manomesso a mano")
+    (root / "build" / "example_table.bin").write_bytes(b"tampered by hand")
 
-    # sorgente invariato -> cache hit, il build non riscrive l'output manomesso
+    # source unchanged -> cache hit, the build doesn't rewrite the tampered output
     r = client.post("/api/build", json={"source": "example_table.raw", "to": "bin", "check_golden": True})
 
     assert r.status_code == 409

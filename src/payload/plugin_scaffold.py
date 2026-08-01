@@ -1,7 +1,7 @@
 """
-Implementazione di 'pld plugin new <name>': genera lo scaffold di un
-pacchetto pip installabile, con entry_point già configurato, pronto per
-essere completato e installato con `pip install -e .`.
+Implementation of 'pld plugin new <name>': generates the scaffold of
+an installable pip package, with the entry_point already configured,
+ready to be filled in and installed with `pip install -e .`.
 """
 from __future__ import annotations
 
@@ -21,11 +21,11 @@ def _to_class_name(slug: str) -> str:
 
 
 def scaffold_plugin(name: str, kind: str, dest_dir: Path) -> Path:
-    """name: nome pacchetto pip, es. 'payload-reader-csv'
+    """name: pip package name, e.g. 'payload-reader-csv'
     kind: 'reader' | 'writer' | 'doctor-check'
-    Ritorna il path della cartella creata."""
+    Returns the path of the created folder."""
     if kind not in GROUP_BY_KIND:
-        raise ValueError(f"kind sconosciuto: {kind} (atteso: {', '.join(GROUP_BY_KIND)})")
+        raise ValueError(f"unknown kind: {kind} (expected: {', '.join(GROUP_BY_KIND)})")
 
     slug = name.replace("payload-reader-", "").replace("payload-writer-", "").replace("-", "_")
     class_name = _to_class_name(slug) + (
@@ -52,17 +52,17 @@ _LOCAL_KINDS = ("reader", "writer", "doctor-check")
 
 
 def scaffold_local_plugin(name: str, kind: str, dest_dir: Path) -> Path:
-    """Genera un plugin LOCALE: un singolo file .py dentro dest_dir,
-    senza pip install (a differenza di scaffold_plugin sopra, che
-    genera un pacchetto pip installabile) — condivisa da 'pld plugin
-    new-local' e dalla route web equivalente, un solo posto dove
-    vivono i tre template inline.
+    """Generates a LOCAL plugin: a single .py file inside dest_dir, no
+    pip install (unlike scaffold_plugin above, which generates an
+    installable pip package) — shared by 'pld plugin new-local' and
+    the equivalent web route, a single place where the three inline
+    templates live.
 
-    name: nome del plugin (slug), es. 'simple_reader'
+    name: plugin name (slug), e.g. 'simple_reader'
     kind: 'reader' | 'writer' | 'doctor-check'
-    Ritorna il path del file .py creato."""
+    Returns the path of the created .py file."""
     if kind not in _LOCAL_KINDS:
-        raise ValueError(f"kind sconosciuto: '{kind}' (atteso: reader|writer|doctor-check)")
+        raise ValueError(f"unknown kind: '{kind}' (expected: reader|writer|doctor-check)")
 
     slug = name.replace("-", "_")
     class_suffix = {"reader": "Reader", "writer": "Writer", "doctor-check": "Check"}[kind]
@@ -73,10 +73,10 @@ def scaffold_local_plugin(name: str, kind: str, dest_dir: Path) -> Path:
     dest_dir.mkdir(parents=True, exist_ok=True)
     out_path = dest_dir / f"{slug}.py"
     if out_path.exists():
-        raise FileExistsError(f"'{out_path}' esiste già")
+        raise FileExistsError(f"'{out_path}' already exists")
 
     if kind == "reader":
-        body = f'''"""TODO: descrivi qui il formato che questo plugin legge, con un esempio."""
+        body = f'''"""TODO: describe here the format this plugin reads, with an example."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -89,19 +89,19 @@ class {class_name}:
     name = "{slug}"
     extensions = [".{slug}"]
     api_version = "1.0"
-    default_writer = "bin"  # opzionale: writer suggerito, o None
+    default_writer = "bin"  # optional: suggested writer, or None
 
     def sniff(self, path: Path) -> bool:
         return False
 
     def parse(self, path: Path, config: dict) -> TableIR:
-        raise NotImplementedError("TODO: implementa il parsing")
+        raise NotImplementedError("TODO: implement parsing")
 
 
 {attr_name} = {class_name}
 '''
     elif kind == "writer":
-        body = f'''"""TODO: descrivi qui il formato che questo plugin scrive, con un esempio."""
+        body = f'''"""TODO: describe here the format this plugin writes, with an example."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -113,16 +113,16 @@ class {class_name}:
     name = "{slug}"
     extension = ".{slug}"
     api_version = "1.0"
-    compatible_readers = None  # opzionale: lista di reader compatibili, o None per tutti
+    compatible_readers = None  # optional: list of compatible readers, or None for all
 
     def emit(self, ir: TableIR, out_path: Path, config: dict) -> Path:
-        raise NotImplementedError("TODO: implementa la scrittura")
+        raise NotImplementedError("TODO: implement writing")
 
 
 {attr_name} = {class_name}
 '''
     else:
-        body = f'''"""TODO: descrivi qui cosa verifica questo check."""
+        body = f'''"""TODO: describe here what this check verifies."""
 from __future__ import annotations
 
 from payload.core.plugin_base import CheckResult, CheckStatus
@@ -133,7 +133,7 @@ class {class_name}:
     api_version = "1.0"
 
     def run(self, config: dict) -> CheckResult:
-        raise NotImplementedError("TODO: implementa il check")
+        raise NotImplementedError("TODO: implement the check")
 
 
 {attr_name} = {class_name}

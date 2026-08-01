@@ -1,10 +1,10 @@
 """
-Check builtin per 'pld doctor'. Ogni check è indipendente e non blocca
-gli altri se fallisce — l'utente deve vedere tutti i problemi in un colpo.
+Builtin checks for 'pld doctor'. Each check is independent and doesn't
+block the others if it fails — the user should see every problem at once.
 
-Anche i doctor check sono estensibili via entry_points (payload.doctor_checks),
-esattamente come reader/writer: un plugin per un toolchain particolare può
-portarsi dietro il proprio check senza toccare il core.
+Doctor checks are also extensible via entry_points (payload.doctor_checks),
+exactly like reader/writer: a plugin for a particular toolchain can
+bring its own check without touching the core.
 """
 from __future__ import annotations
 
@@ -22,35 +22,35 @@ class ToolchainCheck:
     api_version = "1.0"
 
     def __init__(self, binary_key: str, binary_name: str):
-        self._binary_key = binary_key  # es. "compiler" (chiave dentro [toolchain])
-        self._binary_name = binary_name  # nome atteso, per il messaggio
+        self._binary_key = binary_key  # e.g. "compiler" (key inside [toolchain])
+        self._binary_name = binary_name  # expected name, for the message
 
     def run(self, config: dict) -> CheckResult:
         cmd = config.get("toolchain", {}).get(self._binary_key)
         if not cmd:
             return CheckResult(
-                self.name, CheckStatus.WARN, f"'{self._binary_key}' non configurato"
+                self.name, CheckStatus.WARN, f"'{self._binary_key}' not configured"
             )
         path = shutil.which(cmd)
         if not path:
             return CheckResult(
                 self.name,
                 CheckStatus.FAIL,
-                f"'{cmd}' non trovato nel PATH",
-                hint=f"Installa {cmd} o aggiorna '{self._binary_key}' in table-tool.toml",
+                f"'{cmd}' not found in PATH",
+                hint=f"Install {cmd} or update '{self._binary_key}' in table-tool.toml",
             )
         try:
             out = subprocess.run(
                 [cmd, "--version"], capture_output=True, text=True, timeout=5
             )
             version = (out.stdout or out.stderr or "").splitlines()[0] if out.stdout or out.stderr else "?"
-            return CheckResult(self.name, CheckStatus.OK, f"{cmd} trovato: {version}")
+            return CheckResult(self.name, CheckStatus.OK, f"{cmd} found: {version}")
         except subprocess.TimeoutExpired:
             return CheckResult(
-                self.name, CheckStatus.WARN, f"{cmd} trovato ma non risponde a --version"
+                self.name, CheckStatus.WARN, f"{cmd} found but not responding to --version"
             )
         except OSError as e:
-            return CheckResult(self.name, CheckStatus.FAIL, f"{cmd} non eseguibile: {e}")
+            return CheckResult(self.name, CheckStatus.FAIL, f"{cmd} not executable: {e}")
 
 
 class PluginLoadCheck:
@@ -63,14 +63,14 @@ class PluginLoadCheck:
         project_root = Path(config.get("_project_root", "."))
         try:
             registry = load_plugins(project_root=project_root, strict=False)
-        except Exception as e:  # pragma: no cover - difesa
-            return CheckResult(self.name, CheckStatus.FAIL, f"Errore inatteso nel loading: {e}")
+        except Exception as e:  # pragma: no cover - defensive
+            return CheckResult(self.name, CheckStatus.FAIL, f"Unexpected error while loading: {e}")
 
-        # le dipendenze mancanti di un plugin locale (REQUIRES) sono già
-        # coperte, con la severità giusta (WARN, non FAIL — non è un
-        # plugin "rotto", solo una dipendenza da installare), dal check
-        # 'local_plugin_deps'. Contarle due volte con severità diverse
-        # sarebbe contraddittorio.
+        # a local plugin's missing dependencies (REQUIRES) are already
+        # covered, with the right severity (WARN, not FAIL — it's not a
+        # "broken" plugin, just a dependency to install), by the
+        # 'local_plugin_deps' check. Counting them twice with different
+        # severities would be contradictory.
         real_failures = [f for f in registry.load_failures if f[1] != "local:deps"]
 
         if real_failures:
@@ -79,17 +79,17 @@ class PluginLoadCheck:
             return CheckResult(
                 self.name,
                 CheckStatus.FAIL,
-                f"{len(real_failures)} plugin non caricabili: {names}",
+                f"{len(real_failures)} plugins couldn't be loaded: {names}",
                 hint=detail,
             )
 
         total = len(registry.readers) + len(registry.writers) + len(registry.doctor_checks)
-        return CheckResult(self.name, CheckStatus.OK, f"{total} plugin caricati correttamente")
+        return CheckResult(self.name, CheckStatus.OK, f"{total} plugins loaded correctly")
 
 
 class ConfigValidityCheck:
-    """Valida table-tool.toml e scansiona tutti i sidecar *.config.toml
-    del progetto, riportando quali sono malformati."""
+    """Validates table-tool.toml and scans every *.config.toml sidecar
+    in the project, reporting which ones are malformed."""
 
     name = "config"
     api_version = "1.0"
@@ -109,9 +109,9 @@ class ConfigValidityCheck:
         sidecar_count = 0
         for sidecar in project_root.rglob("*.config.toml"):
             sidecar_count += 1
-            # Il sidecar è valido solo nel contesto del proprio file sorgente,
-            # ma un errore di sintassi toml lo intercettiamo comunque qui,
-            # provando a caricarlo come se fosse per un sorgente omonimo.
+            # A sidecar is only valid in the context of its own source
+            # file, but we still catch a toml syntax error here, by
+            # trying to load it as if it were for a same-named source.
             fake_source = sidecar.parent / sidecar.name.replace(".config.toml", ".fake")
             try:
                 load_config(project_root, source_path=fake_source)
@@ -121,12 +121,12 @@ class ConfigValidityCheck:
         if problems:
             return CheckResult(
                 self.name, CheckStatus.FAIL,
-                f"{len(problems)} file di config non validi",
+                f"{len(problems)} invalid config files",
                 hint="; ".join(problems),
             )
         return CheckResult(
             self.name, CheckStatus.OK,
-            f"Config globale valida, {sidecar_count} sidecar controllati",
+            f"Global config valid, {sidecar_count} sidecars checked",
         )
 
 
@@ -135,11 +135,11 @@ class DirWritableCheck:
     api_version = "1.0"
 
     def run(self, config: dict) -> CheckResult:
-        # Come ogni altro check qui: risolto rispetto a _project_root,
-        # MAI rispetto alla cwd del processo — le due possono differire
-        # (es. 'pld serve' lanciato da una cartella diversa dal progetto
-        # servito). La CLI le fa sempre coincidere per convenzione, ma
-        # questo check non può assumerlo.
+        # Like every other check here: resolved against _project_root,
+        # NEVER against the process's cwd — the two can differ (e.g.
+        # 'pld serve' launched from a folder different from the served
+        # project). The CLI always makes them coincide by convention,
+        # but this check can't assume that.
         project_root = Path(config.get("_project_root", "."))
         dirs = [
             config.get("defaults", {}).get("output_dir", "build"),
@@ -157,9 +157,9 @@ class DirWritableCheck:
                 problems.append(f"{d}: {e}")
         if problems:
             return CheckResult(
-                self.name, CheckStatus.FAIL, "Directory non scrivibili: " + "; ".join(problems)
+                self.name, CheckStatus.FAIL, "Non-writable directories: " + "; ".join(problems)
             )
-        return CheckResult(self.name, CheckStatus.OK, "Tutte le directory sono scrivibili")
+        return CheckResult(self.name, CheckStatus.OK, "Every directory is writable")
 
 
 class CacheIntegrityCheck:
@@ -171,23 +171,23 @@ class CacheIntegrityCheck:
         cache_dir = project_root / config.get("defaults", {}).get("cache_dir", ".payload_cache")
         cache_file = cache_dir / ".payload_cache.json"
         if not cache_file.exists():
-            return CheckResult(self.name, CheckStatus.OK, "Nessuna cache presente (ok)")
+            return CheckResult(self.name, CheckStatus.OK, "No cache present (ok)")
         try:
             json.loads(cache_file.read_text())
         except json.JSONDecodeError:
             return CheckResult(
                 self.name,
                 CheckStatus.WARN,
-                "Cache corrotta",
-                hint="Cancella la cache o esegui il prossimo build con --force",
+                "Corrupted cache",
+                hint="Delete the cache or run the next build with --force",
             )
-        return CheckResult(self.name, CheckStatus.OK, "Cache integra")
+        return CheckResult(self.name, CheckStatus.OK, "Cache intact")
 
 
 class TableNameUniquenessCheck:
-    """I nomi tabella (filename stem) sono l'identità usata per build
-    output/golden/history — due sorgenti con lo stesso nome in cartelle
-    diverse collidono silenziosamente. Vedi core/discovery.py."""
+    """Table names (filename stem) are the identity used for build
+    output/golden/history — two sources with the same name in
+    different folders silently collide. See core/discovery.py."""
 
     name = "table_names"
     api_version = "1.0"
@@ -201,8 +201,8 @@ class TableNameUniquenessCheck:
 
         try:
             registry = load_plugins(project_root=project_root, strict=False)
-        except Exception as e:  # pragma: no cover - difesa
-            return CheckResult(self.name, CheckStatus.WARN, f"impossibile verificare: {e}")
+        except Exception as e:  # pragma: no cover - defensive
+            return CheckResult(self.name, CheckStatus.WARN, f"couldn't verify: {e}")
 
         known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
         sources = discover_table_sources(project_root, known_ext, output_dir)
@@ -215,17 +215,17 @@ class TableNameUniquenessCheck:
             )
             return CheckResult(
                 self.name, CheckStatus.FAIL,
-                f"{len(duplicates)} nomi tabella duplicati: {names}",
+                f"{len(duplicates)} duplicate table names: {names}",
                 hint=detail,
             )
-        return CheckResult(self.name, CheckStatus.OK, f"{len(sources)} tabelle, nessun nome duplicato")
+        return CheckResult(self.name, CheckStatus.OK, f"{len(sources)} tables, no duplicate name")
 
 
 class LocalPluginDepsCheck:
-    """Scansiona i plugin locali (local_plugins/, PAYLOAD_PLUGIN_PATH)
-    e segnala quelli con REQUIRES non soddisfatte. Non bloccante (WARN):
-    un plugin locale con dipendenze mancanti non impedisce a payload di
-    funzionare, solo a quel plugin specifico."""
+    """Scans local plugins (local_plugins/, PAYLOAD_PLUGIN_PATH) and
+    reports the ones with unmet REQUIRES. Non-blocking (WARN): a local
+    plugin with missing dependencies doesn't prevent payload from
+    working, only that specific plugin."""
 
     name = "local_plugin_deps"
     api_version = "1.0"
@@ -254,20 +254,20 @@ class LocalPluginDepsCheck:
         if problems:
             return CheckResult(
                 self.name, CheckStatus.WARN,
-                f"{len(problems)} plugin locali con dipendenze mancanti",
-                hint="; ".join(problems) + " — usa 'pld plugin install-deps <file>'",
+                f"{len(problems)} local plugins with missing dependencies",
+                hint="; ".join(problems) + " — use 'pld plugin install-deps <file>'",
             )
-        return CheckResult(self.name, CheckStatus.OK, "nessuna dipendenza mancante nei plugin locali")
+        return CheckResult(self.name, CheckStatus.OK, "no missing dependency among local plugins")
 
 
 class LocalPluginStubCheck:
-    """Segnala plugin locali che sono ancora scaffold incompleti — il
-    corpo di parse/emit/run è ancora 'raise NotImplementedError(...)',
-    quello che 'pld plugin new-local' genera prima di essere davvero
-    scritto. Non bloccante (WARN): il plugin semplicemente non
-    funziona ancora, non è un bug di payload — ma senza questo check
-    l'unico modo di scoprirlo era farlo esplodere durante una build
-    vera (vedi ReaderParseError/WriterEmitError in core/pipeline.py)."""
+    """Reports local plugins that are still incomplete scaffolds — the
+    body of parse/emit/run is still 'raise NotImplementedError(...)',
+    what 'pld plugin new-local' generates before it's actually
+    written. Non-blocking (WARN): the plugin simply doesn't work yet,
+    it's not a payload bug — but without this check the only way to
+    find out was to have it blow up during a real build (see
+    ReaderParseError/WriterEmitError in core/pipeline.py)."""
 
     name = "local_plugin_stubs"
     api_version = "1.0"
@@ -289,16 +289,16 @@ class LocalPluginStubCheck:
         if problems:
             return CheckResult(
                 self.name, CheckStatus.WARN,
-                f"{len(problems)} plugin locali ancora da implementare: {', '.join(problems)}",
-                hint="Completa il/i metodo/i indicati, o elimina il file se non serve più — vedi PLUGINS.md, sezione DoctorCheck",
+                f"{len(problems)} local plugins still to implement: {', '.join(problems)}",
+                hint="Complete the indicated method(s), or delete the file if it's no longer needed — see PLUGINS.md, DoctorCheck section",
             )
-        return CheckResult(self.name, CheckStatus.OK, "nessuno scaffold incompleto tra i plugin locali")
+        return CheckResult(self.name, CheckStatus.OK, "no incomplete scaffold among local plugins")
 
 
 class GitCheck:
-    """Verifica se git è disponibile. Non bloccante: payload funziona
-    anche senza (la history in .payload_history/ è indipendente da
-    git), ma molti workflow lo danno per scontato."""
+    """Checks whether git is available. Non-blocking: payload works
+    fine without it too (history in .payload_history/ is independent
+    of git), but many workflows take it for granted."""
 
     name = "git"
     api_version = "1.0"
@@ -307,26 +307,26 @@ class GitCheck:
         path = shutil.which("git")
         if not path:
             return CheckResult(
-                self.name, CheckStatus.WARN, "git non trovato nel PATH",
-                hint="Facoltativo, ma consigliato per versionare sorgenti e config",
+                self.name, CheckStatus.WARN, "git not found in PATH",
+                hint="Optional, but recommended to version sources and config",
             )
         try:
             result = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=5)
-            version = result.stdout.strip() or "versione sconosciuta"
+            version = result.stdout.strip() or "unknown version"
         except (subprocess.TimeoutExpired, OSError):
-            return CheckResult(self.name, CheckStatus.WARN, "git trovato ma non risponde a --version")
+            return CheckResult(self.name, CheckStatus.WARN, "git found but not responding to --version")
 
         project_root = Path(config.get("_project_root", "."))
         in_repo = (project_root / ".git").is_dir()
-        repo_status = "repo git presente" if in_repo else "cartella non ancora un repo git"
+        repo_status = "git repo present" if in_repo else "folder not a git repo yet"
         return CheckResult(self.name, CheckStatus.OK, f"{version} ({repo_status})")
 
 
 class PipelineExecStagesCheck:
-    """Segnala quanti stage 'exec' sono configurati nel progetto — uno
-    stage exec esegue codice arbitrario letto da config (vedi
-    src/payload/docs/PIPELINE.md, sezione Sicurezza). Non bloccante: solo
-    visibilità, per non ignorarlo senza accorgersene."""
+    """Reports how many 'exec' stages are configured in the project —
+    an exec stage runs arbitrary code read from config (see
+    src/payload/docs/PIPELINE.md, Security section). Non-blocking: just
+    visibility, so it doesn't go unnoticed."""
 
     name = "pipeline_exec"
     api_version = "1.0"
@@ -349,7 +349,7 @@ class PipelineExecStagesCheck:
             try:
                 data = _load_toml(f)
             except Exception:
-                continue  # file malformato: già segnalato da ConfigValidityCheck, non duplichiamo qui
+                continue  # malformed file: already reported by ConfigValidityCheck, don't duplicate here
             stages = data.get("pipeline", {}).get("stages", [])
             if not isinstance(stages, list):
                 continue
@@ -361,11 +361,11 @@ class PipelineExecStagesCheck:
         if exec_count:
             return CheckResult(
                 self.name, CheckStatus.WARN,
-                f"{exec_count} stage 'exec' configurati in {len(files_with_exec)} file — "
-                f"eseguono comandi esterni durante la build",
-                hint=f"File: {', '.join(files_with_exec)}. Vedi src/payload/docs/PIPELINE.md, sezione Sicurezza",
+                f"{exec_count} 'exec' stages configured in {len(files_with_exec)} files — "
+                f"they run external commands during the build",
+                hint=f"Files: {', '.join(files_with_exec)}. See src/payload/docs/PIPELINE.md, Security section",
             )
-        return CheckResult(self.name, CheckStatus.OK, "nessuno stage 'exec' configurato")
+        return CheckResult(self.name, CheckStatus.OK, "no 'exec' stage configured")
 
 
 def builtin_checks() -> list:
@@ -394,15 +394,15 @@ def run_doctor(config: dict, registry: PluginRegistry | None = None) -> list[Che
         try:
             results.append(check.run(config))
         except Exception as e:
-            # Un check di terze parti (builtin_checks non solleva mai
-            # nulla di grezzo) può essere uno scaffold locale ancora in
-            # TODO — un check che esplode non deve far esplodere l'intero
-            # 'pld doctor'/'GET /api/doctor', altrimenti l'utente perde
-            # visibilità su TUTTI gli altri check solo per colpa di uno.
+            # A third-party check (builtin_checks never raises
+            # anything raw) might be a local scaffold still a TODO — a
+            # check that blows up must not blow up the whole 'pld
+            # doctor'/'GET /api/doctor', otherwise the user loses
+            # visibility into ALL the other checks just because of one.
             results.append(CheckResult(
                 getattr(check, "name", type(check).__name__),
                 CheckStatus.FAIL,
-                f"il check ha sollevato un errore inatteso ({type(e).__name__}): {e}",
-                hint="Se è un plugin locale appena creato, potrebbe essere ancora uno scaffold incompleto — vedi PLUGINS.md, sezione DoctorCheck",
+                f"the check raised an unexpected error ({type(e).__name__}): {e}",
+                hint="If this is a freshly created local plugin, it might still be an incomplete scaffold — see PLUGINS.md, DoctorCheck section",
             ))
     return results

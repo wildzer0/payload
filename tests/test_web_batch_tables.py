@@ -1,9 +1,10 @@
 """
-Test web per le tabelle batch ([[batch_table]], vedi
-src/payload/docs/BATCH.md) — stesso pattern (TestClient) di
-test_web_build.py/test_web_config.py, copre i rami batch di ogni route
-toccata nella generalizzazione (build, status, commit, diff, restore,
-golden, report, export, sidecar/pipeline reject, source editor reject)."""
+Web tests for batch tables ([[batch_table]], see
+src/payload/docs/BATCH.md) — same pattern (TestClient) as
+test_web_build.py/test_web_config.py, covers the batch branches of
+every route touched by the generalization (build, status, commit,
+diff, restore, golden, report, export, sidecar/pipeline reject, source
+editor reject)."""
 from pathlib import Path
 
 from starlette.testclient import TestClient
@@ -261,9 +262,9 @@ def test_pipeline_get_batch_table(tmp_path):
 
 
 def test_pipeline_get_batch_table_reports_non_terminal_writer_checkpoint(tmp_path):
-    """Uno stage writer NON terminale (seguito da un exec) calcola il
-    checkpoint key con compute_pipeline_cache_key_multi per una tabella
-    batch, invece del ramo a singolo file — copre quel ramo."""
+    """A NON-terminal writer stage (followed by an exec) computes the
+    checkpoint key with compute_pipeline_cache_key_multi for a batch
+    table, instead of the single-file branch — covers that branch."""
     root = _init_project(tmp_path)
     _write_rows(root)
     _add_batch_table(

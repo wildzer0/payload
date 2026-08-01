@@ -1,14 +1,14 @@
 """
-Motore di batch-build: date N tabelle (file singoli o tabelle batch,
-vedi core/discovery.py::TableRef), le costruisce in un thread pool e
-aggrega i risultati — condiviso tra 'pld build-all' e la build iniziale
-di 'pld watch', così la logica vive in un solo posto.
+Batch-build engine: given N tables (single files or batch tables, see
+core/discovery.py::TableRef), builds them in a thread pool and
+aggregates the results — shared between 'pld build-all' and the initial
+build of 'pld watch', so the logic lives in one place.
 
-Nessuna dipendenza da Rich qui: la UI (progress bar) resta nel comando
-CLI, agganciata tramite 'on_table_result'. Questo modulo non solleva
-mai un'eccezione aggregata (niente BatchBuildError) — ritorna i
-fallimenti dentro BatchBuildSummary e lascia al chiamante decidere se
-e come farli esplodere (build-all vuole fallire il comando, watch no).
+No dependency on Rich here: the UI (progress bar) stays in the CLI
+command, hooked in via 'on_table_result'. This module never raises an
+aggregate exception (no BatchBuildError) — it returns failures inside
+BatchBuildSummary and leaves it to the caller to decide whether and how
+to blow up (build-all wants to fail the command, watch doesn't).
 """
 from __future__ import annotations
 
@@ -58,21 +58,21 @@ def run_batch_build(
     keep_intermediate: bool = False,
     on_table_result: OnTableResult | None = None,
 ) -> BatchBuildSummary:
-    """Builda ogni tabella in 'tables' (jobs=1 sequenziale, jobs>1 su
-    thread pool — le tabelle sono indipendenti tra loro), aggrega i
-    risultati e salva la cache una volta sola alla fine.
+    """Builds every table in 'tables' (jobs=1 sequential, jobs>1 on a
+    thread pool — tables are independent of each other), aggregates the
+    results and saves the cache once at the end.
 
-    on_table_result(ref, status), se dato, è invocato dopo ogni build
-    con status in "ok"/"error" — usato dal chiamante per aggiornare una
-    progress bar, opzionale altrimenti."""
+    on_table_result(ref, status), if given, is invoked after each build
+    with status "ok"/"error" — used by the caller to update a progress
+    bar, optional otherwise."""
     summary = BatchBuildSummary()
     lock = threading.Lock()
-    history = HistoryStore(root)  # sola lettura qui (check_golden), sicuro condiviso tra i thread
+    history = HistoryStore(root)  # read-only here (check_golden), safe to share across threads
 
     def _build_one(ref: "TableRef"):
-        """Eseguita in un thread del pool. Ritorna sempre, non solleva:
-        gli errori sono catturati qui per non far crashare l'executor e
-        per accumulare tutti i fallimenti, non solo il primo."""
+        """Runs in a pool thread. Always returns, never raises: errors
+        are caught here so they don't crash the executor and so all
+        failures accumulate, not just the first one."""
         try:
             if ref.is_batch:
                 per_table_config = effective_config(load_config(root), ref.batch)
@@ -85,9 +85,10 @@ def run_batch_build(
             )
             mismatch = False
             if check_golden_flag and not dry_run:
-                # 'stale' conta come mismatch qui: il sorgente è cambiato dopo
-                # il golden, quindi anche un output che sembra combaciare non è
-                # una verifica affidabile — batch-build vuole un segnale netto.
+                # 'stale' counts as a mismatch here: the source changed after
+                # the golden was set, so even an output that looks like it
+                # matches isn't a reliable check — batch-build wants a clear
+                # signal.
                 status = check_golden(history, ref.name, ref.source_paths, out_paths).status
                 mismatch = status in ("mismatch", "stale")
             return ("ok", ref, was_built, mismatch, None)

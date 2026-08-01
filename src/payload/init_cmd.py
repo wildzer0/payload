@@ -1,22 +1,24 @@
-"""Implementazione di 'pld init': crea lo scaffold minimo di un progetto."""
+"""Implementation of 'pld init': creates the minimal scaffold of a project."""
 from __future__ import annotations
 
 import importlib.resources
 from pathlib import Path
 
+import tomli_w
+
 from payload.core.config import GLOBAL_CONFIG_FILENAME
 from payload.core.local_plugins import LOCAL_PLUGINS_DIRNAME
 
-LOCAL_PLUGINS_README = '''# Plugin locali
+LOCAL_PLUGINS_README = '''# Local plugins
 
-File .py messi qui vengono scoperti automaticamente da payload, senza
-bisogno di `pip install` — vedi src/payload/docs/PLUGINS.md, sezione
-"Plugin locali senza pip install", per la guida completa.
+.py files placed here are discovered automatically by payload, no
+`pip install` needed — see src/payload/docs/PLUGINS.md, section
+"Local plugins without pip install", for the full guide.
 
-Convenzione minima:
+Minimal convention:
 
-    class MioWriter:
-        name = "mio_writer"
+    class MyWriter:
+        name = "my_writer"
         extension = ".mio"
         api_version = "1.0"
 
@@ -24,28 +26,40 @@ Convenzione minima:
             out_path.write_bytes(ir.data)
             return out_path
 
-    WRITER = MioWriter
+    WRITER = MyWriter
 
-Se il plugin ha bisogno di librerie terze non gia' installate,
-dichiaralo con REQUIRES a livello di modulo:
+If the plugin needs third-party libraries not already installed,
+declare them with a module-level REQUIRES:
 
     REQUIRES = ["numpy>=1.20"]
 
-`pld plugin install-deps <file>` le installa con pip.
+`pld plugin install-deps <file>` installs them with pip.
 '''
 
-# Sentinel per distinguere "il chiamante non ha specificato nulla"
-# (init_project() senza argomenti -> usa il template statico, con
-# 'writer = "bin"' esplicito, pensato per dare un default funzionante
-# subito) da "il chiamante ha scelto ESPLICITAMENTE nessuna preferenza"
-# (es. il wizard, con l'utente che lascia il prompt vuoto -> writer=None
-# voluto, non deve tornare 'bin' a sua insaputa). None da solo non basta
-# a distinguere i due casi, quindi serve un sentinel diverso da None.
+# Sentinel to distinguish "the caller specified nothing"
+# (init_project() with no arguments -> uses the static template, with
+# an explicit 'writer = "bin"', meant to give a working default right
+# away) from "the caller EXPLICITLY chose no preference" (e.g. the
+# wizard, with the user leaving the prompt empty -> writer=None is
+# intentional, must not silently fall back to 'bin'). None alone isn't
+# enough to distinguish the two cases, hence a sentinel distinct from None.
 _UNSET = object()
 
 
 def is_nonempty_existing_dir(path: Path) -> bool:
     return path.exists() and path.is_dir() and any(path.iterdir())
+
+
+def _render_project_section(name: str, description: str | None) -> str:
+    """A project ALWAYS has a name — if the user doesn't pass one
+    explicitly to 'pld init', the caller has already resolved the
+    default (the folder name) before getting here. tomli_w takes care
+    of correct TOML escaping for name/description (they can contain
+    quotes, unicode, etc.)."""
+    project: dict = {"name": name}
+    if description:
+        project["description"] = description
+    return tomli_w.dumps({"project": project})
 
 
 def _render_toml(writer: str | None, byte_order: str) -> str:
@@ -58,7 +72,7 @@ def _render_toml(writer: str | None, byte_order: str) -> str:
     lines.append('compiler = "gcc"')
     lines.append("compiler_flags = []")
     lines.append('objcopy = "objcopy"')
-    lines.append("# Richiesti solo se usi il writer 'obj' (compila .c -> .o linkabile).")
+    lines.append("# Only required if you use the 'obj' writer (compiles .c -> linkable .o).")
     lines.append('# objcopy_target = "elf32-littlearm"')
     lines.append('# objcopy_arch = "arm"')
     return "\n".join(lines) + "\n"
@@ -71,24 +85,32 @@ def init_project(
     include_example: bool = True,
     writer=_UNSET,
     byte_order: str = "little",
+    project_name: str | None = None,
+    project_description: str | None = None,
 ) -> list[Path]:
-    """Crea target_dir se non esiste, poi table-tool.toml, build/,
-    (opzionalmente) local_plugins/ e una tabella di esempio al suo
-    interno. Ritorna la lista dei file/dir creati. Non sovrascrive
-    nulla salvo force=True.
+    """Creates target_dir if it doesn't exist, then table-tool.toml,
+    build/, (optionally) local_plugins/, and a sample table inside it.
+    Returns the list of created files/dirs. Doesn't overwrite anything
+    unless force=True.
 
-    writer: se omesso (default), usa il template statico con
-    'writer = "bin"' esplicito — comportamento storico, pensato per far
-    funzionare subito 'pld build example_table.raw' senza flag. Passa
-    esplicitamente None (es. dal wizard, quando l'utente non esprime
-    una preferenza) per NON avere quel default e lasciare la
-    risoluzione al meccanismo reader.default_writer/--to.
+    writer: if omitted (default), uses the static template with an
+    explicit 'writer = "bin"' — historical behavior, meant to make
+    'pld build example_table.raw' work right away with no flags. Pass
+    None explicitly (e.g. from the wizard, when the user expresses no
+    preference) to NOT have that default and leave resolution to the
+    reader.default_writer/--to mechanism.
 
-    NOTA sulla sicurezza: questa funzione non decide MAI se sia sicuro
-    scrivere in target_dir (es. se è la cwd e contiene già altra roba) —
-    quella decisione spetta al chiamante (cli.py), che chiede conferma
-    esplicita prima di invocare questa funzione. Qui ci si fida che il
-    permesso sia già stato dato."""
+    project_name: if omitted, the project takes the basename of
+    target_dir as its name — a project ALWAYS has a name (shown in the
+    Dashboard), but that's never a reason to refuse creating the
+    project: the folder name is already a reasonable choice made by
+    the user (same convention as git/npm/cargo).
+
+    SECURITY NOTE: this function NEVER decides whether it's safe to
+    write to target_dir (e.g. if it's the cwd and already has other
+    stuff in it) — that decision is up to the caller (cli.py), which
+    asks for explicit confirmation before calling this function. Here
+    it's trusted that permission has already been given."""
     created: list[Path] = []
     target_dir.mkdir(parents=True, exist_ok=True)
     templates = importlib.resources.files("payload.templates.init")
@@ -99,6 +121,8 @@ def init_project(
             config_content = (templates / "table-tool.toml").read_text()
         else:
             config_content = _render_toml(writer, byte_order)
+        resolved_project_name = project_name or target_dir.resolve().name
+        config_content = _render_project_section(resolved_project_name, project_description) + "\n" + config_content
         config_dest.write_text(config_content)
         created.append(config_dest)
 

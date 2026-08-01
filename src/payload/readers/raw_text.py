@@ -1,9 +1,9 @@
 """
-Reader di esempio: formato testuale con valori byte in esadecimale e
-commenti opzionali. Sintassi:
+Example reader: text format with hexadecimal byte values and optional
+comments. Syntax:
 
-    # commento di linea intera, ignorato
-    0x0A, 0x1B          # commento a fine riga, salvato in TableIR.comments
+    # whole-line comment, ignored
+    0x0A, 0x1B          # end-of-line comment, saved in TableIR.comments
     0x2C, 0x3D
 """
 from __future__ import annotations
@@ -15,21 +15,21 @@ from payload.core.ir import TableIR
 
 
 class RawTextReader:
-    """Formato testuale minimale: valori byte in esadecimale separati da
-    virgola, un commento opzionale a fine riga dopo '#'.
+    """Minimal text format: hexadecimal byte values separated by
+    commas, an optional end-of-line comment after '#'.
 
-    Esempio:
-        # commento di linea intera, ignorato
-        0x0A, 0x1B          # commento a fine riga, salvato in TableIR.comments
+    Example:
+        # whole-line comment, ignored
+        0x0A, 0x1B          # end-of-line comment, saved in TableIR.comments
         0x2C, 0x3D
 
-    Ogni valore deve stare in un singolo byte (0-255). Per valori
-    multi-byte con controllo dell'endianness, usa il reader 'csv'."""
+    Every value must fit in a single byte (0-255). For multi-byte
+    values with endianness control, use the 'csv' reader."""
 
     name = "raw_text"
     extensions = [".raw", ".txt"]
     api_version = "1.0"
-    default_writer = "bin"  # formato dati grezzo -> dump binario grezzo, scelta naturale
+    default_writer = "bin"  # raw data format -> raw binary dump, the natural choice
 
     def sniff(self, path: Path) -> bool:
         try:
@@ -49,7 +49,7 @@ class RawTextReader:
 
             code_part, _, comment_part = line.partition("#")
             code_part = code_part.strip()
-            if not code_part:  # pragma: no cover - difesa: 'line' già garantita non-vuota e non-'#'-iniziale sopra, quindi code_part non può essere vuoto
+            if not code_part:  # pragma: no cover - defensive: 'line' is already guaranteed non-empty and not starting with '#' above, so code_part can't be empty
                 continue
 
             offset_before = len(data)
@@ -60,7 +60,7 @@ class RawTextReader:
                     data.append(int(token, 16))
                 except ValueError as e:
                     raise ReaderParseError(
-                        path, f"riga {lineno}: valore non valido '{token}'"
+                        path, f"line {lineno}: invalid value '{token}'"
                     ) from e
 
             if comment_part.strip():
@@ -75,12 +75,12 @@ class RawTextReader:
         )
 
     def parse_many(self, paths: list[Path], config: dict) -> TableIR:
-        """Estensione opzionale (vedi src/payload/docs/BATCH.md): legge
-        N file NELL'ORDINE DATO da 'paths' (già risolto/ordinato dal
-        chiamante — [[batch_table]]) e li concatena come se fossero un
-        unico file più lungo, riusando la stessa logica riga-per-riga
-        di parse(). Gli offset dei commenti sono cumulativi attraverso
-        i file, non locali a ciascuno."""
+        """Optional extension (see src/payload/docs/BATCH.md): reads N
+        files in the ORDER GIVEN by 'paths' (already resolved/ordered
+        by the caller — [[batch_table]]) and concatenates them as if
+        they were a single longer file, reusing the same line-by-line
+        logic as parse(). Comment offsets are cumulative across the
+        files, not local to each one."""
         data = bytearray()
         comments: list[tuple[int, str]] = []
 
@@ -92,7 +92,7 @@ class RawTextReader:
 
                 code_part, _, comment_part = line.partition("#")
                 code_part = code_part.strip()
-                if not code_part:  # pragma: no cover - difesa, stessa garanzia di parse()
+                if not code_part:  # pragma: no cover - defensive, same guarantee as parse()
                     continue
 
                 offset_before = len(data)
@@ -103,7 +103,7 @@ class RawTextReader:
                         data.append(int(token, 16))
                     except ValueError as e:
                         raise ReaderParseError(
-                            path, f"riga {lineno}: valore non valido '{token}'"
+                            path, f"line {lineno}: invalid value '{token}'"
                         ) from e
 
                 if comment_part.strip():

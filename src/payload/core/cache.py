@@ -1,8 +1,8 @@
 """
-Cache incrementale stile Make ma basata su hash del contenuto, non su mtime.
+Make-style incremental cache, but based on content hash, not mtime.
 
-La chiave include sorgente + reader + writer + config, perché stesso file
-con reader/writer/config diversi produce output diverso.
+The key includes source + reader + writer + config, because the same
+file with a different reader/writer/config produces different output.
 """
 from __future__ import annotations
 
@@ -36,10 +36,10 @@ def compute_cache_key(
 
 
 def compute_pipeline_cache_key(source_bytes: bytes, stage_signature: str, config: dict) -> str:
-    """Come compute_cache_key, ma sull'intera pipeline (stage_signature
-    da PipelineSpec.cache_signature()) invece di un solo reader/writer —
-    cambiare anche un solo stage nel mezzo invalida la cache dell'intera
-    pipeline. Cache per singolo stage è un'estensione futura, non qui."""
+    """Like compute_cache_key, but for the whole pipeline (stage_signature
+    from PipelineSpec.cache_signature()) instead of a single reader/writer —
+    changing even one stage in the middle invalidates the cache for the
+    whole pipeline. Per-stage caching is a future extension, not here."""
     h = hashlib.sha256()
     h.update(source_bytes)
     h.update(stage_signature.encode())
@@ -50,13 +50,13 @@ def compute_pipeline_cache_key(source_bytes: bytes, stage_signature: str, config
 def compute_pipeline_cache_key_multi(
     named_sources: list[tuple[str, bytes]], stage_signature: str, config: dict
 ) -> str:
-    """Come compute_pipeline_cache_key, ma per una tabella batch (N file
-    sorgente invece di 1). named_sources deve già essere ordinato in modo
-    deterministico dal chiamante (stesso ordine usato per parse_many).
-    Ogni file entra nell'hash come (nome, lunghezza, bytes) invece di una
-    concatenazione in un unico bytearray — streaming nell'oggetto sha256
-    incrementale come sopra, e il nome/lunghezza prima dei bytes evita
-    collisioni tipo ["AB","CD"] == ["A","BCD"]."""
+    """Like compute_pipeline_cache_key, but for a batch table (N source
+    files instead of 1). named_sources must already be sorted
+    deterministically by the caller (same order used for parse_many).
+    Each file goes into the hash as (name, length, bytes) instead of a
+    concatenation into one big bytearray — streamed into the
+    incremental sha256 object as above, with name/length before the
+    bytes to avoid collisions like ["AB","CD"] == ["A","BCD"]."""
     h = hashlib.sha256()
     for name, data in named_sources:
         h.update(name.encode())
@@ -82,9 +82,9 @@ class BuildCache:
             raw = json.loads(self.path.read_text())
             self._entries = {k: CacheEntry(**v) for k, v in raw.items()}
         except (json.JSONDecodeError, TypeError, KeyError) as e:
-            # cache corrotta: non è un errore fatale, si rigenera da zero.
-            # 'doctor' segnala questo caso come WARN prima che succeda in build.
-            logger.warning("Cache corrotta in %s, verrà ricreata (%s)", self.path, e)
+            # corrupted cache: not a fatal error, it's regenerated from
+            # scratch. 'doctor' flags this case as WARN before it hits a build.
+            logger.warning("Corrupted cache at %s, will be recreated (%s)", self.path, e)
             self._entries = {}
 
     def save(self) -> None:
@@ -98,26 +98,26 @@ class BuildCache:
             entry = self._entries.get(table_key)
 
         if entry is None:
-            logger.debug("Cache miss per %s: nessuna entry precedente", table_key)
+            logger.debug("Cache miss for %s: no previous entry", table_key)
             return False
         if entry.input_hash != cache_key:
-            logger.debug("Cache miss per %s: hash cambiato", table_key)
+            logger.debug("Cache miss for %s: hash changed", table_key)
             return False
         missing = [p for p in entry.output_paths if not Path(p).exists()]
         if missing:
             logger.debug(
-                "Cache miss per %s: output %s non più presente/i su disco",
+                "Cache miss for %s: output %s no longer present on disk",
                 table_key, missing,
             )
             return False
 
-        logger.debug("Cache hit per %s", table_key)
+        logger.debug("Cache hit for %s", table_key)
         return True
 
     def update(self, table_key: str, cache_key: str, output_path: Path | list[Path]) -> None:
-        """output_path accetta sia un singolo Path (checkpoint di uno
-        stage, sempre un solo file) sia una list[Path] (cache di
-        un'intera tabella, che con un fan-out produce più file)."""
+        """output_path accepts either a single Path (a stage's
+        checkpoint, always a single file) or a list[Path] (cache for a
+        whole table, which produces several files with a fan-out)."""
         paths = [output_path] if isinstance(output_path, Path) else output_path
         with self._lock:
             self._entries[table_key] = CacheEntry(
@@ -125,10 +125,27 @@ class BuildCache:
             )
 
     def get_output_path(self, table_key: str) -> Path | None:
-        """Ritorna il PRIMO output_path registrato per table_key, se
-        esiste — usato per riprendere l'esecuzione da un checkpoint di
-        stage (sempre un solo file) senza dover rieseguire gli stage
-        precedenti. Non verifica freschezza: chiamare is_fresh() prima."""
+        """Returns the FIRST output_path registered for table_key, if
+        any — used to resume execution from a stage checkpoint (always
+        a single file) without having to re-run the earlier stages.
+        Doesn't check freshness: call is_fresh() first."""
         with self._lock:
             entry = self._entries.get(table_key)
         return Path(entry.output_paths[0]) if entry and entry.output_paths else None
+
+    def forget_table(self, table_name: str) -> int:
+        """Removes every cache entry for this table — both the
+        whole-build one (key = table name) and any intermediate stage
+        checkpoints (key '<name>::stage<i>', see pipeline.py) — used by
+        'pld rm', which must not leave orphaned cache for a deleted
+        table. Returns how many entries were removed. Doesn't call
+        save(): it's up to the caller to persist (same pattern as
+        update())."""
+        with self._lock:
+            to_remove = [
+                k for k in self._entries
+                if k == table_name or k.startswith(f"{table_name}::stage")
+            ]
+            for k in to_remove:
+                del self._entries[k]
+        return len(to_remove)

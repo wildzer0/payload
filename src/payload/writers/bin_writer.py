@@ -1,13 +1,13 @@
-"""Writer di esempio: scrive i bytes della IR.
+"""Example writer: writes the IR's bytes.
 
-Se la config richiede un byte_order diverso da quello con cui il reader
-ha impacchettato i dati (ir.byte_order), E il reader ha esposto i valori
-strutturati in ir.extra["fields"], li ripacchetta nell'ordine richiesto
-prima di scrivere — è così che un reader 'little' e un writer 'big'
-possono convivere. Se il reader non espone i campi (perché lavora solo
-con singoli byte, dove l'ordine non ha senso, o perché è un reader più
-semplice), il writer scrive i bytes così come ricevuti, senza tentare
-reinterpretazioni alla cieca."""
+If the config requires a byte_order different from the one the reader
+packed the data with (ir.byte_order), AND the reader exposed the
+structured values in ir.extra["fields"], it repacks them in the
+requested order before writing — this is how a 'little' reader and a
+'big' writer can coexist. If the reader doesn't expose the fields
+(because it only works with single bytes, where order doesn't matter,
+or because it's a simpler reader), the writer writes the bytes as
+received, without attempting a blind reinterpretation."""
 from __future__ import annotations
 
 import logging
@@ -20,14 +20,14 @@ logger = logging.getLogger(__name__)
 
 
 class BinWriter:
-    """Scrive i bytes di TableIR.data così come sono: nessun involucro,
-    nessuna intestazione, il file di output è esattamente ir.data.
+    """Writes TableIR.data's bytes as-is: no wrapper, no header, the
+    output file is exactly ir.data.
 
-    Se 'defaults.byte_order' in config richiede un ordine diverso da
-    quello con cui il reader ha impacchettato i dati, e il reader espone
-    ir.extra['fields'] (valori strutturati, non solo bytes), ripacchetta
-    automaticamente nell'ordine richiesto. Altrimenti scrive i bytes
-    invariati con un avviso (mai uno swap alla cieca)."""
+    If 'defaults.byte_order' in config requires an order different
+    from the one the reader packed the data with, and the reader
+    exposes ir.extra['fields'] (structured values, not just bytes), it
+    automatically repacks in the requested order. Otherwise it writes
+    the bytes unchanged with a warning (never a blind swap)."""
 
     name = "bin"
     extension = ".bin"
@@ -40,13 +40,13 @@ class BinWriter:
             fields = ir.extra.get("fields")
             if fields:
                 logger.debug(
-                    "Ripacchetto %d campi da %s a %s", len(fields), ir.byte_order, target_order
+                    "Repacking %d fields from %s to %s", len(fields), ir.byte_order, target_order
                 )
                 out_path.write_bytes(repack(fields, target_order))
                 return out_path
             logger.warning(
-                "byte_order richiesto (%s) diverso da quello del reader (%s), ma "
-                "'%s' non espone campi strutturati: scrivo i bytes così come ricevuti",
+                "Requested byte_order (%s) differs from the reader's (%s), but "
+                "'%s' doesn't expose structured fields: writing the bytes as received",
                 target_order, ir.byte_order, ir.source_format,
             )
 

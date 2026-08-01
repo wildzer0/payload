@@ -1,26 +1,26 @@
 """
-Compila un file .c con il toolchain configurato ed estrae i bytes di
-una sezione dati dedicata, per popolare TableIR.data.
+Compiles a .c file with the configured toolchain and extracts the
+bytes of a dedicated data section, to populate TableIR.data.
 
-Il file .c deve definire i dati in una sezione con questo nome esatto:
+The .c file must define the data in a section with this exact name:
 
     #include <stdint.h>
     const uint8_t table_data[] __attribute__((section("payload_table_data"))) = {
-        0x0A, 0x1B,  // soglia min
-        0x2C, 0x3D,  // soglia max
+        0x0A, 0x1B,  // min threshold
+        0x2C, 0x3D,  // max threshold
     };
 
-Il nome sezione è fisso (non dipende dal nome tabella): questo .c viene
-compilato solo per ESTRARNE i bytes, non è quello che finisce linkato
-nel firmware — quella parte (con la sezione nominata per tabella e i
-simboli __start_X/__stop_X) è responsabilità del writer 'obj', non di
-questo reader. Vedi src/payload/docs/PLUGINS.md.
+The section name is fixed (doesn't depend on the table name): this .c
+file is compiled only to EXTRACT its bytes, it's not what ends up
+linked into the firmware — that part (with the per-table section name
+and the __start_X/__stop_X symbols) is the 'obj' writer's
+responsibility, not this reader's. See src/payload/docs/PLUGINS.md.
 
-I commenti // a fine riga sono estratti su base "best effort" per 'pld
-view': non sono mai autorevoli sul contenuto — se il parsing testuale
-fallisce per un .c più complesso della sintassi array-di-byte, i
-commenti vengono semplicemente omessi senza errore, solo i bytes
-realmente compilati contano."""
+The trailing // comments are extracted on a "best effort" basis for
+'pld view': they're never authoritative about the content — if text
+parsing fails for a .c more complex than the array-of-bytes syntax,
+the comments are simply omitted without an error, only the bytes
+actually compiled matter."""
 from __future__ import annotations
 
 import re
@@ -38,11 +38,11 @@ _HEX_RE = re.compile(r"0[xX][0-9a-fA-F]+")
 
 
 class CSourceReader:
-    """Compila un file .c (dati in una sezione dedicata, vedi docstring
-    del modulo per la convenzione richiesta) tramite il toolchain
-    configurato ed estrae i bytes compilati — il compilatore è sempre
-    la fonte di verità sul contenuto, mai una reinterpretazione a mano
-    del sorgente."""
+    """Compiles a .c file (data in a dedicated section, see the module
+    docstring for the required convention) with the configured
+    toolchain and extracts the compiled bytes — the compiler is always
+    the source of truth for the content, never a hand-rolled
+    reinterpretation of the source."""
 
     name = "c_source"
     extensions = [".c"]
@@ -58,11 +58,11 @@ class CSourceReader:
         compiler_flags = toolchain.get("compiler_flags", [])
         objcopy = toolchain.get("objcopy", "objcopy")
 
-        # sottocartella PRIVATA dentro tmp/, non tmp/ stessa: quando questo
-        # reader gira dentro una pipeline multi-stage, tmp/ è condivisa tra
-        # più stage (vedi core/pipeline.py) — cancellare l'intera tmp/ a
-        # fine parsing romperebbe gli stage successivi che se la aspettano
-        # ancora lì.
+        # PRIVATE subfolder inside tmp/, not tmp/ itself: when this
+        # reader runs inside a multi-stage pipeline, tmp/ is shared
+        # across several stages (see core/pipeline.py) — deleting the
+        # whole tmp/ at the end of parsing would break later stages
+        # that still expect it there.
         tmp = path.parent / "tmp" / "c_source_scratch"
         tmp.mkdir(parents=True, exist_ok=True)
         try:
@@ -74,7 +74,7 @@ class CSourceReader:
                 result = subprocess.run(compile_cmd, capture_output=True, text=True)
             except FileNotFoundError as e:
                 raise ToolchainExecutionError(
-                    compile_cmd, -1, f"eseguibile non trovato: '{compiler}' ({e})"
+                    compile_cmd, -1, f"executable not found: '{compiler}' ({e})"
                 ) from e
             if result.returncode != 0:
                 raise ToolchainExecutionError(compile_cmd, result.returncode, result.stderr)
@@ -88,7 +88,7 @@ class CSourceReader:
                 result = subprocess.run(extract_cmd, capture_output=True, text=True)
             except FileNotFoundError as e:
                 raise ToolchainExecutionError(
-                    extract_cmd, -1, f"eseguibile non trovato: '{objcopy}' ({e})"
+                    extract_cmd, -1, f"executable not found: '{objcopy}' ({e})"
                 ) from e
             if result.returncode != 0:
                 raise ToolchainExecutionError(extract_cmd, result.returncode, result.stderr)
@@ -96,8 +96,8 @@ class CSourceReader:
             if not bin_path.exists() or bin_path.stat().st_size == 0:
                 raise ReaderParseError(
                     path,
-                    f"nessun dato trovato nella sezione '{SECTION_NAME}' — il .c deve "
-                    f'definire i dati con __attribute__((section("{SECTION_NAME}")))',
+                    f"no data found in section '{SECTION_NAME}' — the .c file must "
+                    f'define the data with __attribute__((section("{SECTION_NAME}")))',
                 )
 
             data = bin_path.read_bytes()
@@ -122,6 +122,6 @@ class CSourceReader:
                 if comment_part.strip() and hex_values:
                     comments.append((offset, comment_part.strip()))
                 offset += len(hex_values)
-            return comments if offset == data_len else []  # sanity check: se non torna, non ci si fida
+            return comments if offset == data_len else []  # sanity check: if it doesn't add up, don't trust it
         except Exception:
             return []

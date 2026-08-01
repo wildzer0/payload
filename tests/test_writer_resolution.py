@@ -121,18 +121,18 @@ def test_no_writer_resolvable_raises_clear_error(tmp_path, registry):
 
 
 def test_incompatible_writer_rejected_before_parsing(tmp_path, registry):
-    src = tmp_path / "t.nd"  # reader_no_default, NON compatibile con 'picky'
+    src = tmp_path / "t.nd"  # reader_no_default, NOT compatible with 'picky'
     src.write_text("x")
     picky = registry.writers["picky"]
 
     with pytest.raises(WriterEmitError):
         build([src], registry, _FakeConfig(), tmp_path / "out", writer_name="picky")
 
-    assert picky.called is False  # emit() non deve mai essere invocato
+    assert picky.called is False  # emit() must never be invoked
 
 
 def test_compatible_writer_accepted(tmp_path, registry):
-    src = tmp_path / "t.wd"  # reader_with_default, COMPATIBILE con 'picky'
+    src = tmp_path / "t.wd"  # reader_with_default, COMPATIBLE with 'picky'
     src.write_text("x")
 
     out_paths, built = build([src], registry, _FakeConfig(), tmp_path / "out", writer_name="picky")
@@ -141,9 +141,10 @@ def test_compatible_writer_accepted(tmp_path, registry):
 
 
 class _ReaderAltSameExtension:
-    """Stessa estensione di _ReaderWithDefault ma un altro reader:
-    da solo rende l'estensione ambigua, serve a dimostrare che
-    config.defaults.reader risolve l'ambiguità come farebbe --from."""
+    """Same extension as _ReaderWithDefault but a different reader:
+    on its own it makes the extension ambiguous, used to demonstrate
+    that config.defaults.reader resolves the ambiguity the same way
+    --from would."""
     name = "reader_alt"
     extensions = [".wd"]
     api_version = "1.0"

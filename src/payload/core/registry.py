@@ -1,7 +1,7 @@
 """
-Registro e discovery dei plugin (reader, writer, doctor check) via
-importlib.metadata entry_points. Nessuna dipendenza esterna necessaria:
-entry_points è nativo in stdlib da Python 3.10+.
+Plugin registry and discovery (reader, writer, doctor check) via
+importlib.metadata entry_points. No external dependency needed:
+entry_points has been native in stdlib since Python 3.10+.
 """
 from __future__ import annotations
 
@@ -28,26 +28,26 @@ class PluginRegistry:
         self.readers: dict[str, Reader] = {}
         self.writers: dict[str, Writer] = {}
         self.doctor_checks: dict[str, DoctorCheck] = {}
-        # tracciamo l'entry point d'origine per 'plugins list' (pacchetto/versione)
+        # track the originating entry point for 'plugins list' (package/version)
         self._origin: dict[str, EntryPoint] = {}
-        # plugin che sono falliti al caricamento in modalità non-strict,
-        # con la ragione — usato da 'pld doctor' per riportarli per nome
-        # invece di un generico "discovery completata"
+        # plugins that failed to load in non-strict mode, with the
+        # reason — used by 'pld doctor' to report them by name instead
+        # of a generic "discovery completed"
         self.load_failures: list[tuple[str, str, str]] = []  # (name, group, reason)
 
     def register_reader(self, r: Reader) -> None:
         if r.name in self.readers:
-            logger.warning("Reader '%s' già registrato, sovrascritto", r.name)
+            logger.warning("Reader '%s' already registered, overwritten", r.name)
         self.readers[r.name] = r
 
     def register_writer(self, w: Writer) -> None:
         if w.name in self.writers:
-            logger.warning("Writer '%s' già registrato, sovrascritto", w.name)
+            logger.warning("Writer '%s' already registered, overwritten", w.name)
         self.writers[w.name] = w
 
     def register_doctor_check(self, c: DoctorCheck) -> None:
         if c.name in self.doctor_checks:
-            logger.warning("Doctor check '%s' già registrato, sovrascritto", c.name)
+            logger.warning("Doctor check '%s' already registered, overwritten", c.name)
         self.doctor_checks[c.name] = c
 
     def find_reader(self, path: Path, explicit: str | None = None) -> Reader:
@@ -68,31 +68,32 @@ class PluginRegistry:
         raise NoReaderFoundError(path)
 
     def is_builtin(self, name: str) -> bool:
-        """True per un plugin distribuito con payload stesso (i reader/
-        writer in payload.readers/payload.writers, registrati come
-        entry_points 'payload.*:...' — vedi pyproject.toml). False per
-        un plugin locale (local_plugins/, senza entry point) o per un
-        plugin di terze parti installato via pip: solo i primi contano
-        come 'built-in' agli occhi dell'utente ('plugins list' li mette
-        in secondo piano rispetto ai plugin scritti da lui)."""
+        """True for a plugin shipped with payload itself (the readers/
+        writers in payload.readers/payload.writers, registered as
+        'payload.*:...' entry_points — see pyproject.toml). False for
+        a local plugin (local_plugins/, no entry point) or a
+        third-party plugin installed via pip: only the former count as
+        'built-in' from the user's point of view ('plugins list' puts
+        them below the plugins the user wrote)."""
         origin = self._origin.get(name)
         return origin is not None and origin.module.startswith("payload.")
 
 
 def load_plugins(project_root: Path | None = None, strict: bool = True) -> PluginRegistry:
-    """Carica tutti i plugin: prima quelli installati via entry_points
-    (pacchetti pip), poi quelli locali (file .py sciolti in
-    'local_plugins/' o in PAYLOAD_PLUGIN_PATH — vedi core/local_plugins.py).
+    """Loads every plugin: first the ones installed via entry_points
+    (pip packages), then the local ones (loose .py files in
+    'local_plugins/' or in PAYLOAD_PLUGIN_PATH — see
+    core/local_plugins.py).
 
-    project_root: dove cercare 'local_plugins/'. Se None, usa la
-    working directory corrente (comportamento sensato per la stragrande
-    maggioranza dei comandi, che operano dalla cartella del progetto).
+    project_root: where to look for 'local_plugins/'. If None, uses
+    the current working directory (sensible behavior for the vast
+    majority of commands, which operate from the project folder).
 
-    strict=True: un plugin che fallisce a caricare o con API incompatibile
-    interrompe subito con PluginLoadError/PluginApiVersionError (comportamento
-    di default per build/watch/ecc.).
-    strict=False: registra l'errore e prosegue (usato da 'doctor' e
-    'plugins list', che vogliono mostrare *tutti* i problemi in un colpo solo).
+    strict=True: a plugin that fails to load or has an incompatible
+    API stops immediately with PluginLoadError/PluginApiVersionError
+    (default behavior for build/watch/etc).
+    strict=False: records the error and continues (used by 'doctor'
+    and 'plugins list', which want to show *every* problem at once).
     """
     from payload.core.local_plugins import load_local_plugins
 
@@ -110,13 +111,13 @@ def load_plugins(project_root: Path | None = None, strict: bool = True) -> Plugi
                 check_api_compatibility(ep.name, getattr(instance, "api_version", "0.0"))
                 register_fn(instance)
                 registry._origin[ep.name] = ep
-                logger.debug("Plugin caricato: %s (%s)", ep.name, group)
+                logger.debug("Plugin loaded: %s (%s)", ep.name, group)
             except Exception as e:
-                logger.debug("Fallito caricamento plugin %s (%s): %s", ep.name, group, e)
+                logger.debug("Failed to load plugin %s (%s): %s", ep.name, group, e)
                 if strict:
                     raise PluginLoadError(ep.name, group, str(e)) from e
-                # in modalità non strict, non registriamo il plugin ma
-                # teniamo traccia del motivo: 'doctor' lo riporterà per nome
+                # in non-strict mode, we don't register the plugin but
+                # we keep track of why: 'doctor' will report it by name
                 registry.load_failures.append((ep.name, group, str(e)))
 
     load_local_plugins(project_root or Path.cwd(), registry, strict=strict)

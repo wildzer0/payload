@@ -43,7 +43,7 @@ def test_golden_get_unknown_table_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.get("/api/golden/non_esiste")
+    r = client.get("/api/golden/does_not_exist")
 
     assert r.status_code == 404
 
@@ -123,7 +123,7 @@ def test_golden_get_mismatch_on_tampered_output(tmp_path):
     client = _client(root)
     snap_id = _build_and_commit(client)
     client.put("/api/golden/example_table", json={"snapshot_id": snap_id})
-    (root / "build" / "example_table.bin").write_bytes(b"manomesso")
+    (root / "build" / "example_table.bin").write_bytes(b"tampered")
 
     r = client.get("/api/golden/example_table")
 

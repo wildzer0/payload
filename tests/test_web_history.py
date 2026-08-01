@@ -34,7 +34,7 @@ def test_status_clean_and_dirty_states(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
 
     clean = {t["name"]: t["state"] for t in client.get("/api/status").json()["tables"]}
     assert clean["example_table"] == "clean"
@@ -68,28 +68,52 @@ def test_commit_nothing_dirty_conflict(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
 
-    r = client.post("/api/commit", json={"message": "niente di nuovo"})
+    r = client.post("/api/commit", json={"message": "nothing new"})
 
     assert r.status_code == 409  # NothingToCommitError overridden -> 409
 
 
+def test_commit_without_building_first_is_blocked(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.post("/api/commit", json={"message": "forgot to build"})
+
+    assert r.status_code == 409
+    assert r.json()["error"] == "NoOutputToCommitError"
+
+
+def test_commit_skips_table_without_output_but_commits_the_rest(tmp_path):
+    root = _init_project(tmp_path)
+    (root / "other.raw").write_text("0x01\n")  # never built: dirty, zero output
+    client = _client(root)
+    client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
+
+    r = client.post("/api/commit", json={"message": "only the built one"})
+
+    assert r.status_code == 200
+    body = r.json()
+    assert [c["name"] for c in body["committed"]] == ["example_table"]
+    assert body["skipped"] == ["other"]
+
+
 def test_commit_sees_change_when_only_writer_changed(tmp_path):
-    """Regressione: build con writer 'bin', commit, poi rebuild della
-    STESSA tabella con writer 'hex' (sorgente invariato) — deve poter
-    essere committata di nuovo, non risultare 'niente di nuovo'."""
+    """Regression: build with writer 'bin', commit, then rebuild the
+    SAME table with writer 'hex' (source unchanged) — it must be
+    committable again, not come out as 'nothing new'."""
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "con writer bin"})
+    client.post("/api/commit", json={"message": "with bin writer"})
 
     client.post("/api/build", json={"source": "example_table.raw", "to": "hex", "force": True})
     status = client.get("/api/status").json()
     row = next(t for t in status["tables"] if t["name"] == "example_table")
     assert row["state"] == "dirty"
 
-    r = client.post("/api/commit", json={"message": "con writer hex"})
+    r = client.post("/api/commit", json={"message": "with hex writer"})
 
     assert r.status_code == 200
     assert r.json()["committed"][0]["name"] == "example_table"
@@ -97,16 +121,16 @@ def test_commit_sees_change_when_only_writer_changed(tmp_path):
 
 def test_commit_only_filters_tables(tmp_path):
     root = _init_project(tmp_path)
-    (root / "altra.raw").write_text("0x01\n")
+    (root / "other.raw").write_text("0x01\n")
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/build", json={"source": "altra.raw", "to": "bin"})
+    client.post("/api/build", json={"source": "other.raw", "to": "bin"})
 
-    r = client.post("/api/commit", json={"message": "solo altra", "only": ["altra"]})
+    r = client.post("/api/commit", json={"message": "other only", "only": ["other"]})
 
     assert r.status_code == 200
     committed = [c["name"] for c in r.json()["committed"]]
-    assert committed == ["altra"]
+    assert committed == ["other"]
 
 
 def test_log_lists_tracked_tables(tmp_path):
@@ -115,7 +139,7 @@ def test_log_lists_tracked_tables(tmp_path):
     assert client.get("/api/log").json()["tables"] == []
 
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
 
     r = client.get("/api/log")
     assert r.json()["tables"] == ["example_table"]
@@ -125,14 +149,14 @@ def test_log_for_specific_table(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
 
     r = client.get("/api/log/example_table")
 
     assert r.status_code == 200
     snaps = r.json()["snapshots"]
     assert len(snaps) == 1
-    assert snaps[0]["message"] == "primo"
+    assert snaps[0]["message"] == "first"
 
 
 def _commit_n_times(client, root: Path, n: int) -> None:
@@ -154,7 +178,7 @@ def test_log_paginates_with_default_page_size(tmp_path):
     assert len(body["snapshots"]) == 8  # DEFAULT_LOG_PAGE_SIZE
     assert body["total"] == 10
     assert body["has_more"] is True
-    assert body["snapshots"][0]["message"] == "v9"  # più recente prima
+    assert body["snapshots"][0]["message"] == "v9"  # most recent first
 
 
 def test_log_pagination_offset_reaches_the_end(tmp_path):
@@ -167,7 +191,7 @@ def test_log_pagination_offset_reaches_the_end(tmp_path):
     body = r.json()
     assert len(body["snapshots"]) == 2
     assert body["has_more"] is False
-    assert body["snapshots"][-1]["message"] == "v0"  # il più vecchio, in fondo
+    assert body["snapshots"][-1]["message"] == "v0"  # the oldest, at the end
 
 
 def test_log_invalid_limit_returns_400(tmp_path):
@@ -186,7 +210,7 @@ def test_snapshot_download_returns_zip_with_source_and_output(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
 
     r = client.get("/api/log/example_table/1/download")
 
@@ -206,7 +230,7 @@ def test_snapshot_download_unknown_snapshot_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
 
     r = client.get("/api/log/example_table/999/download")
 
@@ -217,7 +241,7 @@ def test_snapshot_download_unknown_table_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.get("/api/log/non_esiste/1/download")
+    r = client.get("/api/log/does_not_exist/1/download")
 
     assert r.status_code == 404
 
@@ -244,7 +268,7 @@ def test_diff_identical(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
 
     r = client.get("/api/diff/example_table")
 
@@ -256,7 +280,7 @@ def test_diff_explicit_snapshot_param(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
 
     r = client.get("/api/diff/example_table", params={"snapshot": "1"})
 
@@ -268,7 +292,7 @@ def test_diff_source_deleted_after_commit_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
     (root / "example_table.raw").unlink()
 
     r = client.get("/api/diff/example_table")
@@ -280,7 +304,7 @@ def test_diff_shows_chunks_when_changed(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
     (root / "example_table.raw").write_text("0x99\n")
 
     r = client.get("/api/diff/example_table")
@@ -295,21 +319,21 @@ def test_restore_requires_confirmation(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
     (root / "example_table.raw").write_text("0x99\n")
 
     r = client.post("/api/restore", json={"table_name": "example_table", "snapshot_id": 1})
 
     assert r.status_code == 200
     assert r.json()["status"] == "confirmation_required"
-    assert (root / "example_table.raw").read_text() == "0x99\n"  # non ancora ripristinato
+    assert (root / "example_table.raw").read_text() == "0x99\n"  # not restored yet
 
 
 def test_restore_with_confirm_writes_files(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
     original = (root / "example_table.raw").read_text()
     (root / "example_table.raw").write_text("0x99\n")
 
@@ -324,9 +348,9 @@ def test_restore_leaves_table_clean_via_status(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
     (root / "example_table.raw").write_text("0x99\n")
-    client.post("/api/commit", json={"message": "secondo"})
+    client.post("/api/commit", json={"message": "second"})
 
     r = client.post("/api/restore", json={"table_name": "example_table", "snapshot_id": 1, "confirm": True})
     assert r.status_code == 200
@@ -340,9 +364,9 @@ def test_restore_does_not_create_new_snapshot(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
     (root / "example_table.raw").write_text("0x99\n")
-    client.post("/api/commit", json={"message": "secondo"})
+    client.post("/api/commit", json={"message": "second"})
 
     client.post("/api/restore", json={"table_name": "example_table", "snapshot_id": 1, "confirm": True})
 
@@ -356,7 +380,7 @@ def test_log_reports_reader_writer_outputs_and_head(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
 
     log = client.get("/api/log/example_table").json()
 
@@ -369,11 +393,11 @@ def test_log_reports_reader_writer_outputs_and_head(tmp_path):
 
 
 def test_commit_of_partial_fanout_reports_missing_output(tmp_path):
-    """Stessa regressione di test_cli_history_commands.py ma via web:
-    build parziale (writer 'obj' fallisce senza toolchain configurato,
-    vedi test_obj_writer_mocked.py), poi commit deve segnalare
-    esplicitamente cosa manca — sia nella risposta di /api/commit che
-    permanentemente sullo snapshot via /api/log."""
+    """Same regression as test_cli_history_commands.py but via the
+    web: partial build (writer 'obj' fails without a configured
+    toolchain, see test_obj_writer_mocked.py), then commit must
+    explicitly flag what's missing — both in /api/commit's response
+    and permanently on the snapshot via /api/log."""
     root = _init_project(tmp_path)
     (root / "table-tool.toml").write_text(
         '[pipeline]\nstages = ['
@@ -389,7 +413,7 @@ def test_commit_of_partial_fanout_reports_missing_output(tmp_path):
     assert (root / "build" / "example_table.bin").exists()
     assert not (root / "build" / "example_table.o").exists()
 
-    commit_resp = client.post("/api/commit", json={"message": "parziale"})
+    commit_resp = client.post("/api/commit", json={"message": "partial"})
     assert commit_resp.status_code == 200
     committed = commit_resp.json()["committed"][0]
     assert committed["missing_outputs"] == ["example_table.o"]
@@ -399,15 +423,16 @@ def test_commit_of_partial_fanout_reports_missing_output(tmp_path):
 
 
 def test_log_reflects_actual_writer_used_not_config_default(tmp_path):
-    """Regressione trovata dall'utente: buildare con un writer ad-hoc
-    (--to header) diverso dal default risolto (bin, via raw_text) e poi
-    committare deve registrare 'header' nello snapshot — non 'bin',
-    che sarebbe quello che la config risolverebbe ORA (il writer
-    ad-hoc di una singola build non viene mai scritto in config)."""
+    """Regression found by a user: building with an ad-hoc writer
+    (--to header) different from the resolved default (bin, via
+    raw_text) and then committing must record 'header' in the
+    snapshot — not 'bin', which is what the config would resolve to
+    RIGHT NOW (a single build's ad-hoc writer is never written to
+    config)."""
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "header"})
-    client.post("/api/commit", json={"message": "con header"})
+    client.post("/api/commit", json={"message": "with header"})
 
     log = client.get("/api/log/example_table").json()
 
@@ -420,9 +445,9 @@ def test_report_reflects_tip_snapshot_id(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
-    client.post("/api/commit", json={"message": "primo"})
+    client.post("/api/commit", json={"message": "first"})
     (root / "example_table.raw").write_text("0x99\n")
-    client.post("/api/commit", json={"message": "secondo"})
+    client.post("/api/commit", json={"message": "second"})
     client.post("/api/restore", json={"table_name": "example_table", "snapshot_id": 1, "confirm": True})
 
     report = client.get("/api/report").json()
@@ -436,15 +461,97 @@ def test_restore_unknown_table_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.post("/api/restore", json={"table_name": "non_esiste", "snapshot_id": 1, "confirm": True})
+    r = client.post("/api/restore", json={"table_name": "does_not_exist", "snapshot_id": 1, "confirm": True})
 
     assert r.status_code == 404
 
 
-def test_restore_missing_params_400(tmp_path):
+def test_restore_missing_table_name_400(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.post("/api/restore", json={})
+
+    assert r.status_code == 400
+
+
+def test_restore_omitted_snapshot_id_no_history_404(tmp_path):
+    """snapshot_id omitted = uses the latest — if the table doesn't
+    have even one, 404 instead of a generic 400 for missing
+    parameters."""
     root = _init_project(tmp_path)
     client = _client(root)
 
     r = client.post("/api/restore", json={"table_name": "example_table"})
 
-    assert r.status_code == 400
+    assert r.status_code == 404
+
+
+def test_restore_omitted_snapshot_id_uses_last(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
+    client.post("/api/commit", json={"message": "first"})
+    (root / "example_table.raw").write_text("0x99\n")
+    client.post("/api/commit", json={"message": "second"})
+    (root / "example_table.raw").write_text("0xAA\n")
+
+    r = client.post("/api/restore", json={"table_name": "example_table", "confirm": True})
+
+    assert r.status_code == 200
+    assert r.json()["snapshot_id"] == 2
+    assert (root / "example_table.raw").read_text() == "0x99\n"
+
+
+def test_restore_recreates_source_deleted_from_disk(tmp_path):
+    """The same story as test_cli_history_commands.py, on the web
+    side: a single-file table deleted from disk (without going through
+    /api/table/delete, e.g. an rm by hand) stays restorable."""
+    root = _init_project(tmp_path)
+    client = _client(root)
+    client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
+    client.post("/api/commit", json={"message": "first"})
+    original = (root / "example_table.raw").read_bytes()
+    (root / "example_table.raw").unlink()
+
+    r = client.post("/api/restore", json={"table_name": "example_table", "snapshot_id": 1, "confirm": True})
+
+    assert r.status_code == 200, r.json()
+    assert (root / "example_table.raw").read_bytes() == original
+
+
+def test_restore_confirmation_required_flags_recreating(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
+    client.post("/api/commit", json={"message": "first"})
+    (root / "example_table.raw").unlink()
+
+    r = client.post("/api/restore", json={"table_name": "example_table", "snapshot_id": 1})
+
+    assert r.status_code == 200
+    assert r.json()["status"] == "confirmation_required"
+    assert r.json()["recreating"] is True
+
+
+def test_restore_batch_table_fully_deleted_not_supported(tmp_path):
+    """A batch table deleted entirely (files + [[batch_table]]) isn't
+    automatically restorable — unlike a single-file table, see
+    src/payload/docs/BATCH.md."""
+    root = _init_project(tmp_path)
+    (root / "ROW1.txt").write_text("0x01\n")
+    (root / "ROW2.txt").write_text("0x02\n")
+    (root / "table-tool.toml").write_text(
+        (root / "table-tool.toml").read_text()
+        + '\n[[batch_table]]\nname = "rows"\nsources = ["ROW1.txt", "ROW2.txt"]\n'
+    )
+    client = _client(root)
+    client.post("/api/build", json={"source": "rows", "to": "bin"})
+    commit_resp = client.post("/api/commit", json={"message": "first", "only": ["rows"]})
+    assert commit_resp.json()["committed"], commit_resp.json()
+    del_resp = client.post("/api/table/delete", json={"table_name": "rows", "confirm": True})
+    assert del_resp.json()["batch_entry_removed"] is True
+
+    r = client.post("/api/restore", json={"table_name": "rows", "confirm": True})
+
+    assert r.status_code == 404

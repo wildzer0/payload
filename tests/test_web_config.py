@@ -46,7 +46,7 @@ def test_config_unknown_table_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.get("/api/config", params={"table": "non_esiste"})
+    r = client.get("/api/config", params={"table": "does_not_exist"})
 
     assert r.status_code == 404
 
@@ -68,7 +68,7 @@ def test_pipeline_unknown_table_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.get("/api/pipeline/non_esiste")
+    r = client.get("/api/pipeline/does_not_exist")
 
     assert r.status_code == 404
 
@@ -131,7 +131,7 @@ def test_sidecar_unknown_table_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.get("/api/sidecar/non_esiste")
+    r = client.get("/api/sidecar/does_not_exist")
 
     assert r.status_code == 404
 
@@ -154,7 +154,7 @@ def test_sidecar_put_rejects_non_dict_defaults(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.put("/api/sidecar/example_table", json={"defaults": "non una tabella"})
+    r = client.put("/api/sidecar/example_table", json={"defaults": "not a table"})
 
     assert r.status_code == 400
 
@@ -163,7 +163,7 @@ def test_sidecar_put_rejects_non_dict_toolchain(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.put("/api/sidecar/example_table", json={"toolchain": "non una tabella"})
+    r = client.put("/api/sidecar/example_table", json={"toolchain": "not a table"})
 
     assert r.status_code == 400
 
@@ -231,7 +231,7 @@ def test_pipeline_put_rejects_non_list_stages(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.put("/api/pipeline/example_table", json={"stages": "non una lista"})
+    r = client.put("/api/pipeline/example_table", json={"stages": "not a list"})
 
     assert r.status_code == 400
 
@@ -249,7 +249,7 @@ def test_pipeline_put_rejects_invalid_alternation(tmp_path):
 def test_pipeline_put_rejects_unknown_reader(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
-    stages = [{"type": "reader", "name": "non_esiste"}, {"type": "writer", "name": "bin"}]
+    stages = [{"type": "reader", "name": "does_not_exist"}, {"type": "writer", "name": "bin"}]
 
     r = client.put("/api/pipeline/example_table", json={"stages": stages})
 

@@ -1,11 +1,11 @@
-"""Formattazione Server-Sent Events — usato da build-all e watch, gli
-unici due endpoint che trasmettono aggiornamenti live (vedi
-routes/build.py, routes/watch.py)."""
+"""Server-Sent Events formatting — used by build-all and watch, the
+only two endpoints that stream live updates (see routes/build.py,
+routes/watch.py)."""
 from __future__ import annotations
 
 
 def sse_format(event: str, data: str) -> str:
-    """'data' deve essere già una stringa su una riga sola (es. JSON
-    compatto, senza newline interni) — il protocollo SSE tratta ogni
-    riga che inizia con 'data:' come un pezzo separato del payload."""
+    """'data' must already be a single-line string (e.g. compact JSON,
+    no internal newlines) — the SSE protocol treats every line
+    starting with 'data:' as a separate piece of the payload."""
     return f"event: {event}\ndata: {data}\n\n"

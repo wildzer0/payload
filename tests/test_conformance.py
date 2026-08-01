@@ -11,8 +11,8 @@ from payload.writers.hex_writer import HexWriter
 from payload.testing import assert_reader_conforms, assert_writer_conforms
 
 
-# I plugin builtin devono sempre passare la loro stessa suite di
-# conformità — se uno di questi fallisce, è una regressione nel core.
+# The builtin plugins must always pass their own conformance suite —
+# if one of these fails, it's a regression in the core.
 
 def test_raw_text_reader_conforms(tmp_path):
     sample = tmp_path / "t.raw"
@@ -41,8 +41,8 @@ def test_header_writer_conforms(tmp_path):
     assert_writer_conforms(HeaderWriter(), ir, tmp_path)
 
 
-# La suite deve anche saper INTERCETTARE violazioni vere, non solo
-# validare plugin già corretti — altrimenti non varrebbe niente.
+# The suite must also be able to CATCH real violations, not just
+# validate already-correct plugins — otherwise it would be worthless.
 
 class _ReturnsWrongType:
     name = "bad"
@@ -64,7 +64,7 @@ def test_conformance_catches_wrong_return_type(tmp_path):
 
 
 class _MissingAttributes:
-    name = ""  # vuoto, non valido
+    name = ""  # empty, invalid
     api_version = "1.0"
 
     def sniff(self, path):
@@ -90,7 +90,7 @@ class _RaisesGenericException:
         return False
 
     def parse(self, path, config):
-        raise ValueError("non dovrei sollevare questo")
+        raise ValueError("shouldn't raise this")
 
 
 def test_conformance_catches_generic_exception_instead_of_payload_error(tmp_path):

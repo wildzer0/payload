@@ -123,7 +123,7 @@ def test_duplicate_batch_table_name_raises(tmp_path):
         '[[batch_table]]\nname = "rows"\nsources = ["a.txt"]\n'
         '[[batch_table]]\nname = "rows"\nsources = ["b.txt"]\n',
     )
-    with pytest.raises(BatchTableError, match="duplicato"):
+    with pytest.raises(BatchTableError, match="duplicate"):
         resolve_batch_tables(tmp_path, config)
 
 

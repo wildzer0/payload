@@ -34,7 +34,7 @@ def test_get_editable_text_source(tmp_path):
 def test_put_updates_source(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
-    new_content = "0x2A, 0x2B          # aggiornato dalla web UI\n"
+    new_content = "0x2A, 0x2B          # updated from the web UI\n"
 
     r = client.put("/api/source/example_table", json={"content": new_content})
 
@@ -44,10 +44,10 @@ def test_put_updates_source(tmp_path):
 
 
 def test_get_reports_non_editable_binary_source(tmp_path):
-    """Un file scoperto come sorgente (estensione nota, .c qui) ma con
-    byte non decodificabili come UTF-8 — succede se un reader binario
-    condivide l'estensione con un formato testuale, o più semplicemente
-    con un file corrotto/non testuale piazzato lì per errore."""
+    """A file discovered as a source (known extension, .c here) but
+    with bytes that don't decode as UTF-8 — happens if a binary reader
+    shares the extension with a text format, or more simply with a
+    corrupted/non-text file placed there by mistake."""
     root = _init_project(tmp_path)
     (root / "weird.c").write_bytes(b"\xff\xfe\x00\x01binary-ish\x80\x90")
     client = _client(root)
@@ -65,7 +65,7 @@ def test_get_unknown_table_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.get("/api/source/non_esiste")
+    r = client.get("/api/source/does_not_exist")
 
     assert r.status_code == 404
 
@@ -83,7 +83,7 @@ def test_put_unknown_table_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.put("/api/source/non_esiste", json={"content": "x"})
+    r = client.put("/api/source/does_not_exist", json={"content": "x"})
 
     assert r.status_code == 404
 
@@ -107,7 +107,7 @@ def test_validate_conforms(tmp_path):
 def test_validate_reports_parse_error_after_bad_edit(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
-    client.put("/api/source/example_table", json={"content": "questo non e' hex valido\n"})
+    client.put("/api/source/example_table", json={"content": "this is not valid hex\n"})
 
     r = client.post("/api/source/example_table/validate")
 
@@ -118,10 +118,10 @@ def test_validate_reports_parse_error_after_bad_edit(tmp_path):
 
 
 def test_validate_respects_configured_reader_default(tmp_path):
-    """Regressione: validate ignorava config.defaults.reader e validava
-    sempre col reader auto-risolto, riportando indietro il reader
-    sbagliato quando l'utente ne aveva impostato uno esplicito da
-    sidecar — sembrava che l'override 'non fosse stato salvato'."""
+    """Regression: validate used to ignore config.defaults.reader and
+    always validated with the auto-resolved reader, reporting back the
+    wrong reader when the user had set one explicitly via sidecar — it
+    looked like the override 'hadn't been saved'."""
     root = _init_project(tmp_path)
     client = _client(root)
     client.put("/api/sidecar/example_table", json={"defaults": {"reader": "csv"}})
@@ -131,13 +131,13 @@ def test_validate_respects_configured_reader_default(tmp_path):
     assert r.status_code == 200
     body = r.json()
     assert body["reader"] == "csv"
-    assert body["conforms"] is False  # il contenuto di example_table.raw non è CSV valido
+    assert body["conforms"] is False  # example_table.raw's content isn't valid CSV
 
 
 def test_validate_unknown_table_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.post("/api/source/non_esiste/validate")
+    r = client.post("/api/source/does_not_exist/validate")
 
     assert r.status_code == 404

@@ -45,30 +45,30 @@ def test_discover_for_history_includes_resolved_batch_tables(tmp_path):
 
 
 def test_discover_for_history_excludes_batch_member_files_from_standalone_discovery(tmp_path):
-    """Regressione: ROW1.txt/ROW2.txt hanno un'estensione (.txt)
-    riconosciuta da un reader vero (raw_text) — senza l'esclusione,
-    verrebbero scoperti DUE volte: come parte del batch 'rows' e come
-    tabelle standalone 'ROW1'/'ROW2', con build/output duplicati."""
+    """Regression: ROW1.txt/ROW2.txt have an extension (.txt) recognized
+    by a real reader (raw_text) — without the exclusion, they'd be
+    discovered TWICE: as part of the 'rows' batch and as standalone
+    tables 'ROW1'/'ROW2', with duplicated build/output."""
     (tmp_path / "ROW1.txt").write_text(RAW_READER_CONTENT)
     (tmp_path / "ROW2.txt").write_text(RAW_READER_CONTENT)
-    (tmp_path / "altro.raw").write_text(RAW_READER_CONTENT)
+    (tmp_path / "other.raw").write_text(RAW_READER_CONTENT)
     (tmp_path / "table-tool.toml").write_text(
         '[[batch_table]]\nname = "rows"\nsources = ["ROW*.txt"]\n'
     )
 
     sources, batch_tables, config = discover_for_history(tmp_path)
 
-    assert [p.name for p in sources] == ["altro.raw"]
+    assert [p.name for p in sources] == ["other.raw"]
     assert len(batch_tables) == 1
 
 
 def test_exclude_batch_members_removes_member_paths():
     bt = BatchTable(name="rows", source_paths=[Path("ROW1.txt"), Path("ROW2.txt")])
-    sources = [Path("ROW1.txt"), Path("ROW2.txt"), Path("altro.raw")]
+    sources = [Path("ROW1.txt"), Path("ROW2.txt"), Path("other.raw")]
 
     result = exclude_batch_members(sources, [bt])
 
-    assert [p.name for p in result] == ["altro.raw"]
+    assert [p.name for p in result] == ["other.raw"]
 
 
 def test_exclude_batch_members_noop_without_batch_tables():
@@ -115,10 +115,10 @@ def test_resolve_table_ref_finds_batch_table():
 
 
 def test_resolve_table_ref_batch_takes_priority_when_names_would_collide():
-    """In pratica check_no_batch_name_collisions impedisce che questo
-    accada davvero, ma resolve_table_ref da solo è deliberatamente
-    ordinato batch-prima: il nome di una tabella batch è dichiarato
-    esplicitamente, non dedotto da un filename."""
+    """In practice check_no_batch_name_collisions prevents this from
+    really happening, but resolve_table_ref on its own is deliberately
+    ordered batch-first: a batch table's name is declared explicitly,
+    not derived from a filename."""
     bt = BatchTable(name="rows", source_paths=[Path("ROW1.txt")])
     ref = resolve_table_ref([Path("rows.raw")], [bt], "rows")
     assert ref.is_batch is True

@@ -88,18 +88,18 @@ def test_cli_opts_invalidate_cache(tmp_path, registry):
     out2, built2 = build([src], registry, config, tmp_path / "out", cache=cache, cli_opts={"delimiter": "|"})
 
     assert built1 is True
-    assert built2 is True  # NON deve essere servito dalla cache: cli_opts diverso
+    assert built2 is True  # must NOT be served from cache: different cli_opts
     assert out2[0].read_bytes() == b"|"
 
 
 def test_unknown_top_level_section_still_rejected(tmp_path):
-    (tmp_path / "table-tool.toml").write_text("[qualcosa_a_caso]\nx = 1\n")
+    (tmp_path / "table-tool.toml").write_text("[some_random_thing]\nx = 1\n")
     with pytest.raises(InvalidConfigError):
         load_config(tmp_path)
 
 
 def test_plugin_section_must_be_a_table(tmp_path):
-    (tmp_path / "table-tool.toml").write_text('plugin = "non una tabella"\n')
+    (tmp_path / "table-tool.toml").write_text('plugin = "not a table"\n')
     with pytest.raises(InvalidConfigError):
         load_config(tmp_path)
 

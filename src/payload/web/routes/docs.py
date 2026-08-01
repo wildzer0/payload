@@ -1,7 +1,7 @@
-"""Guide utente incluse nel pacchetto (payload.docs, vedi
-[tool.setuptools.package-data] in pyproject.toml) — la stessa
-documentazione di src/payload/docs/*.md, consultabile da 'pld serve'
-senza bisogno del repository sorgente."""
+"""User guides bundled with the package (payload.docs, see
+[tool.setuptools.package-data] in pyproject.toml) — the same
+documentation as src/payload/docs/*.md, browsable from 'pld serve'
+without needing the source repository."""
 from __future__ import annotations
 
 import importlib.resources
@@ -15,20 +15,20 @@ from payload.web.errors import DocNotFoundError
 
 DOCS = [
     {
-        "slug": "usage", "filename": "USAGE.md", "title": "Guida utente",
-        "description": "Ogni comando con le sue opzioni, il config file, i codici di uscita, i workflow end-to-end.",
+        "slug": "usage", "filename": "USAGE.md", "title": "User guide",
+        "description": "Every command with its options, the config file, exit codes, end-to-end workflows.",
     },
     {
-        "slug": "plugins", "filename": "PLUGINS.md", "title": "Guida ai plugin",
-        "description": "Il contratto Reader/Writer/TableIR spiegato per intero, con esempi commentati.",
+        "slug": "plugins", "filename": "PLUGINS.md", "title": "Plugin guide",
+        "description": "The full Reader/Writer/TableIR contract, explained with commented examples.",
     },
     {
-        "slug": "pipeline", "filename": "PIPELINE.md", "title": "Pipeline configurabile",
-        "description": "Gli stage reader/writer/exec: come funzionano, la sintassi, gli esempi.",
+        "slug": "pipeline", "filename": "PIPELINE.md", "title": "Configurable pipeline",
+        "description": "The reader/writer/exec stages: how they work, the syntax, the examples.",
     },
     {
-        "slug": "batch", "filename": "BATCH.md", "title": "Tabelle batch",
-        "description": "Una tabella costruita da più file sorgente: [[batch_table]], parse_many, limiti.",
+        "slug": "batch", "filename": "BATCH.md", "title": "Batch tables",
+        "description": "A table built from several source files: [[batch_table]], parse_many, limits.",
     },
 ]
 _BY_SLUG = {d["slug"]: d for d in DOCS}

@@ -8,7 +8,7 @@ from payload.web.app import create_app
 
 runner = CliRunner()
 
-READER_SOURCE = '''"""Reader di prova."""
+READER_SOURCE = '''"""Sample reader."""
 from pathlib import Path
 from payload.core.ir import TableIR
 
@@ -28,7 +28,7 @@ class SampleReader:
 READER = SampleReader
 '''
 
-WRITER_SOURCE = '''"""Writer di prova."""
+WRITER_SOURCE = '''"""Sample writer."""
 from payload.core.ir import TableIR
 
 
@@ -45,7 +45,7 @@ class SampleWriter:
 WRITER = SampleWriter
 '''
 
-DOCTOR_CHECK_SOURCE = '''"""Check di prova."""
+DOCTOR_CHECK_SOURCE = '''"""Sample check."""
 from payload.core.plugin_base import CheckResult, CheckStatus
 
 
@@ -61,7 +61,7 @@ DOCTOR_CHECK_SOURCE += "\nDOCTOR_CHECK = SampleCheck\n"
 BROKEN_SYNTAX_SOURCE = "def broken(:\n    pass\n"
 
 MISSING_DEPS_SOURCE = '''
-REQUIRES = ["questo_pacchetto_non_esiste_davvero_12345"]
+REQUIRES = ["this_package_really_does_not_exist_12345"]
 
 class X:
     name = "x"
@@ -140,9 +140,9 @@ def test_list_reports_empty_stub_methods_for_implemented_plugin(tmp_path):
 
 
 def test_list_flags_scaffold_stub_methods(tmp_path):
-    """Regressione: un file appena creato da 'pld plugin new-local'
-    (scaffold non ancora implementato) deve essere segnalabile SENZA
-    doverlo eseguire — vedi core/local_plugins.py, find_stub_methods."""
+    """Regression: a file just created by 'pld plugin new-local'
+    (scaffold not yet implemented) must be flaggable WITHOUT having to
+    run it — see core/local_plugins.py, find_stub_methods."""
     root = _init_project(tmp_path)
     from payload.plugin_scaffold import scaffold_local_plugin
 
@@ -182,16 +182,16 @@ def test_get_unknown_file_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.get("/api/local-plugins/non_esiste.py")
+    r = client.get("/api/local-plugins/does_not_exist.py")
 
     assert r.status_code == 404
 
 
 def test_get_rejects_path_traversal(tmp_path):
-    """Starlette non fa nemmeno matchare la route per un segmento con
-    '/' dentro (il convertitore di default per {filename} lo esclude) —
-    404, non 400: il traversal è comunque impossibile, solo ad un altro
-    livello rispetto a quello che valida _safe_filename()."""
+    """Starlette doesn't even match the route for a segment with '/'
+    in it (the default converter for {filename} excludes it) — 404,
+    not 400: the traversal is impossible either way, just at a
+    different level than the one _safe_filename() validates."""
     root = _init_project(tmp_path)
     client = _client(root)
 
@@ -218,9 +218,9 @@ def test_put_creates_and_overwrites(tmp_path):
     assert r.status_code == 200
     assert (root / "local_plugins" / "reader.py").read_text() == READER_SOURCE
 
-    r2 = client.put("/api/local-plugins/reader.py", json={"content": "# aggiornato\n" + READER_SOURCE})
+    r2 = client.put("/api/local-plugins/reader.py", json={"content": "# updated\n" + READER_SOURCE})
     assert r2.status_code == 200
-    assert (root / "local_plugins" / "reader.py").read_text().startswith("# aggiornato")
+    assert (root / "local_plugins" / "reader.py").read_text().startswith("# updated")
 
 
 def test_put_missing_content_400(tmp_path):
@@ -260,10 +260,10 @@ def test_delete_is_idempotent(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.delete("/api/local-plugins/non_esiste.py")
+    r = client.delete("/api/local-plugins/does_not_exist.py")
 
     assert r.status_code == 200
-    assert r.json() == {"filename": "non_esiste.py", "status": "not_found"}
+    assert r.json() == {"filename": "does_not_exist.py", "status": "not_found"}
 
 
 def test_delete_rejects_dotfile(tmp_path):
@@ -309,7 +309,7 @@ def test_syntax_check_empty_content_is_valid(tmp_path):
     assert r.json() == {"valid": True}
 
 
-# --- test (conformità) ---
+# --- test (conformance) ---
 
 
 def test_run_test_reader_structure_only(tmp_path):
@@ -331,7 +331,7 @@ def test_run_test_reader_structure_only(tmp_path):
 def test_run_test_reader_with_sample_resolves_relative_to_root(tmp_path, monkeypatch):
     root = _init_project(tmp_path)
     _write_local_plugin(root, "reader.py", READER_SOURCE)
-    (root / "sample.sample").write_text("qualcosa")
+    (root / "sample.sample").write_text("something")
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
@@ -404,14 +404,14 @@ def test_run_test_missing_requires_400(tmp_path):
     r = client.post("/api/local-plugins/needsdeps.py/test", json={})
 
     assert r.status_code == 400
-    assert "questo_pacchetto_non_esiste_davvero_12345" in str(r.json())
+    assert "this_package_really_does_not_exist_12345" in str(r.json())
 
 
 def test_run_test_unknown_file_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.post("/api/local-plugins/non_esiste.py/test", json={})
+    r = client.post("/api/local-plugins/does_not_exist.py/test", json={})
 
     assert r.status_code == 404
 

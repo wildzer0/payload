@@ -1,13 +1,13 @@
-"""Editor dei plugin locali dal browser: lettura/scrittura di un file
-in local_plugins/, controllo sintassi live (ast.parse, zero dipendenze
-nuove) e test di conformità su un singolo file, anche se non è ancora
-caricabile in un PluginRegistry completo — stesso ruolo concettuale di
-'pld plugin validate', ma centrato su UN file mentre lo si scrive,
-non su un plugin già registrato.
+"""Browser-based local plugin editor: reads/writes a file in
+local_plugins/, live syntax checking (ast.parse, zero new
+dependencies) and conformance testing on a single file, even if it
+isn't loadable yet in a full PluginRegistry — the same conceptual role
+as 'pld plugin validate', but centered on ONE file while it's being
+written, not on a plugin that's already registered.
 
-Solo local_plugins/ del progetto servito è nel dominio dell'editor
-(non i percorsi aggiuntivi di PAYLOAD_PLUGIN_PATH, che possono vivere
-ovunque sul filesystem — fuori scope per un editor web)."""
+Only the served project's local_plugins/ is within the editor's scope
+(not the additional PAYLOAD_PLUGIN_PATH locations, which can live
+anywhere on the filesystem — out of scope for a web editor)."""
 from __future__ import annotations
 
 import ast
@@ -40,11 +40,11 @@ from payload.web.paths import resolve
 
 
 def _safe_filename(raw: str) -> str:
-    """Un filename semplice dentro local_plugins/, mai un path — niente
-    separatori, niente '..': l'editor web non deve poter leggere o
-    scrivere file fuori da quella cartella."""
+    """A plain filename inside local_plugins/, never a path — no
+    separators, no '..': the web editor must not be able to read or
+    write files outside that folder."""
     if not raw.endswith(".py") or "/" in raw or "\\" in raw or raw in (".", "..") or raw.startswith("."):
-        raise InvalidRequestError(f"nome file non valido: '{raw}'")
+        raise InvalidRequestError(f"invalid filename: '{raw}'")
     return raw
 
 
@@ -66,7 +66,7 @@ async def local_plugins_list(request: Request) -> JSONResponse:
                 module = load_module_from_file(f)
                 kinds = sorted({kind for kind, _ in extract_plugin_classes(module)})
             except Exception:
-                pass  # un file non ancora valido resta comunque elencabile/apribile nell'editor
+                pass  # a not-yet-valid file is still listable/openable in the editor
             items.append({
                 "filename": f.name, "size": f.stat().st_size, "kinds": kinds,
                 "stub_methods": find_stub_methods(f),
@@ -94,7 +94,7 @@ async def local_plugin_put(request: Request) -> JSONResponse:
     body = await request.json()
     content = body.get("content")
     if content is None:
-        raise InvalidRequestError("parametro 'content' mancante")
+        raise InvalidRequestError("missing 'content' parameter")
     root = request.app.state.root
 
     def _run():
@@ -143,9 +143,9 @@ def _structural_result(kind: str, instance) -> dict:
     else:
         issues = []
         if not hasattr(instance, "name"):
-            issues.append({"check": "attributi", "detail": "manca l'attributo 'name'"})
+            issues.append({"check": "attributes", "detail": "missing the 'name' attribute"})
         if not callable(getattr(instance, "run", None)):
-            issues.append({"check": "attributi", "detail": "manca un metodo 'run(config)' chiamabile"})
+            issues.append({"check": "attributes", "detail": "missing a callable 'run(config)' method"})
         return {"kind": kind, "name": name, "loadable": True, "conforms": not issues, "skipped_behavior_check": True, "issues": issues}
     return {"kind": kind, "name": name, "loadable": True, "conforms": not issues, "issues": [{"check": i.check, "detail": i.detail} for i in issues]}
 
@@ -174,7 +174,7 @@ async def local_plugin_test(request: Request) -> JSONResponse:
 
         classes = extract_plugin_classes(module)
         if not classes:
-            return {"loadable": False, "error": "nessun READER/WRITER/DOCTOR_CHECK dichiarato nel file"}
+            return {"loadable": False, "error": "no READER/WRITER/DOCTOR_CHECK declared in the file"}
 
         results = []
         for kind, cls in classes:

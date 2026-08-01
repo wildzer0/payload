@@ -1,7 +1,7 @@
 """
-Plugin fake in-memory, usati per testare pipeline/cache/golden/registry
-senza mai invocare un vero compilatore. Velocizza enormemente la test
-suite del core e la rende indipendente da un toolchain installato.
+Fake in-memory plugins, used to test pipeline/cache/golden/registry
+without ever invoking a real compiler. Massively speeds up the core
+test suite and makes it independent of an installed toolchain.
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from payload.core.ir import PLUGIN_API_VERSION, TableIR
 
 
 class FakeReader:
-    """Legge il file come testo e lo converte semplicemente in bytes utf-8."""
+    """Reads the file as text and simply converts it to utf-8 bytes."""
 
     name = "fake_reader"
     extensions = [".fake"]
@@ -31,8 +31,8 @@ class FakeReader:
 
 
 class FakeWriter:
-    """Scrive i bytes della IR preceduti da un marker, per verificare
-    facilmente nei test che il writer giusto sia stato invocato."""
+    """Writes the IR's bytes prefixed with a marker, to easily verify
+    in tests that the right writer was invoked."""
 
     name = "fake_writer"
     extension = ".fakeout"
@@ -44,10 +44,10 @@ class FakeWriter:
 
 
 class FakeBatchReader:
-    """Come FakeReader, ma supporta anche parse_many (batch table, vedi
-    src/payload/docs/BATCH.md): concatena il contenuto testuale di ogni
-    file NELL'ORDINE DATO, separato da '|' per rendere l'ordine
-    verificabile facilmente nei test."""
+    """Like FakeReader, but also supports parse_many (batch table, see
+    src/payload/docs/BATCH.md): concatenates each file's text content
+    in the ORDER GIVEN, separated by '|' to make the order easy to
+    check in tests."""
 
     name = "fake_batch_reader"
     extensions = [".fakebatch"]
@@ -71,7 +71,7 @@ class FakeBatchReader:
 
 
 class BrokenReader:
-    """Reader che fallisce sempre — usato per testare la propagazione errori."""
+    """Reader that always fails — used to test error propagation."""
 
     name = "broken_reader"
     extensions = [".broken"]
@@ -82,4 +82,4 @@ class BrokenReader:
 
     def parse(self, path: Path, config: dict) -> TableIR:
         from payload.core.errors import ReaderParseError
-        raise ReaderParseError(path, "errore simulato")
+        raise ReaderParseError(path, "simulated error")

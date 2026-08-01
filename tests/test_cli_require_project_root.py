@@ -1,8 +1,8 @@
-"""Come 'git' fuori da un repository: i comandi che operano su un
-progetto specifico devono rifiutarsi di eseguire finché non è stato
-creato un table-tool.toml con 'pld init' — vedi require_project_root
-in cli.py. 'init' e i comandi plugin-agnostici (view, plugin
-validate/new/new-local) restano invece utilizzabili ovunque."""
+"""Like 'git' outside a repository: commands that operate on a
+specific project must refuse to run until a table-tool.toml has been
+created with 'pld init' — see require_project_root in cli.py. 'init'
+and the plugin-agnostic commands (view, plugin
+validate/new/new-local) stay usable anywhere, though."""
 from typer.testing import CliRunner
 
 from payload.cli import app
@@ -25,7 +25,7 @@ def test_status_outside_project_fails(tmp_path, monkeypatch):
     result = runner.invoke(app, ["status"])
 
     assert result.exit_code != 0
-    assert "non è un progetto payload inizializzato" in (result.stdout + result.stderr)
+    assert "is not an initialized payload project" in (result.stdout + result.stderr)
 
 
 def test_build_outside_project_fails(tmp_path, monkeypatch):

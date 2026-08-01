@@ -35,11 +35,12 @@ def test_broken_reader_propagates_error(tmp_path, registry, config):
 
 
 def test_reader_raising_unexpected_exception_is_wrapped(tmp_path, registry, config):
-    """Regressione trovata dall'utente: un plugin incompleto (es. uno
-    scaffold di local_plugin mai finito, con 'raise NotImplementedError'
-    al posto del parsing vero) non deve produrre un traceback crudo
-    davanti all'utente — deve diventare un ReaderParseError leggibile,
-    con l'eccezione originale preservata come causa per chi debugga."""
+    """Regression found by a user: an incomplete plugin (e.g. a
+    local_plugin scaffold that was never finished, with 'raise
+    NotImplementedError' instead of real parsing) must not produce a
+    raw traceback in front of the user — it must become a readable
+    ReaderParseError, with the original exception preserved as the
+    cause for whoever debugs it."""
     class HalfBakedReader:
         name = "half_baked"
         extensions = [".half"]
@@ -49,11 +50,11 @@ def test_reader_raising_unexpected_exception_is_wrapped(tmp_path, registry, conf
             return False
 
         def parse(self, path, cfg):
-            raise NotImplementedError("TODO: implementa il parsing")
+            raise NotImplementedError("TODO: implement parsing")
 
     registry.register_reader(HalfBakedReader())
     source = tmp_path / "t.half"
-    source.write_text("qualcosa")
+    source.write_text("something")
 
     with pytest.raises(ReaderParseError) as exc_info:
         build([source], registry, config, tmp_path / "out", writer_name="fake_writer")
@@ -70,7 +71,7 @@ def test_writer_raising_unexpected_exception_is_wrapped(tmp_path, source_file, r
         api_version = "1.0"
 
         def emit(self, ir, out_path, cfg):
-            raise NotImplementedError("TODO: implementa l'emit")
+            raise NotImplementedError("TODO: implement emit")
 
     registry.register_writer(HalfBakedWriter())
 
@@ -98,7 +99,7 @@ def test_cache_invalidated_on_content_change(tmp_path, source_file, registry, co
     cache = BuildCache(tmp_path / "cache")
 
     build([source_file], registry, config, out_dir, cache=cache, writer_name="fake_writer")
-    source_file.write_text("contenuto diverso")
+    source_file.write_text("different content")
     _, second_built = build([source_file], registry, config, out_dir, cache=cache, writer_name="fake_writer")
 
     assert second_built is True
@@ -117,12 +118,12 @@ def test_force_bypasses_cache(tmp_path, source_file, registry, config):
 
 
 def test_build_removes_stale_output_from_a_previous_writer(tmp_path, source_file, registry, config):
-    """Regressione trovata dall'utente: costruire con un writer, poi
-    ricostruire la STESSA tabella con un writer diverso (anche solo
-    un override ad-hoc via --to, mai scritto in config) non deve
-    lasciare in giro l'output del writer precedente — altrimenti un
-    commit successivo lo riassorbirebbe come se facesse ancora parte
-    dello stato attuale della tabella."""
+    """Regression found by a user: building with one writer, then
+    rebuilding the SAME table with a different writer (even just an
+    ad-hoc override via --to, never written to config) must not leave
+    the previous writer's output lying around — otherwise a later
+    commit would reabsorb it as if it were still part of the table's
+    current state."""
     class OtherWriter:
         name = "other_writer"
         extension = ".other"
@@ -192,10 +193,10 @@ def test_describe_table_build_explicit_pipeline(tmp_path, source_file, registry,
 
 
 def test_describe_table_build_unresolvable_pipeline_falls_back(tmp_path, source_file, registry, config):
-    """Senza writer risolvibile (nessun --to, nessun default in
-    config, il reader fake non ne suggerisce uno) resolve_pipeline_spec
-    solleva — describe_table_build non deve propagare l'errore, la
-    build vera fallirà comunque più avanti con lo stesso messaggio."""
+    """Without a resolvable writer (no --to, no default in config, the
+    fake reader doesn't suggest one) resolve_pipeline_spec raises —
+    describe_table_build must not propagate the error, the real build
+    will fail further down anyway with the same message."""
     info = describe_table_build([source_file], registry, config, [], tmp_path)
 
     assert info["reader"] is None
@@ -205,27 +206,26 @@ def test_describe_table_build_unresolvable_pipeline_falls_back(tmp_path, source_
 
 
 def test_describe_table_build_reports_missing_output_from_partial_fanout(tmp_path, source_file, registry, config):
-    """Regressione: se un writer del fan-out configurato ORA non ha
-    prodotto il proprio file (es. un FanOutWriteError parziale, o
-    semplicemente non ancora buildato), il commit deve poterlo
-    segnalare invece di lasciarlo passare inosservato."""
+    """Regression: if a writer in the fan-out configured RIGHT NOW
+    hasn't produced its own file (e.g. a partial FanOutWriteError, or
+    simply not built yet), the commit must be able to flag it instead
+    of letting it pass unnoticed."""
     cfg = replace(config, pipeline_stages=[
         {"type": "reader", "name": "fake_reader"},
         {"type": "writer", "name": "fake_writer"},
     ])
-    # nessun file .fakeout su disco: il writer atteso dalla pipeline
-    # non ha (ancora) prodotto nulla.
+    # no .fakeout file on disk: the writer the pipeline expects
+    # hasn't (yet) produced anything.
     info = describe_table_build([source_file], registry, cfg, [], tmp_path)
 
     assert info["missing_outputs"] == ["example.fakeout"]
 
 
 def test_describe_table_build_infers_writer_from_output_extension_not_config(tmp_path, source_file, registry, config):
-    """Regressione trovata dall'utente: il writer riportato deve
-    riflettere il file REALMENTE committato, non la config — un
-    override ad-hoc (--to) usato per una singola build non viene mai
-    scritto in config, quindi risolvere dalla config avrebbe mostrato
-    il writer sbagliato."""
+    """Regression found by a user: the reported writer must reflect
+    the file REALLY committed, not the config — an ad-hoc override
+    (--to) used for a single build is never written to config, so
+    resolving from config would have shown the wrong writer."""
     class OtherWriter:
         name = "other_writer"
         extension = ".other"

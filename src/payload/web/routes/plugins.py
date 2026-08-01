@@ -1,6 +1,6 @@
 """plugins / plugin info / plugin validate / plugin new-local / plugin
-new — controparte web dei comandi omonimi in cli.py, stessa
-suddivisione di responsabilità."""
+new — web counterpart of the same-named commands in cli.py, same split
+of responsibilities."""
 from __future__ import annotations
 
 import inspect
@@ -80,7 +80,7 @@ async def plugin_validate(request: Request) -> JSONResponse:
     body = await request.json()
     name = body.get("name")
     if not name:
-        raise InvalidRequestError("parametro 'name' mancante")
+        raise InvalidRequestError("missing 'name' parameter")
     sample = body.get("sample")
     root = request.app.state.root
 
@@ -123,7 +123,7 @@ async def plugin_install_deps_route(request: Request) -> JSONResponse:
     body = await request.json()
     file = body.get("file")
     if not file:
-        raise InvalidRequestError("parametro 'file' mancante")
+        raise InvalidRequestError("missing 'file' parameter")
     confirm = bool(body.get("confirm", False))
     file_path = resolve(request.app.state.root, file)
 
@@ -132,11 +132,11 @@ async def plugin_install_deps_route(request: Request) -> JSONResponse:
 
         requires = read_requires_static(file_path)
         if not requires:
-            return {"status": "noop", "reason": "nessun REQUIRES dichiarato"}
+            return {"status": "noop", "reason": "no REQUIRES declared"}
 
         missing = missing_requirements(requires)
         if not missing:
-            return {"status": "noop", "reason": "già installate"}
+            return {"status": "noop", "reason": "already installed"}
 
         if not confirm:
             return {"status": "confirmation_required", "missing": missing}
@@ -154,7 +154,7 @@ async def plugin_new_local_route(request: Request) -> JSONResponse:
     body = await request.json()
     name, kind = body.get("name"), body.get("kind")
     if not name or not kind:
-        raise InvalidRequestError("parametri 'name'/'kind' mancanti")
+        raise InvalidRequestError("missing 'name'/'kind' parameters")
     root = request.app.state.root
     dest = resolve(root, body.get("dest") or "local_plugins")
 
@@ -174,7 +174,7 @@ async def plugin_new_route(request: Request) -> JSONResponse:
     body = await request.json()
     name, kind = body.get("name"), body.get("kind")
     if not name or not kind:
-        raise InvalidRequestError("parametri 'name'/'kind' mancanti")
+        raise InvalidRequestError("missing 'name'/'kind' parameters")
     root = request.app.state.root
     dest = resolve(root, body.get("dest") or ".")
 

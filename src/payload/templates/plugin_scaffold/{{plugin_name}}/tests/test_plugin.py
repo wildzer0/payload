@@ -1,28 +1,28 @@
 """
-Test di conformita per {{plugin_class}}.
+Conformance test for {{plugin_class}}.
 
-Usa payload.testing per verificare che il plugin rispetti davvero il
-contratto Reader/Writer (non solo che 'esistano dei test'):
-- attributi richiesti presenti e corretti
-- parse()/emit() ritornano il tipo giusto
-- gli errori sono sollevati come ReaderParseError/WriterEmitError, non
-  come Exception generiche
+Uses payload.testing to verify that the plugin really honors the
+Reader/Writer contract (not just that 'tests exist'):
+- required attributes present and correct
+- parse()/emit() return the right type
+- errors are raised as ReaderParseError/WriterEmitError, not as
+  generic Exceptions
 
-TODO: completa i sample qui sotto in base al formato del tuo plugin.
-Puoi anche validare il plugin gia installato a runtime con:
+TODO: fill in the samples below based on your plugin's format.
+You can also validate the already-installed plugin at runtime with:
     pld plugin validate {{plugin_slug}} --sample <file>
 """
 from pathlib import Path
 
 from {{plugin_name}}.plugin import {{plugin_class}}
 
-# --- se e' un Reader: rimuovi il blocco Writer sotto e viceversa ---
+# --- if it's a Reader: remove the Writer block below and vice versa ---
 
 # from payload.testing import assert_reader_conforms
 #
 # def test_reader_conforms(tmp_path):
 #     sample = tmp_path / "sample{{plugin_slug}}"
-#     sample.write_text("...")  # TODO: contenuto valido per il tuo formato
+#     sample.write_text("...")  # TODO: valid content for your format
 #     assert_reader_conforms({{plugin_class}}(), sample)
 
 

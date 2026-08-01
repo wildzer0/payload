@@ -1,7 +1,7 @@
 """
-Interfaccia web locale per payload ('pld serve') — espone via HTTP/SSE
-le stesse funzionalità della CLI, per chi preferisce non usare il
-terminale. Importato solo da 'pld serve' (import lazy in cli.py): non
-deve MAI essere importato a livello di modulo da payload.cli, altrimenti
-Starlette/uvicorn diventerebbero dipendenze obbligatorie per l'intera
-CLI invece che per il solo extra opzionale 'serve'."""
+Local web interface for payload ('pld serve') — exposes the same
+functionality as the CLI over HTTP/SSE, for those who'd rather not use
+the terminal. Only imported by 'pld serve' (lazy import in cli.py): it
+must NEVER be imported at module level by payload.cli, otherwise
+Starlette/uvicorn would become mandatory dependencies for the whole
+CLI instead of just the optional 'serve' extra."""

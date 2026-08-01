@@ -1,9 +1,9 @@
 """
-Test unitari di payload/watch.py — a differenza di tests/test_watch.py
-(livello CLI, con watch_loop mockato a no-op per non bloccare), questi
-esercitano davvero _DebouncedTableHandler e watch() (con Observer/
-time.sleep mockati, così il loop bloccante non gira per sempre nei
-test)."""
+Unit tests for payload/watch.py — unlike tests/test_watch.py (CLI
+level, with watch_loop mocked to a no-op so it doesn't block), these
+really exercise _DebouncedTableHandler and watch() (with
+Observer/time.sleep mocked, so the blocking loop doesn't run forever
+in tests)."""
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -33,7 +33,7 @@ def test_should_handle_filters_unknown_extension(tmp_path):
 def test_should_handle_excludes_output_dir(tmp_path):
     h, out_dir = _handler(tmp_path)
     out_dir.mkdir()
-    inside = out_dir / "generato.raw"
+    inside = out_dir / "generated.raw"
     inside.write_text("x")
     assert h._should_handle(str(inside)) is None
 
@@ -53,7 +53,7 @@ def test_should_handle_tolerates_unresolvable_path(tmp_path):
 
     def fake_resolve(self, *a, **kw):
         if self == src:
-            raise OSError("simulato")
+            raise OSError("simulated")
         return real_resolve(self, *a, **kw)
 
     with patch.object(Path, "resolve", fake_resolve):
@@ -75,7 +75,7 @@ def test_on_modified_schedules_and_calls_on_change_after_debounce(tmp_path):
     src.write_text("x")
 
     h.on_modified(_FakeEvent(str(src)))
-    on_change.assert_not_called()  # non ancora, il debounce non è scaduto
+    on_change.assert_not_called()  # not yet, the debounce hasn't expired
 
     time.sleep(0.1)
     on_change.assert_called_once_with(src)
@@ -135,9 +135,9 @@ def test_watch_starts_observer_and_stops_cleanly_on_keyboard_interrupt(tmp_path)
 
 
 def test_watch_wraps_on_change_errors_without_propagating(tmp_path):
-    """Un errore nel callback on_change non deve mai far crashare il
-    watch — solo loggato, la logica sta nel wrapper _safe_on_change
-    interno a watch()."""
+    """An error in the on_change callback must never crash the
+    watch — just logged, the logic lives in the _safe_on_change
+    wrapper inside watch()."""
     fake_observer = MagicMock()
     captured_handler = {}
 
@@ -153,5 +153,5 @@ def test_watch_wraps_on_change_errors_without_propagating(tmp_path):
          patch("payload.watch.time.sleep", side_effect=KeyboardInterrupt):
         watch(tmp_path, {".raw"}, tmp_path / "build", on_change=_raising_on_change)
 
-    # il wrapper passato all'handler non deve propagare l'eccezione
+    # the wrapper passed to the handler must not propagate the exception
     captured_handler["handler"]._on_change(tmp_path / "t.raw")

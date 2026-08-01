@@ -1,8 +1,8 @@
 """
-Test CLI per 'pld watch' — verifica che la build iniziale avvenga
-PRIMA che parta il watch live. watch_loop blocca per sempre, quindi va
-sempre monkeypatchato a no-op ('payload.cli.watch_loop', il nome con
-cui è importato in cli.py) per far ritornare l'invocazione.
+CLI test for 'pld watch' — checks that the initial build happens
+BEFORE the live watch starts. watch_loop blocks forever, so it must
+always be monkeypatched to a no-op ('payload.cli.watch_loop', the name
+it's imported under in cli.py) to make the invocation return.
 """
 from typer.testing import CliRunner
 
@@ -32,8 +32,8 @@ def test_watch_proceeds_when_initial_build_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init", "proj"])
     proj = tmp_path / "proj"
-    # duplica lo stem di example_table -> la build iniziale fallisce con
-    # DuplicateTableNameError, ma watch_loop deve comunque partire
+    # duplicates example_table's stem -> the initial build fails with
+    # DuplicateTableNameError, but watch_loop must still start
     (proj / "extra" / "sub").mkdir(parents=True)
     (proj / "extra" / "sub" / "example_table.raw").write_text("0x01\n")
 

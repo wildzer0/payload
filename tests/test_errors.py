@@ -29,7 +29,7 @@ def test_golden_mismatch_logs_as_warning_not_error():
 
 
 def test_to_dict_includes_context():
-    err = ReaderParseError(Path("foo.c"), "sintassi invalida")
+    err = ReaderParseError(Path("foo.c"), "invalid syntax")
     d = err.to_dict()
     assert d["error"] == "ReaderParseError"
     assert d["path"] == "foo.c"
@@ -38,7 +38,7 @@ def test_to_dict_includes_context():
 def test_batch_build_error_aggregates_failures():
     failures = [ReaderParseError(Path("a"), "e1"), ReaderParseError(Path("b"), "e2")]
     batch = BatchBuildError(failures)
-    assert "2 tabelle" in batch.message
+    assert "2 tables" in batch.message
     assert len(batch.context["failures"]) == 2
 
 
@@ -50,9 +50,9 @@ def test_reader_batch_unsupported_error_names_the_reader():
 
 
 def test_batch_table_error_names_the_batch_and_reason():
-    err = BatchTableError("rows", "sources vuoto dopo l'espansione")
+    err = BatchTableError("rows", "sources empty after expansion")
     assert "rows" in err.message
-    assert "sources vuoto" in err.message
+    assert "sources empty" in err.message
     assert err.exit_code == 2
 
 
@@ -83,7 +83,7 @@ def test_golden_missing_error_is_warning_level():
 def test_nothing_to_commit_error_message():
     err = NothingToCommitError()
     assert err.log_level == logging.INFO
-    assert "modificata" in err.message
+    assert "changed" in err.message
 
 
 def test_table_not_tracked_error_message():

@@ -47,11 +47,11 @@ def test_corrupted_cache_file_does_not_crash(tmp_path):
     cache_dir.mkdir()
     (cache_dir / ".payload_cache.json").write_text("{not valid json")
 
-    cache = BuildCache(cache_dir)  # non deve sollevare
+    cache = BuildCache(cache_dir)  # must not raise
     assert cache.is_fresh("anything", "anything") is False
 
 
-# --- compute_pipeline_cache_key_multi (tabelle batch) --------------------
+# --- compute_pipeline_cache_key_multi (batch tables) ----------------------
 
 
 def test_multi_cache_key_changes_with_content():
@@ -67,8 +67,8 @@ def test_multi_cache_key_changes_with_file_order():
 
 
 def test_multi_cache_key_no_boundary_collision():
-    """['AB','CD'] e ['A','BCD'] non devono produrre la stessa chiave
-    solo perché la concatenazione grezza dei bytes combacerebbe."""
+    """['AB','CD'] and ['A','BCD'] must not produce the same key just
+    because the raw byte concatenation would match."""
     k1 = compute_pipeline_cache_key_multi([("a", b"AB"), ("b", b"CD")], "sig", {})
     k2 = compute_pipeline_cache_key_multi([("a", b"A"), ("b", b"BCD")], "sig", {})
     assert k1 != k2

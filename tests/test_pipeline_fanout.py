@@ -1,7 +1,7 @@
 """
-Fan-out: un reader seguito da più writer consecutivi (tutti terminali)
-riceve la STESSA IR, parsata una sola volta. Vedi src/payload/docs/PIPELINE.md,
-sezione Fan-out.
+Fan-out: a reader followed by several consecutive writers (all
+terminal) receives the SAME IR, parsed only once. See
+src/payload/docs/PIPELINE.md, Fan-out section.
 """
 from pathlib import Path
 
@@ -28,9 +28,9 @@ class _FakeConfig:
 
 
 class _CountingReader:
-    """Conta quante volte parse() viene invocato — il punto reale del
-    fan-out è che un reader costoso gira una sola volta anche con N
-    writer a valle."""
+    """Counts how many times parse() is invoked — the real point of
+    fan-out is that an expensive reader runs only once even with N
+    writers downstream."""
 
     name = "counting_reader"
     extensions = [".fake"]
@@ -78,9 +78,10 @@ def _make_failing_writer(writer_name: str, ext: str, reason: str = "boom"):
 
 
 def _make_crashing_writer(writer_name: str, ext: str):
-    """A differenza di _make_failing_writer, questo simula un plugin
-    incompleto/buggy che solleva un'eccezione GREZZA (non della
-    gerarchia PayloadError) — es. uno scaffold mai finito."""
+    """Unlike _make_failing_writer, this simulates an incomplete/
+    buggy plugin that raises a RAW exception (not from the
+    PayloadError hierarchy) — e.g. a scaffold that was never
+    finished."""
     class _CrashingWriter:
         name = writer_name
         extension = ext
@@ -90,7 +91,7 @@ def _make_crashing_writer(writer_name: str, ext: str):
 
         def emit(self, ir, out_path, config):
             type(self).called = True
-            raise NotImplementedError("TODO: implementa l'emit")
+            raise NotImplementedError("TODO: implement emit")
 
     return _CrashingWriter
 
@@ -167,7 +168,7 @@ def test_fan_out_cache_miss_if_one_of_n_outputs_deleted(tmp_path, source, regist
 
 
 def test_fan_out_writer_incompatibility_checked_for_every_writer_in_group(tmp_path, source, registry):
-    picky = _make_writer("picky", ".picky", compatible=["altro_reader"])()
+    picky = _make_writer("picky", ".picky", compatible=["other_reader"])()
     registry.register_writer(picky)
 
     with pytest.raises(WriterEmitError):
@@ -177,10 +178,10 @@ def test_fan_out_writer_incompatibility_checked_for_every_writer_in_group(tmp_pa
 
 
 def test_fan_out_partial_failure_still_writes_successful_outputs(tmp_path, source, registry):
-    """Regressione trovata dall'utente: con 3 writer di cui 1 fallisce
-    a runtime, gli altri 2 devono comunque scrivere il proprio output —
-    altrimenti l'utente non ha modo di sapere che 2/3 sono riusciti."""
-    registry.register_writer(_make_failing_writer("broken", ".broken", "reason simulata")())
+    """Regression found by a user: with 3 writers where 1 fails at
+    runtime, the other 2 must still write their own output — otherwise
+    there's no way to know that 2/3 succeeded."""
+    registry.register_writer(_make_failing_writer("broken", ".broken", "simulated reason")())
     out_dir = tmp_path / "out"
 
     with pytest.raises(FanOutWriteError) as exc_info:
@@ -191,7 +192,7 @@ def test_fan_out_partial_failure_still_writes_successful_outputs(tmp_path, sourc
     assert (out_dir / "t.hex").exists()
     assert not (out_dir / "t.broken").exists()
     assert err.context["succeeded_outputs"] == [str(out_dir / "t.bin"), str(out_dir / "t.hex")]
-    assert err.context["failed_writers"] == [{"writer": "broken", "reason": "Writer 'broken' non può generare output: reason simulata"}]
+    assert err.context["failed_writers"] == [{"writer": "broken", "reason": "Writer 'broken' can't produce output: simulated reason"}]
     assert "t.bin, t.hex" in err.message
     assert "broken" in err.message
 
@@ -209,9 +210,9 @@ def test_fan_out_all_writers_fail_reports_empty_succeeded(tmp_path, source, regi
 
 
 def test_single_terminal_writer_failure_is_not_wrapped(tmp_path, source, registry):
-    """Un solo writer terminale (niente fan-out) non ha nulla di
-    'parziale' da riportare: deve fallire esattamente come prima,
-    senza il wrapping introdotto per il caso fan-out."""
+    """A single terminal writer (no fan-out) has nothing "partial"
+    to report: it must fail exactly as before, without the wrapping
+    introduced for the fan-out case."""
     registry.register_writer(_make_failing_writer("broken", ".broken")())
 
     with pytest.raises(WriterEmitError):
@@ -219,10 +220,10 @@ def test_single_terminal_writer_failure_is_not_wrapped(tmp_path, source, registr
 
 
 def test_fan_out_writer_raising_raw_exception_is_captured_not_crashing(tmp_path, source, registry):
-    """Regressione trovata dall'utente: un writer del fan-out che
-    solleva un'eccezione GREZZA (plugin incompleto, non PayloadError)
-    deve finire in failed_writers con un messaggio leggibile, non far
-    esplodere l'intera build con un traceback crudo."""
+    """Regression found by a user: a fan-out writer that raises a
+    RAW exception (incomplete plugin, not PayloadError) must end up in
+    failed_writers with a readable message, not blow up the whole
+    build with a raw traceback."""
     registry.register_writer(_make_crashing_writer("half_baked", ".half")())
     out_dir = tmp_path / "out"
 
@@ -231,7 +232,7 @@ def test_fan_out_writer_raising_raw_exception_is_captured_not_crashing(tmp_path,
 
     assert (out_dir / "t.bin").exists()
     failed = exc_info.value.context["failed_writers"]
-    assert failed == [{"writer": "half_baked", "reason": "NotImplementedError: TODO: implementa l'emit"}]
+    assert failed == [{"writer": "half_baked", "reason": "NotImplementedError: TODO: implement emit"}]
 
 
 def test_single_writer_raising_raw_exception_is_wrapped_in_writer_emit_error(tmp_path, source, registry):

@@ -1,9 +1,9 @@
 """
-build() con più di un source_path (tabella batch, vedi
-src/payload/docs/BATCH.md) — il caso a un solo elemento resta coperto
-da test_pipeline.py; qui si copre solo ciò che cambia con N file:
-dispatch su parse_many, identità di cache/tmp_dir, e il rifiuto di un
-reader che non supporta il batch.
+build() with more than one source_path (batch table, see
+src/payload/docs/BATCH.md) — the single-element case stays covered by
+test_pipeline.py; here we only cover what changes with N files:
+dispatch to parse_many, cache/tmp_dir identity, and rejecting a reader
+that doesn't support batch.
 """
 from pathlib import Path
 
@@ -29,8 +29,8 @@ def batch_registry() -> PluginRegistry:
 def batch_sources(tmp_path) -> list[Path]:
     p1 = tmp_path / "ROW1.fakebatch"
     p2 = tmp_path / "ROW2.fakebatch"
-    p1.write_text("uno")
-    p2.write_text("due")
+    p1.write_text("one")
+    p2.write_text("two")
     return [p1, p2]
 
 
@@ -41,19 +41,19 @@ def test_build_batch_dispatches_to_parse_many(tmp_path, batch_sources, batch_reg
         writer_name="fake_writer", table_name="rows",
     )
     assert was_built is True
-    assert out_paths[0].read_bytes() == b"FAKE:uno|due"
+    assert out_paths[0].read_bytes() == b"FAKE:one|two"
 
 
 def test_build_batch_respects_source_paths_order(tmp_path, batch_registry, config):
     p1 = tmp_path / "ROW1.fakebatch"
     p2 = tmp_path / "ROW2.fakebatch"
-    p1.write_text("uno")
-    p2.write_text("due")
+    p1.write_text("one")
+    p2.write_text("two")
     out_dir = tmp_path / "out"
 
     out_paths, _ = build([p2, p1], batch_registry, config, out_dir, writer_name="fake_writer", table_name="rows")
 
-    assert out_paths[0].read_bytes() == b"FAKE:due|uno"
+    assert out_paths[0].read_bytes() == b"FAKE:two|one"
 
 
 def test_build_batch_output_named_after_table_name_not_any_source_stem(tmp_path, batch_sources, batch_registry, config):
@@ -63,10 +63,10 @@ def test_build_batch_output_named_after_table_name_not_any_source_stem(tmp_path,
 
 
 def test_build_batch_missing_table_name_raises_type_error_via_index(tmp_path, batch_sources, batch_registry, config):
-    """table_name e' obbligatorio in pratica per un batch (nessuno stem
-    da dedurre) — senza passarlo esplicitamente, il nome dedotto da
-    source_paths[0] e' comunque un valore valido (solo fuorviante),
-    quindi qui verifichiamo che il fallback esista e non sollevi."""
+    """table_name is required in practice for a batch (no stem to
+    derive) — without passing it explicitly, the name derived from
+    source_paths[0] is still a valid value (just misleading), so here
+    we verify the fallback exists and doesn't raise."""
     out_dir = tmp_path / "out"
     out_paths, _ = build(batch_sources, batch_registry, config, out_dir, writer_name="fake_writer")
     assert out_paths[0].name == "ROW1.fakeout"
@@ -107,7 +107,7 @@ def test_build_batch_cache_miss_when_a_member_file_content_changes(tmp_path, bat
     out_dir = tmp_path / "out"
 
     build(batch_sources, batch_registry, config, out_dir, cache=cache, writer_name="fake_writer", table_name="rows")
-    batch_sources[1].write_text("modificato")
+    batch_sources[1].write_text("modified")
     _, second_built = build(batch_sources, batch_registry, config, out_dir, cache=cache, writer_name="fake_writer", table_name="rows")
 
     assert second_built is True

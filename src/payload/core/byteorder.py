@@ -1,23 +1,23 @@
 """
-Helper per gestire l'endianness in modo esplicito.
+Helper for handling endianness explicitly.
 
-Il problema: TableIR.data sono bytes già impacchettati — nessuna
-informazione su dove iniziano/finiscono i campi multi-byte. Un writer
-che fa solo write_bytes(ir.data) non può reinterpretare l'ordine perché
-è cieco rispetto ai confini dei campi.
+The problem: TableIR.data is already-packed bytes — no information
+about where multi-byte fields start/end. A writer that just does
+write_bytes(ir.data) can't reinterpret the order because it's blind to
+field boundaries.
 
-La soluzione: un reader che lavora con valori multi-byte può (non deve)
-popolare TableIR.extra["fields"] con i valori STRUTTURATI, non solo i
-bytes già impacchettati:
+The solution: a reader that works with multi-byte values can (not
+must) populate TableIR.extra["fields"] with the STRUCTURED values, not
+just the already-packed bytes:
 
     ir.extra["fields"] = [
         {"offset": 0, "width": 2, "value": 0x1234},
         {"offset": 2, "width": 4, "value": 0xDEADBEEF},
     ]
 
-Un writer che vuole un ordine diverso da ir.byte_order può chiamare
-repack() su questa lista per ottenere bytes nel proprio ordine target,
-senza dover reinterpretare byte grezzi alla cieca.
+A writer that wants an order different from ir.byte_order can call
+repack() on this list to get bytes in its own target order, without
+having to blindly reinterpret raw bytes.
 """
 from __future__ import annotations
 
@@ -31,9 +31,9 @@ _STRUCT_CODE_BY_WIDTH = {1: "B", 2: "H", 4: "I", 8: "Q"}
 
 def pack_value(value: int, width: int, byte_order: str) -> bytes:
     if byte_order not in VALID_ORDERS:
-        raise ValueError(f"byte_order deve essere 'little' o 'big', non '{byte_order}'")
+        raise ValueError(f"byte_order must be 'little' or 'big', not '{byte_order}'")
     if width not in _STRUCT_CODE_BY_WIDTH:
-        raise ValueError(f"larghezza non supportata: {width} bytes (supportati: 1, 2, 4, 8)")
+        raise ValueError(f"unsupported width: {width} bytes (supported: 1, 2, 4, 8)")
     fmt = _STRUCT_PREFIX[byte_order] + _STRUCT_CODE_BY_WIDTH[width]
     return struct.pack(fmt, value)
 
@@ -44,10 +44,10 @@ def unpack_value(data: bytes, width: int, byte_order: str) -> int:
 
 
 def repack(fields: list[dict], byte_order: str) -> bytes:
-    """Ricostruisce un buffer di bytes contiguo dai valori strutturati,
-    nell'ordine richiesto. I campi devono coprire un range contiguo
-    senza sovrapposizioni a partire da offset 0 (stesso vincolo già
-    applicato dai reader in fase di parsing)."""
+    """Rebuilds a contiguous byte buffer from the structured values, in
+    the requested order. Fields must cover a contiguous range with no
+    overlaps starting at offset 0 (same constraint already enforced by
+    readers during parsing)."""
     if not fields:
         return b""
     sorted_fields = sorted(fields, key=lambda f: f["offset"])
@@ -55,7 +55,7 @@ def repack(fields: list[dict], byte_order: str) -> bytes:
     for f in sorted_fields:
         if f["offset"] != len(out):
             raise ValueError(
-                f"campo a offset {f['offset']} non contiguo rispetto ai {len(out)} bytes già ricostruiti"
+                f"field at offset {f['offset']} isn't contiguous with the {len(out)} bytes already rebuilt"
             )
         out += pack_value(f["value"], f["width"], byte_order)
     return bytes(out)

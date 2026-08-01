@@ -12,7 +12,7 @@ from payload.core.plugin_base import CheckStatus
 def test_git_check_ok_without_repo(tmp_path):
     result = GitCheck().run({"_project_root": str(tmp_path)})
     assert result.status == CheckStatus.OK
-    assert "non ancora un repo git" in result.message
+    assert "not a git repo yet" in result.message
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="richiede git")
@@ -20,7 +20,7 @@ def test_git_check_reports_repo_presence(tmp_path):
     subprocess.run(["git", "init", str(tmp_path)], capture_output=True)
     result = GitCheck().run({"_project_root": str(tmp_path)})
     assert result.status == CheckStatus.OK
-    assert "repo git presente" in result.message
+    assert "git repo present" in result.message
 
 
 def test_local_plugin_deps_check_ok_when_no_plugins(tmp_path):
@@ -42,7 +42,7 @@ def test_local_plugin_deps_check_warns_on_missing_dependency(tmp_path):
 def test_local_plugin_deps_check_ok_when_deps_satisfied(tmp_path):
     plugin_dir = tmp_path / "local_plugins"
     plugin_dir.mkdir()
-    (plugin_dir / "good.py").write_text('REQUIRES = ["json", "os"]\n')  # stdlib, sempre soddisfatte
+    (plugin_dir / "good.py").write_text('REQUIRES = ["json", "os"]\n')  # stdlib, always satisfied
 
     result = LocalPluginDepsCheck().run({"_project_root": str(tmp_path)})
 

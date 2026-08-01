@@ -1,9 +1,10 @@
-"""golden get/set/clear/diff — controparte web dei comandi omonimi in
-cli.py, stessa suddivisione di responsabilità.
+"""golden get/set/clear/diff — web counterpart of the same-named
+commands in cli.py, same split of responsibilities.
 
-Golden qui è un puntatore a uno snapshot già registrato in
-HistoryStore, non più un file frozen separato — ogni route è quindi
-per-tabella (non più per-path-di-output come nella vecchia versione)."""
+Golden here is a pointer to a snapshot already recorded in
+HistoryStore, no longer a separate frozen file — every route is
+therefore per-table (no longer per-output-path like in the old
+version)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -62,7 +63,7 @@ async def golden_set_route(request: Request) -> JSONResponse:
 
     def _run():
         sources, batch_tables, _ = discover_for_history(root)
-        _find_ref(sources, batch_tables, table)  # valida che la tabella esista
+        _find_ref(sources, batch_tables, table)  # validates that the table exists
         history = HistoryStore(root)
         golden_id = set_golden(history, table, snapshot_id)
         return {"table": table, "golden_snapshot_id": golden_id}

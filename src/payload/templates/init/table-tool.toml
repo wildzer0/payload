@@ -8,6 +8,6 @@ byte_order = "little"
 compiler = "gcc"
 compiler_flags = []
 objcopy = "objcopy"
-# Richiesti solo se usi il writer 'obj' (compila .c -> .o linkabile).
-# objcopy_target = "elf32-littlearm"   # bfd target del tuo MCU
-# objcopy_arch = "arm"                 # architettura per objcopy -B
+# Only required if you use the 'obj' writer (compiles .c -> linkable .o).
+# objcopy_target = "elf32-littlearm"   # bfd target of your MCU
+# objcopy_arch = "arm"                 # architecture for objcopy -B

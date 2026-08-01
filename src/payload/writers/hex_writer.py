@@ -1,17 +1,18 @@
 """
-Writer di esempio: Intel HEX, formato testuale standard usato per
-flashare firmware/dati su microcontrollori (es. via programmer/bootloader).
+Example writer: Intel HEX, a standard text format used to flash
+firmware/data onto microcontrollers (e.g. via a programmer/bootloader).
 
-Serve come secondo esempio di writer, più realistico di bin_writer.py, per
-mostrare una vera TRASFORMAZIONE (non solo dump di bytes) a partire dagli
-stessi dati che qualsiasi altro writer riceverebbe in TableIR.data — il
-formato di destinazione qui non c'entra nulla con come i dati sono stati
-letti (raw_text, csv, c_source, ...): è proprio il punto della IR comune.
+Serves as a second, more realistic writer example than bin_writer.py,
+to show a real TRANSFORMATION (not just a byte dump) starting from the
+same data any other writer would receive in TableIR.data — the
+destination format here has nothing to do with how the data was read
+(raw_text, csv, c_source, ...): that's precisely the point of the
+common IR.
 
-Limite dichiarato: supporta solo indirizzi a 16 bit (record type 00/01,
-niente extended linear address 04) — sufficiente per tabelle sotto i 64KB,
-il caso comune per tabelle embedded. Un writer 'hex32' separato potrebbe
-gestire tabelle più grandi, se mai servisse.
+Stated limit: only supports 16-bit addresses (record type 00/01, no
+extended linear address 04) — enough for tables under 64KB, the common
+case for embedded tables. A separate 'hex32' writer could handle
+larger tables, if that's ever needed.
 """
 from __future__ import annotations
 
@@ -41,13 +42,13 @@ def _eof_record() -> str:
 
 
 class HexWriter:
-    """Formato Intel HEX standard (record type 00/01), usato per
-    flashare firmware/dati su microcontrollori via programmer/bootloader.
+    """Standard Intel HEX format (record type 00/01), used to flash
+    firmware/data onto microcontrollers via a programmer/bootloader.
 
-    16 bytes per riga, checksum calcolato automaticamente. Supporta solo
-    indirizzi a 16 bit (tabelle sotto i 64KB) — oltre quel limite
-    solleva WriterEmitError invece di produrre un file HEX troncato o
-    scorretto."""
+    16 bytes per line, checksum computed automatically. Only supports
+    16-bit addresses (tables under 64KB) — beyond that limit it raises
+    WriterEmitError instead of producing a truncated or incorrect HEX
+    file."""
 
     name = "hex"
     extension = ".hex"
@@ -57,8 +58,8 @@ class HexWriter:
         if len(ir.data) > 0xFFFF:
             raise WriterEmitError(
                 self.name,
-                f"tabella di {len(ir.data)} bytes supera il limite a 16 bit (65535) "
-                f"supportato da questo writer",
+                f"table of {len(ir.data)} bytes exceeds the 16-bit limit (65535) "
+                f"supported by this writer",
             )
 
         lines = []

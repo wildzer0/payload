@@ -1,18 +1,18 @@
 """
-Config a tre livelli, precedenza crescente:
-  1. table-tool.toml globale (root progetto)
-  2. sidecar per-tabella (<nome>.config.toml accanto al sorgente)
-  3. flag CLI
+Three-tier config, increasing precedence:
+  1. global table-tool.toml (project root)
+  2. per-table sidecar (<name>.config.toml next to the source)
+  3. CLI flags
 
-Il merge e' "deep": il sidecar sovrascrive solo le chiavi che dichiara,
-non l'intera sezione.
+The merge is "deep": the sidecar only overwrites the keys it declares,
+not the whole section.
 
-Validazione fatta a mano con dataclasses stdlib, deliberatamente senza
-pydantic: pydantic-core e' un'estensione Rust senza wheel precompilata
-per diverse piattaforme ARM (es. Termux su Android), il che rompeva
-l'installazione li'. dataclasses + validazione esplicita e' l'unica
-dipendenza compilata in meno, e rende il tool installabile ovunque ci
-sia un Python puro.
+Validation done by hand with stdlib dataclasses, deliberately without
+pydantic: pydantic-core is a Rust extension with no precompiled wheel
+for several ARM platforms (e.g. Termux on Android), which broke
+installation there. dataclasses + explicit validation is one fewer
+compiled dependency, and makes the tool installable anywhere a plain
+Python is available.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import tomli_w
 
-from payload.core.errors import InvalidConfigError
+from payload.core.errors import BatchTableError, InvalidConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -41,54 +41,68 @@ class ToolchainConfig:
     compiler: str = "gcc"
     compiler_flags: list[str] = field(default_factory=list)
     objcopy: str = "objcopy"
-    # richiesti solo dal writer 'obj' (objcopy -I binary non ha un
-    # default universale): es. objcopy_target="elf32-littlearm",
-    # objcopy_arch="arm" per un target ARM Cortex-M
+    # only required by the 'obj' writer (objcopy -I binary has no
+    # universal default): e.g. objcopy_target="elf32-littlearm",
+    # objcopy_arch="arm" for an ARM Cortex-M target
     objcopy_target: str = ""
     objcopy_arch: str = ""
 
 
 @dataclass
+class ProjectConfig:
+    # "" = no explicit name (projects created before this field
+    # existed, or a hand-written table-tool.toml) — whoever displays
+    # the name (web/CLI) decides the fallback on its own (e.g. the
+    # folder name), the core config doesn't invent one here so as not
+    # to hide the fact that the data is missing.
+    name: str = ""
+    description: str = ""
+
+
+@dataclass
 class DefaultsConfig:
-    writer: str | None = None  # None = nessuna preferenza esplicita: il reader può suggerirne uno
-    reader: str | None = None  # None = auto-risoluzione da estensione/sniff (vedi PluginRegistry.find_reader)
+    writer: str | None = None  # None = no explicit preference: the reader may suggest one
+    reader: str | None = None  # None = auto-resolved from extension/sniff (see PluginRegistry.find_reader)
     output_dir: str = "build"
     cache_dir: str = ".payload_cache"
-    byte_order: str = "little"  # "little" | "big" — target per reader/writer che gestiscono valori multi-byte
+    byte_order: str = "little"  # "little" | "big" — target for readers/writers that handle multi-byte values
 
 
 @dataclass
 class PayloadConfig:
+    project: ProjectConfig = field(default_factory=ProjectConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
     toolchain: ToolchainConfig = field(default_factory=ToolchainConfig)
-    # Territorio dei plugin, non del core: [plugin.<nome>] in
-    # table-tool.toml/sidecar finisce qui senza validazione di schema —
-    # il core non può sapere di cosa un plugin di terze parti ha
-    # bisogno. Un reader/writer legge la propria fetta con
+    # Plugin territory, not the core's: [plugin.<name>] in
+    # table-tool.toml/sidecar ends up here with no schema validation —
+    # the core has no way to know what a third-party plugin needs. A
+    # reader/writer reads its own slice with
     # config.get("plugin", {}).get(self.name, {}).
     plugin: dict = field(default_factory=dict)
-    # [pipeline] stages = [...] — lista grezza di dict, validata e
-    # trasformata in PipelineSpec da core/pipeline_spec.py, non qui
-    # (il core config resta generico, non deve conoscere le regole di
-    # alternanza reader/writer/exec). Vuota = nessuna pipeline esplicita,
-    # si usa la risoluzione implicita da --from/--to (vedi core/pipeline.py).
+    # [pipeline] stages = [...] — raw list of dicts, validated and
+    # turned into a PipelineSpec by core/pipeline_spec.py, not here
+    # (the core config stays generic, it shouldn't know the
+    # reader/writer/exec alternation rules). Empty = no explicit
+    # pipeline, falls back to implicit resolution from --from/--to
+    # (see core/pipeline.py).
     pipeline_stages: list = field(default_factory=list)
-    # [[batch_table]] — lista grezza di dict (array of tables TOML), una
-    # tabella logica costruita da PIÙ file sorgente invece di uno solo
-    # (vedi src/payload/docs/BATCH.md). Validata solo strutturalmente
-    # qui (nomi campo noti, tipi base); espansione dei glob 'sources' e
-    # validazione profonda (nomi duplicati, path mancanti) è territorio
-    # di core/batch_tables.py, non del core config — stesso confine già
-    # tracciato per pipeline_stages/pipeline_spec.py.
+    # [[batch_table]] — raw list of dicts (TOML array of tables), a
+    # logical table built from SEVERAL source files instead of just
+    # one (see src/payload/docs/BATCH.md). Only structurally validated
+    # here (known field names, base types); expanding the 'sources'
+    # globs and deep validation (duplicate names, missing paths) is
+    # core/batch_tables.py's territory, not the core config's — same
+    # boundary already drawn for pipeline_stages/pipeline_spec.py.
     batch_tables: list = field(default_factory=list)
 
     def model_dump(self) -> dict:
-        """Nome del metodo mantenuto uguale a pydantic v2 apposta: nessun
-        altro modulo (pipeline, cli, doctor) deve sapere che sotto non
-        c'e' piu' pydantic."""
+        """Method name deliberately kept the same as pydantic v2: no
+        other module (pipeline, cli, doctor) needs to know pydantic
+        isn't underneath anymore."""
         return asdict(self)
 
 
+_PROJECT_STR_FIELDS = ("name", "description")
 _DEFAULTS_STR_FIELDS = ("writer", "reader", "output_dir", "cache_dir", "byte_order")
 _TOOLCHAIN_STR_FIELDS = ("compiler", "objcopy", "objcopy_target", "objcopy_arch")
 _TOOLCHAIN_LIST_STR_FIELDS = ("compiler_flags",)
@@ -121,69 +135,73 @@ def _validate_section(
     for key, value in section.items():
         field_path = f"{section_name}.{key}"
         if key not in known:
-            raise InvalidConfigError(path, field=field_path, reason="campo sconosciuto")
+            raise InvalidConfigError(path, field=field_path, reason="unknown field")
         if key in str_fields and not isinstance(value, str):
             raise InvalidConfigError(
                 path, field=field_path,
-                reason=f"deve essere una stringa, trovato {type(value).__name__}",
+                reason=f"must be a string, got {type(value).__name__}",
             )
         if key in list_str_fields:
             if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-                raise InvalidConfigError(path, field=field_path, reason="deve essere una lista di stringhe")
+                raise InvalidConfigError(path, field=field_path, reason="must be a list of strings")
 
 
 def _validate_batch_table_entry(entry: dict, index: int, path: Path) -> None:
     field_prefix = f"batch_table[{index}]"
     if not isinstance(entry, dict):
-        raise InvalidConfigError(path, field=field_prefix, reason="deve essere una tabella TOML, es. [[batch_table]]")
+        raise InvalidConfigError(path, field=field_prefix, reason="must be a TOML table, e.g. [[batch_table]]")
     if not entry.get("name"):
-        raise InvalidConfigError(path, field=f"{field_prefix}.name", reason="obbligatorio, non può essere vuoto")
+        raise InvalidConfigError(path, field=f"{field_prefix}.name", reason="required, can't be empty")
     if not entry.get("sources"):
-        raise InvalidConfigError(path, field=f"{field_prefix}.sources", reason="obbligatorio, non può essere vuoto")
+        raise InvalidConfigError(path, field=f"{field_prefix}.sources", reason="required, can't be empty")
     _validate_section(
         {k: v for k, v in entry.items() if k != "stages"},
         field_prefix, _BATCH_TABLE_STR_FIELDS, _BATCH_TABLE_LIST_STR_FIELDS, path,
     )
     stages = entry.get("stages", [])
     if not isinstance(stages, list):
-        raise InvalidConfigError(path, field=f"{field_prefix}.stages", reason="deve essere una lista di stage")
+        raise InvalidConfigError(path, field=f"{field_prefix}.stages", reason="must be a list of stages")
 
 
 def _build_config(merged: dict, path: Path) -> PayloadConfig:
+    project_dict = merged.get("project", {})
     defaults_dict = merged.get("defaults", {})
     toolchain_dict = merged.get("toolchain", {})
     plugin_dict = merged.get("plugin", {})
     pipeline_dict = merged.get("pipeline", {})
     batch_table_list = merged.get("batch_table", [])
 
+    if not isinstance(project_dict, dict):
+        raise InvalidConfigError(path, field="project", reason="must be a TOML table, e.g. [project]")
     if not isinstance(defaults_dict, dict):
-        raise InvalidConfigError(path, field="defaults", reason="deve essere una tabella TOML, es. [defaults]")
+        raise InvalidConfigError(path, field="defaults", reason="must be a TOML table, e.g. [defaults]")
     if not isinstance(toolchain_dict, dict):
-        raise InvalidConfigError(path, field="toolchain", reason="deve essere una tabella TOML, es. [toolchain]")
+        raise InvalidConfigError(path, field="toolchain", reason="must be a TOML table, e.g. [toolchain]")
     if not isinstance(plugin_dict, dict):
-        raise InvalidConfigError(path, field="plugin", reason="deve essere una tabella TOML, es. [plugin.nome_plugin]")
+        raise InvalidConfigError(path, field="plugin", reason="must be a TOML table, e.g. [plugin.plugin_name]")
     if not isinstance(pipeline_dict, dict):
-        raise InvalidConfigError(path, field="pipeline", reason="deve essere una tabella TOML, es. [pipeline]")
+        raise InvalidConfigError(path, field="pipeline", reason="must be a TOML table, e.g. [pipeline]")
     if not isinstance(batch_table_list, list):
-        raise InvalidConfigError(path, field="batch_table", reason="deve essere una lista di tabelle [[batch_table]]")
+        raise InvalidConfigError(path, field="batch_table", reason="must be a list of [[batch_table]] tables")
 
     pipeline_stages = pipeline_dict.get("stages", [])
     if not isinstance(pipeline_stages, list):
-        raise InvalidConfigError(path, field="pipeline.stages", reason="deve essere una lista di stage")
+        raise InvalidConfigError(path, field="pipeline.stages", reason="must be a list of stages")
 
-    unknown_top = set(merged.keys()) - {"defaults", "toolchain", "plugin", "pipeline", "batch_table"}
+    unknown_top = set(merged.keys()) - {"project", "defaults", "toolchain", "plugin", "pipeline", "batch_table"}
     if unknown_top:
-        raise InvalidConfigError(path, field=next(iter(unknown_top)), reason="sezione sconosciuta")
+        raise InvalidConfigError(path, field=next(iter(unknown_top)), reason="unknown section")
 
+    _validate_section(project_dict, "project", _PROJECT_STR_FIELDS, (), path)
     _validate_section(defaults_dict, "defaults", _DEFAULTS_STR_FIELDS, (), path)
     _validate_section(toolchain_dict, "toolchain", _TOOLCHAIN_STR_FIELDS, _TOOLCHAIN_LIST_STR_FIELDS, path)
-    # [plugin.*] è deliberatamente NON validato qui: è territorio del
-    # plugin, il core non ha modo di sapere quali chiavi siano legittime.
-    # [pipeline.stages] è deliberatamente validato solo strutturalmente
-    # (lista sì/no): le regole di alternanza reader/writer/exec sono
-    # territorio di core/pipeline_spec.py, non del core config. Stesso
-    # confine per [[batch_table]]: qui solo struttura/campi noti, non
-    # l'espansione dei glob 'sources' (core/batch_tables.py).
+    # [plugin.*] is deliberately NOT validated here: it's plugin
+    # territory, the core has no way to know which keys are legitimate.
+    # [pipeline.stages] is deliberately validated only structurally
+    # (list yes/no): the reader/writer/exec alternation rules are
+    # core/pipeline_spec.py's territory, not the core config's. Same
+    # boundary for [[batch_table]]: only structure/known fields here,
+    # not the expansion of the 'sources' globs (core/batch_tables.py).
     for i, entry in enumerate(batch_table_list):
         _validate_batch_table_entry(entry, i, path)
 
@@ -191,10 +209,11 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
     if byte_order not in _VALID_BYTE_ORDERS:
         raise InvalidConfigError(
             path, field="defaults.byte_order",
-            reason=f"deve essere 'little' o 'big', trovato '{byte_order}'",
+            reason=f"must be 'little' or 'big', got '{byte_order}'",
         )
 
     return PayloadConfig(
+        project=ProjectConfig(**project_dict),
         defaults=DefaultsConfig(**defaults_dict),
         toolchain=ToolchainConfig(**toolchain_dict),
         plugin=plugin_dict,
@@ -204,8 +223,8 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
 
 
 def load_config(project_root: Path, source_path: Path | None = None) -> PayloadConfig:
-    """Carica il config globale, applica sopra l'eventuale sidecar della
-    tabella specifica se source_path e' dato, valida il risultato."""
+    """Loads the global config, applies the specific table's sidecar
+    on top if source_path is given, validates the result."""
     config, _ = resolve_config_with_provenance(project_root, source_path)
     return config
 
@@ -224,28 +243,28 @@ def _flatten_keys(data: dict, prefix: str = "") -> list[str]:
 def resolve_config_with_provenance(
     project_root: Path, source_path: Path | None = None
 ) -> tuple[PayloadConfig, dict[str, str]]:
-    """Come load_config, ma ritorna anche da dove viene ogni valore
-    ('default' | 'globale (table-tool.toml)' | 'sidecar (<file>)') —
-    usato da 'pld config show' per il debug della risoluzione a 3 livelli."""
+    """Like load_config, but also returns where each value comes from
+    ('default' | 'global (table-tool.toml)' | 'sidecar (<file>)') —
+    used by 'pld config show' to debug the 3-tier resolution."""
     merged: dict = {}
     provenance: dict[str, str] = {}
 
     global_path = project_root / GLOBAL_CONFIG_FILENAME
     if global_path.exists():
-        logger.debug("Config globale trovata: %s", global_path)
+        logger.debug("Global config found: %s", global_path)
         global_data = _load_toml(global_path)
         merged = global_data
         for key in _flatten_keys(global_data):
-            provenance[key] = f"globale ({GLOBAL_CONFIG_FILENAME})"
+            provenance[key] = f"global ({GLOBAL_CONFIG_FILENAME})"
     else:
-        logger.debug("Nessuna config globale in %s, uso i default", global_path)
+        logger.debug("No global config at %s, using defaults", global_path)
 
     if source_path is not None:
         sidecar_path = source_path.parent / f"{source_path.stem}{SIDECAR_SUFFIX}"
         if sidecar_path.exists():
             sidecar_data = _load_toml(sidecar_path)
             logger.debug(
-                "Sidecar applicato per %s: %s (chiavi: %s)",
+                "Sidecar applied for %s: %s (keys: %s)",
                 source_path.name, sidecar_path.name, list(sidecar_data.keys()),
             )
             merged = _deep_merge(merged, sidecar_data)
@@ -254,24 +273,24 @@ def resolve_config_with_provenance(
 
     config = _build_config(merged, global_path)
 
-    # ogni campo non toccato da global/sidecar viene dal default della dataclass
+    # every field untouched by global/sidecar comes from the dataclass default
     for section_name, section_obj in (("defaults", config.defaults), ("toolchain", config.toolchain)):
         for f in fields(section_obj):
             key = f"{section_name}.{f.name}"
             provenance.setdefault(key, "default")
 
     logger.debug(
-        "Config risolta per %s: writer=%s toolchain=%s",
-        source_path.name if source_path else "<globale>",
+        "Config resolved for %s: writer=%s toolchain=%s",
+        source_path.name if source_path else "<global>",
         config.defaults.writer, config.toolchain.compiler,
     )
     return config, provenance
 
 
 def config_schema() -> dict:
-    """Schema dei campi editabili di 'defaults'/'toolchain', nell'ordine
-    di dichiarazione delle dataclass — usato dalla web UI per generare il
-    form di config senza duplicare l'elenco dei campi lato JS."""
+    """Schema of the editable 'defaults'/'toolchain' fields, in the
+    dataclasses' declaration order — used by the web UI to generate the
+    config form without duplicating the field list on the JS side."""
     def _section(cls, list_fields: tuple) -> list[dict]:
         return [{"key": f.name, "type": "list" if f.name in list_fields else "string"} for f in fields(cls)]
 
@@ -282,19 +301,19 @@ def config_schema() -> dict:
 
 
 def _drop_none_values(section: dict) -> dict:
-    """'defaults.writer' e' l'unico campo con default None ('nessuna
-    preferenza esplicita') — un form che lo invia vuoto manda None, che
-    va trattato come "chiave assente", non come valore stringa
-    invalido, altrimenti _validate_section lo rifiuterebbe (si aspetta
-    solo str per i campi *_STR_FIELDS)."""
+    """'defaults.writer' is the only field with a None default ('no
+    explicit preference') — a form that submits it empty sends None,
+    which must be treated as "key absent", not as an invalid string
+    value, otherwise _validate_section would reject it (it only
+    expects str for the *_STR_FIELDS fields)."""
     return {k: v for k, v in section.items() if v is not None}
 
 
 def write_global_config(project_root: Path, defaults: dict, toolchain: dict) -> Path:
-    """Scrive/sovrascrive le sezioni [defaults]/[toolchain] di
-    table-tool.toml, preservando [plugin.*]/[pipeline] esistenti se
-    presenti. Valida PRIMA di scrivere: una config che non supererebbe
-    load_config() non finisce mai su disco."""
+    """Writes/overwrites the [defaults]/[toolchain] sections of
+    table-tool.toml, preserving any existing [plugin.*]/[pipeline] as
+    is. Validates BEFORE writing: a config that wouldn't pass
+    load_config() never ends up on disk."""
     path = project_root / GLOBAL_CONFIG_FILENAME
     merged = dict(_load_toml(path)) if path.exists() else {}
     merged["defaults"] = _drop_none_values(defaults)
@@ -303,14 +322,14 @@ def write_global_config(project_root: Path, defaults: dict, toolchain: dict) -> 
     _build_config(merged, path)
 
     path.write_text(tomli_w.dumps(merged))
-    logger.debug("Config globale scritta: %s", path)
+    logger.debug("Global config written: %s", path)
     return path
 
 
 def read_raw_sidecar(source_path: Path) -> dict:
-    """TOML grezzo del sidecar di source_path, o {} se non esiste —
-    usato dalla web UI per precompilare il form coi soli campi
-    effettivamente overridati (non con l'intera config risolta)."""
+    """Raw TOML of source_path's sidecar, or {} if it doesn't exist —
+    used by the web UI to prefill the form with only the fields
+    actually overridden (not the whole resolved config)."""
     sidecar_path = source_path.parent / f"{source_path.stem}{SIDECAR_SUFFIX}"
     if not sidecar_path.exists():
         return {}
@@ -323,12 +342,12 @@ def write_sidecar_config(
     toolchain: dict | None = None,
     pipeline_stages: list | None = None,
 ) -> Path:
-    """Aggiorna il sidecar di source_path un pezzo alla volta: ogni
-    parametro None lascia la sezione esistente intatta, un dict/lista
-    vuoti la rimuovono (disattiva l'override senza toccare il resto del
-    sidecar, es. [plugin.*] scritto a mano). Se il sidecar risultante è
-    completamente vuoto, il file viene eliminato invece di lasciare un
-    TOML vuoto sul disco."""
+    """Updates source_path's sidecar one piece at a time: each None
+    parameter leaves the existing section untouched, an empty
+    dict/list removes it (disables the override without touching the
+    rest of the sidecar, e.g. a hand-written [plugin.*]). If the
+    resulting sidecar is completely empty, the file is deleted instead
+    of leaving an empty TOML on disk."""
     sidecar_path = source_path.parent / f"{source_path.stem}{SIDECAR_SUFFIX}"
     merged = dict(_load_toml(sidecar_path)) if sidecar_path.exists() else {}
 
@@ -350,36 +369,142 @@ def write_sidecar_config(
         else:
             merged.pop("pipeline", None)
 
-    # Stessa validazione strutturale di _build_config per defaults/toolchain
-    # (pipeline.stages è già stato validato dal chiamante con
-    # PipelineSpec.from_raw_stages prima di arrivare qui — le regole di
-    # alternanza reader/writer/exec non sono territorio di questo modulo).
+    # Same structural validation as _build_config for defaults/toolchain
+    # (pipeline.stages has already been validated by the caller with
+    # PipelineSpec.from_raw_stages before getting here — the
+    # reader/writer/exec alternation rules aren't this module's
+    # territory).
     _validate_section(merged.get("defaults", {}), "defaults", _DEFAULTS_STR_FIELDS, (), sidecar_path)
     _validate_section(merged.get("toolchain", {}), "toolchain", _TOOLCHAIN_STR_FIELDS, _TOOLCHAIN_LIST_STR_FIELDS, sidecar_path)
     byte_order = merged.get("defaults", {}).get("byte_order")
     if byte_order is not None and byte_order not in _VALID_BYTE_ORDERS:
         raise InvalidConfigError(
             sidecar_path, field="defaults.byte_order",
-            reason=f"deve essere 'little' o 'big', trovato '{byte_order}'",
+            reason=f"must be 'little' or 'big', got '{byte_order}'",
         )
 
     if not merged:
         if sidecar_path.exists():
             sidecar_path.unlink()
-        logger.debug("Sidecar rimosso (vuoto dopo l'update): %s", sidecar_path)
+        logger.debug("Sidecar removed (empty after update): %s", sidecar_path)
         return sidecar_path
 
     sidecar_path.write_text(tomli_w.dumps(merged))
-    logger.debug("Sidecar scritto: %s", sidecar_path)
+    logger.debug("Sidecar written: %s", sidecar_path)
     return sidecar_path
 
 
 def delete_sidecar_config(source_path: Path) -> bool:
-    """Elimina il sidecar di source_path se esiste. Ritorna True se un
-    file è stato effettivamente rimosso (idempotente: False se non
-    c'era già nulla da eliminare)."""
+    """Deletes source_path's sidecar if it exists. Returns True if a
+    file was actually removed (idempotent: False if there was nothing
+    to delete already)."""
     sidecar_path = source_path.parent / f"{source_path.stem}{SIDECAR_SUFFIX}"
     if sidecar_path.exists():
         sidecar_path.unlink()
         return True
     return False
+
+
+# --- programmatic mutation of [[batch_table]] -------------------------------
+#
+# Writing used by the import of external tables (core/table_admin.py):
+# creating a new [[batch_table]], growing an existing one with one more
+# member, or removing one. Same pattern as
+# write_global_config/write_sidecar_config — loads the raw TOML,
+# mutates only the relevant part, validates with _build_config BEFORE
+# writing (a config that wouldn't pass load_config() never ends up on
+# disk), rewrites everything else unchanged.
+
+def _read_batch_table_list(path: Path) -> tuple[dict, list[dict]]:
+    merged = dict(_load_toml(path)) if path.exists() else {}
+    return merged, list(merged.get("batch_table", []))
+
+
+def _write_batch_table_list(path: Path, merged: dict, batch_table_list: list[dict]) -> None:
+    merged["batch_table"] = batch_table_list
+    _build_config(merged, path)
+    path.write_text(tomli_w.dumps(merged))
+
+
+def create_batch_table(
+    project_root: Path, name: str, sources: list[str],
+    reader: str | None = None, writer: str | None = None, byte_order: str | None = None,
+) -> Path:
+    """Adds a new [[batch_table]] to table-tool.toml — used when the
+    user imports several files together as a new batch table. Fails
+    if a [[batch_table]] with this name already exists."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    merged, batch_table_list = _read_batch_table_list(path)
+    if any(e.get("name") == name for e in batch_table_list):
+        raise BatchTableError(name, "a [[batch_table]] with this name already exists")
+
+    entry: dict = {"name": name, "sources": list(sources)}
+    if reader:
+        entry["reader"] = reader
+    if writer:
+        entry["writer"] = writer
+    if byte_order:
+        entry["byte_order"] = byte_order
+
+    batch_table_list.append(entry)
+    _write_batch_table_list(path, merged, batch_table_list)
+    logger.debug("[[batch_table]] '%s' created in %s", name, path)
+    return path
+
+
+def add_batch_table_source(project_root: Path, name: str, source: str) -> Path:
+    """Appends a path to an existing [[batch_table]]'s 'sources' —
+    used when the user imports one more file onto an already declared
+    batch table. Idempotent: if the path is already there, it's not
+    duplicated."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    merged, batch_table_list = _read_batch_table_list(path)
+    entry = next((e for e in batch_table_list if e.get("name") == name), None)
+    if entry is None:
+        raise BatchTableError(name, "no [[batch_table]] with this name")
+
+    sources = list(entry.get("sources", []))
+    if source not in sources:
+        sources.append(source)
+    entry["sources"] = sources
+
+    _write_batch_table_list(path, merged, batch_table_list)
+    logger.debug("[[batch_table]] '%s': added source '%s'", name, source)
+    return path
+
+
+def remove_batch_table_source(project_root: Path, name: str, source: str) -> bool:
+    """Removes a literal path from a [[batch_table]]'s 'sources' —
+    only for literal entries: a path matched by a glob pattern simply
+    stops showing up on its own once the file is deleted from disk,
+    there's nothing to edit in config for that case (see
+    core/table_admin.py). True if the list was actually modified."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    if not path.exists():
+        return False
+    merged, batch_table_list = _read_batch_table_list(path)
+    entry = next((e for e in batch_table_list if e.get("name") == name), None)
+    if entry is None or source not in entry.get("sources", []):
+        return False
+
+    entry["sources"] = [s for s in entry["sources"] if s != source]
+    _write_batch_table_list(path, merged, batch_table_list)
+    logger.debug("[[batch_table]] '%s': removed source '%s'", name, source)
+    return True
+
+
+def remove_batch_table_entry(project_root: Path, name: str) -> bool:
+    """Removes an entire [[batch_table]] from table-tool.toml — used
+    when the last member file is deleted (a batch table with 0 files
+    makes no sense). True if an entry was actually removed."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    if not path.exists():
+        return False
+    merged, batch_table_list = _read_batch_table_list(path)
+    new_list = [e for e in batch_table_list if e.get("name") != name]
+    if len(new_list) == len(batch_table_list):
+        return False
+
+    _write_batch_table_list(path, merged, new_list)
+    logger.debug("[[batch_table]] '%s' removed", name)
+    return True

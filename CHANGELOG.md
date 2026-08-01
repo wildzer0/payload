@@ -2,122 +2,124 @@
 
 ## v0.2.0
 
-**Pipeline configurabile** — modello unico per ogni build, vedi
-[src/payload/docs/PIPELINE.md](src/payload/docs/PIPELINE.md) per il design completo.
+**Configurable pipeline** — a single model for every build, see
+[src/payload/docs/PIPELINE.md](src/payload/docs/PIPELINE.md) for the full design.
 
-- Tre tipi di stage: `reader` (file → dati), `writer` (dati → file),
-  `exec` (file → file, comando shell/software host)
-- Un solo motore di esecuzione (`core/pipeline.py`) per ogni build: una
-  build "semplice" (`--from`/`--to`) è internamente una pipeline
-  implicita a 2 stage, nessun percorso di codice separato
-- `[pipeline]` in `table-tool.toml`/sidecar per dichiarare pipeline
-  esplicite multi-stage — sidecar sostituisce l'intera lista `stages`,
-  non la fonde elemento per elemento
-- Regole di alternanza validate **prima** di eseguire qualunque stage
-  (`InvalidPipelineError`, exit 2): reader sempre seguito da writer,
-  pipeline minimo 2 stage, `exec` finale richiede `output_extension`
-- Compatibilità reader/writer verificata su **ogni** coppia della
-  pipeline, non solo la prima
-- File intermedi in `tmp/` accanto al sorgente, ripuliti automaticamente
-  — `--keep-intermediate` su `build`/`build-all` per ispezionarli
-- `--dry-run` non esegue mai stage `exec` (possibili effetti collaterali reali)
-- `on_error = "warn"` per stage `exec` non essenziali (non blocca la build)
-- Cache sull'intera pipeline (`compute_pipeline_cache_key`): cambiare
-  anche un solo stage invalida correttamente
-- Nuovo `doctor` check `pipeline_exec`: segnala (informativo, non
-  bloccante) quanti stage `exec` sono configurati nel progetto —
-  eseguono codice arbitrario da config, vedi PIPELINE.md sezione Sicurezza
-- Verificato con `gcc`/`objcopy` e comandi shell reali (non solo
-  simulati); un bug reale trovato e corretto durante il test:
-  `on_error="warn"` sull'ultimo stage lasciava il file di fallback
-  dentro `tmp/`, che veniva ripulita subito dopo — ora viene copiato
-  nella posizione finale attesa prima del cleanup
-- **Cache per singolo stage**: ogni stage `writer`/`exec` non finale
-  persiste il proprio output (fuori da `tmp/`) con una chiave sul
-  prefisso di pipeline fino a quel punto — cambiare solo l'ultimo
-  stage non richiede più ricompilare un `.c` costoso a monte. `--force`
-  bypassa anche questi checkpoint, non solo la cache finale. Bug reale
-  trovato durante l'implementazione: `c_source.py`/`obj_writer.py`
-  usavano la stessa `tmp/` condivisa dalla pipeline e la cancellavano a
-  fine parsing/emit, rompendo gli stage successivi — corretto dando a
-  ciascuno una sottocartella privata (`tmp/c_source_scratch/`,
+- Three stage types: `reader` (file → data), `writer` (data → file),
+  `exec` (file → file, shell command/host tool)
+- A single execution engine (`core/pipeline.py`) for every build: a
+  "simple" build (`--from`/`--to`) is internally an implicit 2-stage
+  pipeline, no separate code path
+- `[pipeline]` in `table-tool.toml`/sidecar to declare explicit
+  multi-stage pipelines — the sidecar replaces the whole `stages`
+  list, it doesn't merge it element by element
+- Alternation rules validated **before** running any stage
+  (`InvalidPipelineError`, exit 2): a reader always followed by a
+  writer, pipeline of at least 2 stages, a final `exec` requires
+  `output_extension`
+- Reader/writer compatibility checked on **every** pair in the
+  pipeline, not just the first
+- Intermediate files in `tmp/` next to the source, cleaned up
+  automatically — `--keep-intermediate` on `build`/`build-all` to
+  inspect them
+- `--dry-run` never runs `exec` stages (possible real side effects)
+- `on_error = "warn"` for non-essential `exec` stages (doesn't block the build)
+- Cache over the whole pipeline (`compute_pipeline_cache_key`): changing
+  even a single stage correctly invalidates it
+- New `doctor` check `pipeline_exec`: reports (informational, not
+  blocking) how many `exec` stages are configured in the project —
+  they run arbitrary code from config, see PIPELINE.md's Security section
+- Verified with real `gcc`/`objcopy` and real shell commands (not just
+  simulated); a real bug found and fixed during testing:
+  `on_error="warn"` on the last stage left the fallback file inside
+  `tmp/`, which was cleaned up right after — it's now copied to the
+  expected final location before cleanup
+- **Per-stage caching**: every non-final `writer`/`exec` stage
+  persists its own output (outside `tmp/`) with a key based on the
+  pipeline prefix up to that point — changing only the last stage no
+  longer requires recompiling an expensive upstream `.c` file.
+  `--force` bypasses these checkpoints too, not just the final cache.
+  Real bug found during implementation: `c_source.py`/`obj_writer.py`
+  used the same shared pipeline `tmp/` and deleted it at the end of
+  parsing/emit, breaking later stages — fixed by giving each one a
+  private subfolder (`tmp/c_source_scratch/`,
   `tmp/obj_writer_scratch/`)
-- Nuovo comando `pld pipeline show <tabella>`: mostra la pipeline
-  risolta (implicita o esplicita) e quali stage hanno un checkpoint di
-  cache valido in questo momento
+- New `pld pipeline show <table>` command: shows the resolved pipeline
+  (implicit or explicit) and which stages currently have a valid cache
+  checkpoint
 
 ## v0.1.1
 
-Checkpoint di rollback prima di iniziare la feature "pipeline". Sei fix
-emersi dall'uso reale su un progetto vero (SPARC/RTEMS), tutti
-verificati con toolchain reali dove applicabile.
+Rollback checkpoint before starting the "pipeline" feature. Six fixes
+that came out of real use on an actual project (SPARC/RTEMS), all
+verified with real toolchains where applicable.
 
-- `run_command` mostra ora stderr/stdout del comando fallito con `-vv` — prima la promessa "esegui con -vv" era falsa, non veniva mai mostrato nulla
-- `readers/c_source.py` e `writers/obj_writer.py`: cartella `tmp/` locale accanto al sorgente invece di `AppData\Local\Temp` (Windows) — creata e ripulita automaticamente ad ogni build, mai lasciata sporca
-- `.gitignore`: aggiunta `tmp/`
-- Fix: `pld watch <sottocartella>` non trovava mai la config globale (`table-tool.toml`) se la sottocartella osservata non coincideva con la cartella da cui si lancia `pld` — ora la config globale si cerca sempre da `Path.cwd()`, coerente con `pld build`. Il sidecar per-tabella non era mai stato affetto (si risolve sempre relativo al file, non a `root`)
-- Nuovo comando `pld plugin new-local <nome> --kind reader|writer|doctor-check`: scaffold rapido di un plugin locale (singolo file in `local_plugins/`, nessun `pip install`) — prima l'unico scaffold disponibile (`pld plugin new`) generava un intero pacchetto pip, eccessivo per un plugin di progetto
+- `run_command` now shows the failed command's stderr/stdout with `-vv` — previously the "run with -vv" promise was false, nothing was ever shown
+- `readers/c_source.py` and `writers/obj_writer.py`: a local `tmp/` folder next to the source instead of `AppData\Local\Temp` (Windows) — created and cleaned up automatically on every build, never left dirty
+- `.gitignore`: added `tmp/`
+- Fix: `pld watch <subfolder>` never found the global config (`table-tool.toml`) if the watched subfolder didn't match the folder `pld` was launched from — the global config is now always looked up from `Path.cwd()`, consistent with `pld build`. The per-table sidecar was never affected (it's always resolved relative to the file, not to `root`)
+- New `pld plugin new-local <name> --kind reader|writer|doctor-check` command: quick scaffold for a local plugin (single file in `local_plugins/`, no `pip install`) — previously the only scaffold available (`pld plugin new`) generated a whole pip package, overkill for a project-local plugin
 
-## v0.1.0 (non ancora rilasciata)
+## v0.1.0 (not yet released)
 
-Prima versione funzionante del tool.
+First working version of the tool.
 
-### Pipeline core
-- Architettura a plugin: `sorgente → Reader → TableIR → Writer → output`
-- Discovery plugin via `entry_points` (`payload.readers`, `payload.writers`, `payload.doctor_checks`)
-- Cache incrementale basata su hash del contenuto (sorgente + reader + writer + config)
-- Risoluzione automatica del writer: `--to` esplicito → config → `reader.default_writer` → errore chiaro
-- `writer.compatible_readers`: combinazioni reader/writer incompatibili rifiutate prima del parsing
-- Gestione esplicita dell'endianness (`TableIR.byte_order`, `extra["fields"]`, `payload.core.byteorder`)
-- Passaggio informazioni extra ai plugin: `[plugin.<nome>]` persistente in config, `--opt chiave=valore` una tantum da CLI (entrambi entrano nella cache key)
-- Plugin locali senza `pip install`: `local_plugins/` accanto al progetto o `PAYLOAD_PLUGIN_PATH`, convenzione `READER`/`WRITER`/`DOCTOR_CHECK` (singolare o plurale) a livello di modulo
-- Dipendenze dichiarate dai plugin locali: `REQUIRES = [...]`, letto staticamente (AST, non esecuzione) anche se il modulo non sarebbe importabile; `pld plugin install-deps <file>` le installa con pip
-- `pld init --wizard`: modalità guidata (nome progetto, cosa includere, writer/byte_order di default, `git init` opzionale); `local_plugins/` creata di default anche senza wizard
-- `doctor`: nuovi check `git` (informativo) e `local_plugin_deps` (dipendenze mancanti nei plugin locali); fix di due check (`plugins`, `table_names`) che ignoravano la project root reale
-- Fix: `UnicodeEncodeError` su console Windows con codepage legacy (cp1252) durante la stampa dei tip con emoji — `stdout`/`stderr` riconfigurati con `errors="replace"` all'avvio della CLI
-- Fix (causa vera, non la prima ipotesi): dentro un exe PyInstaller congelato, `importlib.metadata.entry_points()` non trova i plugin builtin anche con `--copy-metadata payload` e anche se `importlib.metadata.version()` funziona per lo stesso pacchetto — i 6 plugin builtin ora vengono registrati con `import` diretto quando `sys.frozen` è vero (`core/builtin_plugins.py`), bypassando del tutto `entry_points` in quel contesto. Nessun impatto sull'installazione normale (pip/wheel), verificato che continua a usare `entry_points` come sempre
-- `build-exe.yml`: step di verifica fallisce esplicitamente se i plugin builtin non sono trovati, invece di un successo silenzioso con tabella vuota
-- Fix: `ModuleNotFoundError: payload.core.builtin_plugins` dentro l'exe — gli import lazy annidati (load_plugins → builtin_plugins → singoli reader/writer) non venivano seguiti fino in fondo dall'analisi statica di PyInstaller. Aggiunto `--collect-submodules payload` al comando di build, che impacchetta l'intero pacchetto indipendentemente da cosa l'analisi statica riesce a rilevare da sola
+### Core pipeline
+- Plugin architecture: `source → Reader → TableIR → Writer → output`
+- Plugin discovery via `entry_points` (`payload.readers`, `payload.writers`, `payload.doctor_checks`)
+- Incremental cache based on content hash (source + reader + writer + config)
+- Automatic writer resolution: explicit `--to` → config → `reader.default_writer` → clear error
+- `writer.compatible_readers`: incompatible reader/writer combinations rejected before parsing
+- Explicit endianness handling (`TableIR.byte_order`, `extra["fields"]`, `payload.core.byteorder`)
+- Passing extra information to plugins: persistent `[plugin.<name>]` in config, one-off `--opt key=value` from the CLI (both go into the cache key)
+- Local plugins without `pip install`: `local_plugins/` next to the project or `PAYLOAD_PLUGIN_PATH`, `READER`/`WRITER`/`DOCTOR_CHECK` module-level convention (singular or plural)
+- Dependencies declared by local plugins: `REQUIRES = [...]`, read statically (AST, not execution) even if the module wouldn't be importable; `pld plugin install-deps <file>` installs them with pip
+- `pld init --wizard`: guided mode (project name, what to include, default writer/byte_order, optional `git init`); `local_plugins/` created by default even without the wizard
+- `doctor`: new `git` (informational) and `local_plugin_deps` (missing dependencies in local plugins) checks; fixed two checks (`plugins`, `table_names`) that ignored the real project root
+- Fix: `UnicodeEncodeError` on Windows consoles with legacy codepages (cp1252) while printing tips with emoji — `stdout`/`stderr` reconfigured with `errors="replace"` at CLI startup
+- Fix (real cause, not the first hypothesis): inside a frozen PyInstaller exe, `importlib.metadata.entry_points()` doesn't find the builtin plugins even with `--copy-metadata payload` and even though `importlib.metadata.version()` works for the same package — the 6 builtin plugins are now registered with a direct `import` when `sys.frozen` is true (`core/builtin_plugins.py`), bypassing `entry_points` entirely in that context. No impact on a normal install (pip/wheel), verified it still uses `entry_points` as always
+- `build-exe.yml`: the verification step now fails explicitly if the builtin plugins aren't found, instead of silently succeeding with an empty table
+- Fix: `ModuleNotFoundError: payload.core.builtin_plugins` inside the exe — the nested lazy imports (load_plugins → builtin_plugins → individual readers/writers) weren't followed all the way by PyInstaller's static analysis. Added `--collect-submodules payload` to the build command, which bundles the whole package regardless of what static analysis can detect on its own
 
-### Comandi
+### Commands
 - `init`, `doctor`, `plugins`, `plugin new/validate/info`, `clean`
-- `build`, `build-all` (con `--jobs` parallelo reale via `ThreadPoolExecutor`)
-- `watch` (debounce, esclusione automatica della output dir)
+- `build`, `build-all` (with real parallelism via `--jobs`, `ThreadPoolExecutor`)
+- `watch` (debounce, automatic exclusion of the output dir)
 - `view`, `golden update/check/diff`
-- `status`, `commit`, `log`, `diff`, `restore` — checkpoint leggero per tabella, con storage a blob deduplicato e sharded
-- `config show` — config risolto con provenienza per campo (default/globale/sidecar)
-- `report` — vista d'insieme del progetto (dimensioni, byte_order, stato golden, ultimo snapshot)
-- `export` — archivio `.zip` portabile di sorgenti + config di progetto
+- `status`, `commit`, `log`, `diff`, `restore` — lightweight per-table checkpointing, with deduplicated, sharded blob storage
+- `config show` — resolved config with per-field provenance (default/global/sidecar)
+- `report` — project overview (sizes, byte_order, golden status, latest snapshot)
+- `export` — portable `.zip` archive of sources + project config
 
-### Plugin inclusi
-- Reader: `raw_text` (testo con commenti), `csv` (strutturato, multi-byte, endianness), `c_source` (compila `.c` reale, estrae bytes da sezione dedicata)
-- Writer: `bin` (dump grezzo, con repacking automatico su mismatch di endianness), `hex` (Intel HEX), `obj` (`.o` linkabile, sezione nominata per tabella, simboli `__start_`/`__stop_` verificati con un link reale)
+### Included plugins
+- Readers: `raw_text` (text with comments), `csv` (structured, multi-byte, endianness), `c_source` (compiles a real `.c` file, extracts bytes from a dedicated section)
+- Writers: `bin` (raw dump, with automatic repacking on endianness mismatch), `hex` (Intel HEX), `obj` (linkable `.o`, per-table named section, `__start_`/`__stop_` symbols verified with a real link)
 
-### Testing e packaging
-- Test a livello CLI (`tests/test_cli_smoke.py`, `CliRunner`) oltre a quelli a livello core
-- `tests/test_c_source_and_obj.py` — verifica con `gcc`/`objcopy` reali, incluso un link C completo che legge i dati tramite i simboli `__start_`/`__stop_` generati dal linker
-- `pytest-cov` configurato (report, nessuna soglia imposta a priori)
-- Verificata la build wheel reale (`py3-none-any`, nessuna dipendenza compilata) e l'installazione non-editable in un venv pulito, entry_points ispezionati direttamente dal pacchetto installato
-- `.github/workflows/build-exe.yml` — build automatica di `pld.exe` standalone (Windows, PyInstaller) su tag `v*`, allegato a GitHub Release. I plugin builtin funzionano dentro l'exe (`--copy-metadata payload`); i plugin locali (`local_plugins/`, `PAYLOAD_PLUGIN_PATH`) funzionano identici, nessuna ricompilazione richiesta — **non verificato con una build reale** (richiede un runner Windows, non disponibile in questo ambiente di sviluppo)
+### Testing and packaging
+- CLI-level tests (`tests/test_cli_smoke.py`, `CliRunner`) in addition to core-level ones
+- `tests/test_c_source_and_obj.py` — verified with real `gcc`/`objcopy`, including a full C link that reads the data through the `__start_`/`__stop_` symbols generated by the linker
+- `pytest-cov` configured (report, no threshold enforced a priori)
+- Verified the real wheel build (`py3-none-any`, no compiled dependency) and a non-editable install in a clean venv, entry_points inspected directly from the installed package
+- `.github/workflows/build-exe.yml` — automatic build of a standalone `pld.exe` (Windows, PyInstaller) on `v*` tags, attached to the GitHub Release. The builtin plugins work inside the exe (`--copy-metadata payload`); local plugins (`local_plugins/`, `PAYLOAD_PLUGIN_PATH`) work identically, no recompilation needed — **not verified with a real build** (requires a Windows runner, not available in this development environment)
 
-### Robustezza
-- Gerarchia di eccezioni con exit code dedicati (0-5) e log level coerenti
-- Config a 3 livelli (globale → sidecar per-tabella → CLI) validata a mano, **zero dipendenze compilate**
-  (rimossa `pydantic`: la sua estensione Rust non installa su diverse piattaforme ARM/Termux)
-- Rilevamento nomi tabella duplicati (`build-all`, `doctor`) — build/golden/history sono indicizzati per nome
-- `pld init` non scrive mai nella cartella corrente senza conferma esplicita
-- Fix: `typer.Exit` sollevato dentro `_run()` (11 comandi: doctor, clean, view, diff, restore, ecc.) veniva erroneamente catturato come bug interno invece che come uscita controllata
-- Suite di conformità (`payload.testing`) per validare plugin di terze parti a runtime, senza richiedere pytest
+### Robustness
+- Exception hierarchy with dedicated exit codes (0-5) and consistent log levels
+- 3-tier config (global → per-table sidecar → CLI) validated by hand, **zero compiled dependencies**
+  (removed `pydantic`: its Rust extension doesn't install on several ARM/Termux platforms)
+- Duplicate table name detection (`build-all`, `doctor`) — build/golden/history are indexed by name
+- `pld init` never writes to the current folder without explicit confirmation
+- Fix: `typer.Exit` raised inside `_run()` (11 commands: doctor, clean, view, diff, restore, etc.) was incorrectly caught as an internal bug instead of a controlled exit
+- Conformance suite (`payload.testing`) to validate third-party plugins at runtime, without requiring pytest
 
-### Documentazione
-- `src/payload/docs/USAGE.md` — guida utente completa
-- `src/payload/docs/PLUGINS.md` — guida sviluppatore plugin, incluse sezioni su endianness e legame reader/writer
-- Docstring sulla classe di ogni plugin, mostrata da `pld plugin info <nome>`
+### Documentation
+- `src/payload/docs/USAGE.md` — complete user guide
+- `src/payload/docs/PLUGINS.md` — plugin developer guide, including sections on endianness and the reader/writer relationship
+- Docstring on every plugin class, shown by `pld plugin info <name>`
 
-### Cose note, non ancora fatte
-- Nessun test automatico su Windows/macOS reali (solo audit del codice) — non prioritario per questo rilascio
-- `pld watch` su singolo file non è stato validato su Android/Termux
-- Nessuna soglia di copertura test fissata (misurata, non ancora decisa)
-- `tests/test_cli_smoke.py` (incluso il wizard di `init`) scritto ma non eseguito nell'ambiente di sviluppo di questo repository (nessun accesso a `typer` lì) — verificato con cura contro l'API documentata, da confermare con un run reale
-- `pld.exe` compilato in CI ma con il bug entry_points appena descritto — il fix (import diretto dei builtin quando congelato) non è ancora stato verificato su una build Windows reale, solo simulato con `sys.frozen = True` in questo ambiente di sviluppo
-- `pld plugin install-deps` non funziona dentro `pld.exe` congelato (nessun vero interprete Python dietro `sys.executable` lì) — documentato come limite noto, non un bug da correggere
+### Known gaps, not yet done
+- No automated tests on real Windows/macOS (code audit only) — not a priority for this release
+- `pld watch` on a single file hasn't been validated on Android/Termux
+- No test coverage threshold set (measured, not yet decided)
+- `tests/test_cli_smoke.py` (including the `init` wizard) written but not run in this repository's development environment (no access to `typer` there) — carefully verified against the documented API, to be confirmed with a real run
+- `pld.exe` built in CI but with the entry_points bug just described — the fix (direct import of builtins when frozen) hasn't been verified on a real Windows build yet, only simulated with `sys.frozen = True` in this development environment
+- `pld plugin install-deps` doesn't work inside a frozen `pld.exe` (no real Python interpreter behind `sys.executable` there) — documented as a known limitation, not a bug to fix

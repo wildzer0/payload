@@ -52,7 +52,7 @@ def test_write_global_config_preserves_plugin_and_pipeline_sections(tmp_path):
 def test_write_global_config_rejects_unknown_field_without_writing(tmp_path):
     path = tmp_path / "table-tool.toml"
     with pytest.raises(InvalidConfigError):
-        write_global_config(tmp_path, {**_defaults(), "campo_inventato": 1}, _toolchain())
+        write_global_config(tmp_path, {**_defaults(), "made_up_field": 1}, _toolchain())
     assert not path.exists()
 
 
@@ -144,9 +144,9 @@ def test_write_sidecar_config_fully_empty_deletes_file(tmp_path):
 
 def test_write_sidecar_config_drops_none_toolchain_values(tmp_path):
     src = _source(tmp_path)
-    # riflette il form web: un campo con lo switch "sovrascrivi" attivo
-    # ma lasciato vuoto arriva come None, non deve rompere la
-    # validazione (deve essere trattato come "non impostato").
+    # reflects the web form: a field with the "override" switch on but
+    # left empty arrives as None, it must not break validation (it
+    # must be treated as "not set").
     write_sidecar_config(src, toolchain={"compiler": "clang", "objcopy": None})
 
     raw = read_raw_sidecar(src)
@@ -167,7 +167,7 @@ def test_write_sidecar_config_preserves_plugin_section(tmp_path):
 def test_write_sidecar_config_rejects_unknown_field(tmp_path):
     src = _source(tmp_path)
     with pytest.raises(InvalidConfigError):
-        write_sidecar_config(src, defaults={"campo_inventato": 1})
+        write_sidecar_config(src, defaults={"made_up_field": 1})
 
 
 def test_write_sidecar_config_rejects_invalid_byte_order(tmp_path):
@@ -181,7 +181,7 @@ def test_delete_sidecar_config(tmp_path):
     write_sidecar_config(src, defaults={"writer": "hex"})
 
     assert delete_sidecar_config(src) is True
-    assert delete_sidecar_config(src) is False  # idempotente
+    assert delete_sidecar_config(src) is False  # idempotent
 
 
 # --- config_schema -----------------------------------------------------

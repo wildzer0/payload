@@ -1,85 +1,86 @@
-# Scrivere un plugin per payload
+# Writing a plugin for payload
 
-Questa guida risponde alla domanda che chiunque si pone la prima volta:
-**cosa deve fare esattamente un reader? cosa riceve un writer? conoscono
-entrambi la stessa cosa?**
+This guide answers the question everyone asks the first time:
+**what exactly must a reader do? what does a writer receive? do they
+both know the same thing?**
 
-## Il contratto in una riga
+## The contract in one line
 
 ```
-sorgente (qualsiasi formato) → Reader.parse() → TableIR → Writer.emit() → file di output
+source (any format) → Reader.parse() → TableIR → Writer.emit() → output file
 ```
 
-**Sì, sia il reader che il writer conoscono `TableIR`.** È l'unico oggetto
-che li mette in comunicazione. Il reader non sa nulla del formato di
-output finale; il writer non sa nulla (e non deve sapere nulla) di come
-i dati sono stati letti. Questo disaccoppiamento è tutto il punto del
-sistema a plugin: un reader nuovo funziona automaticamente con ogni
-writer esistente, e viceversa.
+**Yes, both the reader and the writer know `TableIR`.** It's the only
+object that puts them in communication. The reader knows nothing about
+the final output format; the writer knows nothing (and shouldn't know
+anything) about how the data was read. This decoupling is the whole
+point of the plugin system: a new reader automatically works with
+every existing writer, and vice versa.
 
-`TableIR` è definita in `payload/core/ir.py`:
+`TableIR` is defined in `payload/core/ir.py`:
 
 ```python
 @dataclass
 class TableIR:
-    name: str                      # nome tabella (es. dal filename)
-    data: bytes                    # payload raw — QUESTO è il contenuto vero della tabella
-    source_path: Path              # file di origine, per cache/debug/errori
-    source_format: str             # nome del reader che l'ha prodotta
+    name: str                      # table name (e.g. from the filename)
+    data: bytes                    # raw payload — THIS is the table's real content
+    source_path: Path              # origin file, for cache/debug/errors
+    source_format: str             # name of the reader that produced it
 
-    comments: list[tuple[int, str]] = field(default_factory=list)  # (offset, testo) — solo per 'pld view'
-    extra: dict = field(default_factory=dict)  # estensioni future, vuoto per ora
+    comments: list[tuple[int, str]] = field(default_factory=list)  # (offset, text) — 'pld view' only
+    extra: dict = field(default_factory=dict)  # future extensions, empty for now
 ```
 
-| Campo | Obbligatorio | A cosa serve |
+| Field | Required | What it's for |
 |---|---|---|
-| `name` | sì | nome del file di output (`{name}{writer.extension}`) |
-| `data` | sì | **è il contenuto che ogni writer serializza** — il cuore della IR |
-| `source_path` | sì | usato per messaggi di errore e come parte della cache key |
-| `source_format` | sì | usato nella cache key (reader diverso → cache invalidata) |
-| `byte_order` | no (default `"little"`) | ordine in cui `data` è già impacchettata — vedi sezione dedicata sotto |
-| `comments` | no | solo `pld view` li mostra; un writer può ignorarli tranquillamente |
-| `extra` | no | valvola di sfogo per metadati futuri; convenzione `extra["fields"]` per l'endianness (sotto) |
+| `name` | yes | output file name (`{name}{writer.extension}`) |
+| `data` | yes | **the content every writer serializes** — the heart of the IR |
+| `source_path` | yes | used for error messages and as part of the cache key |
+| `source_format` | yes | used in the cache key (different reader → cache invalidated) |
+| `byte_order` | no (default `"little"`) | order `data` is already packed in — see the dedicated section below |
+| `comments` | no | only `pld view` shows them; a writer can safely ignore them |
+| `extra` | no | escape hatch for future metadata; `extra["fields"]` convention for endianness (below) |
 
 ---
 
-## Cosa deve fare un Reader
+## What a Reader must do
 
-Un reader **legge un file e ritorna un `TableIR`**. Tutto qui. Non decide
-il formato di output, non scrive nulla su disco.
+A reader **reads a file and returns a `TableIR`**. That's it. It
+doesn't decide the output format, it doesn't write anything to disk.
 
-Interfaccia richiesta (da `payload/core/plugin_base.py`):
+Required interface (from `payload/core/plugin_base.py`):
 
 ```python
 class Reader(Protocol):
-    name: str              # identificatore univoco, usato con --from
-    extensions: list[str]  # es. [".csv"] — per l'auto-detect
-    api_version: str       # = PLUGIN_API_VERSION (da payload.core.ir)
+    name: str              # unique identifier, used with --from
+    extensions: list[str]  # e.g. [".csv"] — for auto-detection
+    api_version: str       # = PLUGIN_API_VERSION (from payload.core.ir)
 
     def sniff(self, path: Path) -> bool:
-        """Fallback per ambiguità: più reader stessa estensione? Il core
-        chiama sniff() su ognuno e usa quello che risponde True. Se sei
-        un caso semplice, basta 'return False' — l'estensione da sola
-        già ti fa matchare quando non c'è ambiguità."""
+        """Fallback for ambiguity: several readers with the same
+        extension? The core calls sniff() on each and uses the one
+        that returns True. For a simple case, just 'return False' —
+        the extension alone is already enough to match you when
+        there's no ambiguity."""
         ...
 
     def parse(self, path: Path, config: dict) -> TableIR:
-        """L'unico metodo che conta davvero. Legge path, ritorna TableIR."""
+        """The only method that really matters. Reads path, returns TableIR."""
         ...
 ```
 
-**Cosa succede se il file è malformato?** Solleva `ReaderParseError`
-(da `payload.core.errors`), mai una `Exception` generica — è quello che
-garantisce un formato di errore coerente in CLI indipendentemente da chi
-ha scritto il plugin:
+**What happens if the file is malformed?** Raise `ReaderParseError`
+(from `payload.core.errors`), never a generic `Exception` — that's
+what guarantees a consistent error format in the CLI regardless of who
+wrote the plugin:
 
 ```python
 from payload.core.errors import ReaderParseError
 
-raise ReaderParseError(path, "riga 12: valore fuori range")
+raise ReaderParseError(path, "line 12: value out of range")
 ```
 
-### Esempio reale: `readers/csv_reader.py`
+### Real example: `readers/csv_reader.py`
 
 ```python
 class CsvReader:
@@ -88,8 +89,8 @@ class CsvReader:
     api_version = PLUGIN_API_VERSION
 
     def sniff(self, path: Path) -> bool:
-        # usato solo se un'altra estensione .csv fosse rivendicata da
-        # un altro reader — qui controlliamo che l'header contenga 'value'
+        # only used if another reader claimed the .csv extension too —
+        # here we check that the header contains 'value'
         head = path.read_text(errors="ignore").splitlines()[:1]
         return bool(head) and "value" in head[0].lower()
 
@@ -98,7 +99,7 @@ class CsvReader:
         comments = []
         with path.open(newline="") as f:
             for row_num, row in enumerate(csv.DictReader(f), start=2):
-                value = int(row["value"], 0)   # accetta '0x0A' o '10'
+                value = int(row["value"], 0)   # accepts '0x0A' or '10'
                 data.append(value)
                 if row.get("comment"):
                     comments.append((len(data) - 1, row["comment"]))
@@ -108,82 +109,81 @@ class CsvReader:
         )
 ```
 
-Formato CSV atteso da questo reader:
+CSV format this reader expects:
 ```csv
 value,comment
-0x0A,soglia min
+0x0A,min threshold
 0x1B,
-0x2C,soglia max
+0x2C,max threshold
 ```
 
-Guarda il file completo in `src/payload/readers/csv_reader.py` — gestisce
-anche una colonna `offset` opzionale per dati non contigui, ed è un buon
-punto di partenza da copiare per un reader nuovo.
+See the full file at `src/payload/readers/csv_reader.py` — it also
+handles an optional `offset` column for non-contiguous data, and is a
+good starting point to copy for a new reader.
 
-### Estensione opzionale: `parse_many` (tabelle batch)
+### Optional extension: `parse_many` (batch tables)
 
-Un reader può *in più* implementare `parse_many(self, paths: list[Path], config: dict) -> TableIR`
-per essere utilizzabile in una **tabella batch** — una tabella logica
-costruita da più file sorgente invece di uno solo (vedi
-[BATCH.md](BATCH.md) per il design completo). `parse()` resta
-obbligatorio e invariato; `parse_many` è rilevato via duck-typing
-(`getattr(reader, "parse_many", None)`), quindi un reader che non lo
-implementa continua a funzionare esattamente come oggi — semplicemente
-non è utilizzabile in `[[batch_table]]`.
+A reader can *additionally* implement `parse_many(self, paths: list[Path], config: dict) -> TableIR`
+to be usable in a **batch table** — a logical table built from several
+source files instead of one (see [BATCH.md](BATCH.md) for the full
+design). `parse()` stays mandatory and unchanged; `parse_many` is
+detected via duck-typing (`getattr(reader, "parse_many", None)`), so a
+reader that doesn't implement it keeps working exactly as it does
+today — it just isn't usable in a `[[batch_table]]`.
 
 ```python
 def parse_many(self, paths: list[Path], config: dict) -> TableIR:
-    """paths è già nell'ordine di concatenazione corretto (deciso dal
-    chiamante, non dal reader) — di solito basta riusare la stessa
-    logica di parse() per singolo file, iterando su paths."""
+    """paths is already in the correct concatenation order (decided by
+    the caller, not the reader) — usually it's enough to reuse the
+    same per-file logic as parse(), iterating over paths."""
     ...
 ```
 
-**Non fornire un fallback automatico che concatena `path.read_bytes()`
-alla cieca per i reader che non implementano `parse_many`**: è corretto
-solo per formati puramente riga-per-riga/byte-per-byte (es. `raw_text`,
-che infatti implementa `parse_many`), sbagliato per qualunque formato
-con un header o struttura non ripetibile (es. binari con lunghezza in
-testa) — un reader che non sa gestire il caso multi-file deve dirlo
-chiaramente (`ReaderBatchUnsupportedError`, sollevato automaticamente
-da `core/pipeline.py::build()`), non produrre un output silenziosamente
-sbagliato.
+**Don't provide an automatic fallback that blindly concatenates
+`path.read_bytes()` for readers that don't implement `parse_many`**:
+that's only correct for purely line-by-line/byte-by-byte formats (e.g.
+`raw_text`, which does implement `parse_many`), wrong for any format
+with a header or non-repeatable structure (e.g. binaries with a length
+prefix) — a reader that can't handle the multi-file case should say so
+clearly (`ReaderBatchUnsupportedError`, raised automatically by
+`core/pipeline.py::build()`), not silently produce wrong output.
 
 ---
 
-## Cosa deve fare un Writer
+## What a Writer must do
 
-Un writer **riceve un `TableIR` già pronto e lo serializza su disco**.
-Non fa parsing, non sa da dove vengono i dati — riceve `ir.data` (bytes)
-e basta, indipendentemente dal fatto che la fonte fosse CSV, `.c`, o
-qualsiasi altro formato futuro.
+A writer **receives an already-ready `TableIR` and serializes it to
+disk**. It doesn't parse, it doesn't know where the data came from —
+it receives `ir.data` (bytes) and that's it, regardless of whether the
+source was CSV, `.c`, or any other future format.
 
 ```python
 class Writer(Protocol):
-    name: str          # identificatore, usato con --to
-    extension: str      # es. ".hex" — determina il nome del file di output
+    name: str          # identifier, used with --to
+    extension: str      # e.g. ".hex" — determines the output file's name
     api_version: str
 
     def emit(self, ir: TableIR, out_path: Path, config: dict) -> Path:
-        """Scrive out_path a partire da ir, ritorna il path scritto
-        (di solito semplicemente out_path stesso)."""
+        """Writes out_path from ir, returns the path written
+        (usually just out_path itself)."""
         ...
 ```
 
-Se il writer non riesce a produrre output valido (es. dati troppo grandi
-per il formato), solleva `WriterEmitError`:
+If the writer can't produce valid output (e.g. data too large for the
+format), it raises `WriterEmitError`:
 
 ```python
 from payload.core.errors import WriterEmitError
 
-raise WriterEmitError(self.name, "tabella troppo grande per questo formato")
+raise WriterEmitError(self.name, "table too large for this format")
 ```
 
-### Esempio reale: `writers/hex_writer.py`
+### Real example: `writers/hex_writer.py`
 
-Un writer minimale (`bin_writer.py`) fa solo `out_path.write_bytes(ir.data)`.
-Un esempio più interessante è `hex_writer.py`, che **trasforma** i bytes
-in formato Intel HEX (usato per flashare firmware/dati su microcontrollori):
+A minimal writer (`bin_writer.py`) just does `out_path.write_bytes(ir.data)`.
+A more interesting example is `hex_writer.py`, which **transforms**
+the bytes into Intel HEX format (used to flash firmware/data onto
+microcontrollers):
 
 ```python
 class HexWriter:
@@ -193,68 +193,68 @@ class HexWriter:
 
     def emit(self, ir: TableIR, out_path: Path, config: dict) -> Path:
         if len(ir.data) > 0xFFFF:
-            raise WriterEmitError(self.name, "tabella troppo grande (>64KB)")
+            raise WriterEmitError(self.name, "table too large (>64KB)")
 
         lines = []
         for offset in range(0, len(ir.data), 16):
             chunk = ir.data[offset:offset + 16]
-            lines.append(_data_record(offset, chunk))  # vedi file completo
+            lines.append(_data_record(offset, chunk))  # see the full file
         lines.append(_eof_record())
 
         out_path.write_text("\n".join(lines) + "\n")
         return out_path
 ```
 
-Punto chiave da notare: **questo writer non ha idea se `ir` è arrivata da
-un CSV, da `raw_text`, o da un futuro reader `.c`** — riceve solo bytes.
-È esattamente questo disaccoppiamento che rende N reader × M writer
-implementabili con N+M plugin, non N×M.
+Key point to notice: **this writer has no idea whether `ir` came from
+a CSV, from `raw_text`, or from a future `.c` reader** — it only
+receives bytes. It's exactly this decoupling that makes N readers × M
+writers implementable with N+M plugins, not N×M.
 
 ---
 
-## Cosa deve fare un Doctor Check
+## What a Doctor Check must do
 
-Un doctor check **verifica una precondizione dell'ambiente/progetto e
-ritorna un giudizio**, non partecipa alla pipeline build reader→writer.
-È il terzo tipo di plugin (oltre a reader/writer) ed è quello che
-alimenta `pld doctor` / `GET /api/doctor` — pensato per cose come "il
-compilatore è nel PATH?", "la config è valida?", "i nomi tabella sono
-univoci?" (i check builtin in `payload/core/doctor.py` sono un buon
-riferimento concreto).
+A doctor check **verifies a precondition of the environment/project
+and returns a verdict**, it doesn't take part in the reader→writer
+build pipeline. It's the third plugin type (besides reader/writer) and
+is what powers `pld doctor` / `GET /api/doctor` — meant for things
+like "is the compiler in the PATH?", "is the config valid?", "are the
+table names unique?" (the builtin checks in `payload/core/doctor.py`
+are a good concrete reference).
 
-Interfaccia richiesta (da `payload/core/plugin_base.py`):
+Required interface (from `payload/core/plugin_base.py`):
 
 ```python
 class DoctorCheck(Protocol):
-    name: str          # identificatore univoco, mostrato accanto al risultato
+    name: str          # unique identifier, shown next to the result
     api_version: str
 
     def run(self, config: dict) -> CheckResult:
-        """Esegue la verifica, ritorna SEMPRE un CheckResult — mai
-        un'eccezione per un esito negativo, quella è riservata a un
-        errore inatteso del check stesso (vedi sotto)."""
+        """Runs the check, ALWAYS returns a CheckResult — never an
+        exception for a negative outcome, that's reserved for an
+        unexpected error in the check itself (see below)."""
         ...
 ```
 
-`CheckResult` (da `payload.core.plugin_base`):
+`CheckResult` (from `payload.core.plugin_base`):
 
 ```python
 CheckResult(name: str, status: str, message: str, hint: str | None = None)
 ```
 
-`status` è una delle tre costanti di `CheckStatus`:
+`status` is one of the three `CheckStatus` constants:
 
-| Status | Significato | Effetto su `pld doctor` |
+| Status | Meaning | Effect on `pld doctor` |
 |---|---|---|
-| `CheckStatus.OK` | tutto a posto | nessuno |
-| `CheckStatus.WARN` | problema non bloccante, l'utente dovrebbe saperlo | non fa fallire il comando (exit code resta 0) |
-| `CheckStatus.FAIL` | problema che probabilmente rompe una build | fa fallire il comando (exit code 1) |
+| `CheckStatus.OK` | everything fine | none |
+| `CheckStatus.WARN` | non-blocking issue, the user should know about it | doesn't fail the command (exit code stays 0) |
+| `CheckStatus.FAIL` | issue that will likely break a build | fails the command (exit code 1) |
 
-`hint` è facoltativo, mostrato solo se lo status non è `OK` — usalo per
-dire **come risolvere**, non solo cosa è andato storto (es. "installa X"
-invece di solo "X non trovato").
+`hint` is optional, shown only if the status isn't `OK` — use it to
+say **how to fix it**, not just what went wrong (e.g. "install X"
+instead of just "X not found").
 
-### Esempio reale: `ToolchainCheck`
+### Real example: `ToolchainCheck`
 
 ```python
 class ToolchainCheck:
@@ -264,62 +264,62 @@ class ToolchainCheck:
     def run(self, config: dict) -> CheckResult:
         cmd = config.get("toolchain", {}).get("compiler")
         if not cmd:
-            return CheckResult(self.name, CheckStatus.WARN, "'compiler' non configurato")
+            return CheckResult(self.name, CheckStatus.WARN, "'compiler' not configured")
         if not shutil.which(cmd):
             return CheckResult(
-                self.name, CheckStatus.FAIL, f"'{cmd}' non trovato nel PATH",
-                hint=f"Installa {cmd} o aggiorna 'compiler' in table-tool.toml",
+                self.name, CheckStatus.FAIL, f"'{cmd}' not found in PATH",
+                hint=f"Install {cmd} or update 'compiler' in table-tool.toml",
             )
-        return CheckResult(self.name, CheckStatus.OK, f"{cmd} trovato")
+        return CheckResult(self.name, CheckStatus.OK, f"{cmd} found")
 ```
 
-### Cosa riceve `config`
+### What `config` contains
 
-Lo stesso dict "risolto" (defaults + toolchain già mergiati secondo la
-priorità CLI > sidecar > config globale > default) che riceverebbero
-`parse()`/`emit()`, con in più una chiave che i doctor check usano
-spesso e reader/writer no: **`config["_project_root"]`** (stringa) —
-la cartella del progetto, **da usare sempre al posto della cwd del
-processo** per risolvere path relativi. `pld serve` può girare da una
-cartella diversa dal progetto che sta servendo: un check che scrive/
-legge rispetto alla cwd invece che a `_project_root` inquina la
-cartella sbagliata (vedi `DirWritableCheck`/`CacheIntegrityCheck` per
-l'idioma corretto: `Path(config.get("_project_root", "."))`).
+The same "resolved" dict (defaults + toolchain already merged
+following the CLI > sidecar > global config > default priority) that
+`parse()`/`emit()` would receive, plus one key doctor checks often use
+that reader/writer usually don't: **`config["_project_root"]`**
+(string) — the project folder, **always use it instead of the
+process's cwd** to resolve relative paths. `pld serve` can run from a
+folder different from the project it's serving: a check that reads/
+writes relative to the cwd instead of `_project_root` pollutes the
+wrong folder (see `DirWritableCheck`/`CacheIntegrityCheck` for the
+correct idiom: `Path(config.get("_project_root", "."))`).
 
-### Un check non deve mai far esplodere `pld doctor`
+### A check must never make `pld doctor` blow up
 
-`run()` gira insieme a tutti gli altri check, builtin e di terze parti:
-se il TUO check solleva un'eccezione grezza (non un `CheckResult` con
-status `FAIL`), il core la intercetta e la converte automaticamente in
-un `CheckResult` di tipo `FAIL` con il messaggio dell'eccezione — non
-crasha più l'intero comando/pagina Doctor, ma **è comunque un
-comportamento degradato**: il messaggio che l'utente vede ("il check ha
-sollevato un errore inatteso...") è molto meno chiaro di un `FAIL`
-scritto apposta da te. Quindi: per un esito negativo *previsto*
-(binario mancante, file malformato, ecc.) ritorna sempre un
-`CheckResult(..., CheckStatus.FAIL, "spiegazione chiara", hint="...")`
-esplicito — riserva le eccezioni ai bug veri nel tuo check.
+`run()` runs alongside every other check, builtin and third-party: if
+YOUR check raises a raw exception (not a `CheckResult` with `FAIL`
+status), the core catches it and automatically converts it into a
+`FAIL`-status `CheckResult` with the exception's message — it no
+longer crashes the whole command/Doctor page, but **it's still
+degraded behavior**: the message the user sees ("the check raised an
+unexpected error...") is much less clear than a `FAIL` you wrote on
+purpose. So: for an *expected* negative outcome (missing binary,
+malformed file, etc.) always return an explicit
+`CheckResult(..., CheckStatus.FAIL, "clear explanation", hint="...")`
+— reserve exceptions for real bugs in your check.
 
-Questo è anche il motivo per cui lo scaffold generato da
-`pld plugin new-local <nome> --kind doctor-check` (un file con
-`raise NotImplementedError("TODO: implementa il check")` al posto di un
-`run()` vero) **non rompe più `pld doctor`** se lo apri prima di
-finirlo: il check semplicemente compare come `FAIL` con quel messaggio,
-invece di far fallire l'intero comando con un traceback. `pld doctor`
-include anche un check dedicato (`local_plugin_stubs`, non bloccante)
-che scansiona tutti i plugin locali del progetto (reader/writer/doctor
-check, non solo doctor check) e segnala quelli il cui `parse`/`emit`/
-`run` è ancora uno scaffold non implementato, così non serve eseguirli
-per scoprirlo — e la stessa informazione compare come badge "non
-implementato" nella pagina "Plugin" della web UI, accanto a ogni file
-in `local_plugins/`.
+This is also why the scaffold generated by
+`pld plugin new-local <name> --kind doctor-check` (a file with
+`raise NotImplementedError("TODO: implement the check")` instead of a
+real `run()`) **no longer breaks `pld doctor`** if you open it before
+finishing it: the check simply shows up as `FAIL` with that message,
+instead of failing the whole command with a traceback. `pld doctor`
+also includes a dedicated check (`local_plugin_stubs`, non-blocking)
+that scans every local plugin in the project (reader/writer/doctor
+check, not just doctor checks) and flags the ones whose `parse`/`emit`/
+`run` is still an unimplemented scaffold, so you don't have to run
+them to find out — and the same information shows up as a "not
+implemented" badge on the "Plugin" page of the web UI, next to every
+file in `local_plugins/`.
 
 ---
 
-## Come si registra un plugin
+## How a plugin gets registered
 
-Un plugin è scopribile dal core tramite un `entry_point` dichiarato nel
-`pyproject.toml` del pacchetto che lo contiene:
+A plugin is discoverable by the core through an `entry_point` declared
+in the `pyproject.toml` of the package that contains it:
 
 ```toml
 [project.entry-points."payload.readers"]
@@ -329,41 +329,41 @@ csv = "payload.readers.csv_reader:CsvReader"
 hex = "payload.writers.hex_writer:HexWriter"
 ```
 
-Gruppi disponibili: `payload.readers`, `payload.writers`,
-`payload.doctor_checks`. Il nome a sinistra (`csv`, `hex`) è quello che
-poi userai con `--from csv` / `--to hex`.
+Available groups: `payload.readers`, `payload.writers`,
+`payload.doctor_checks`. The name on the left (`csv`, `hex`) is what
+you'll then use with `--from csv` / `--to hex`.
 
-**Modo più veloce per partire**: `pld plugin new payload-reader-<nome> --kind reader`
-genera uno scaffold completo (pacchetto pip, `pyproject.toml` con
-l'entry_point già corretto, stub della classe, test) — vedi README.
+**Fastest way to get started**: `pld plugin new payload-reader-<name> --kind reader`
+generates a complete scaffold (pip package, `pyproject.toml` with the
+entry_point already correct, class stub, tests) — see the README.
 
 ---
 
-## Gestire l'endianness
+## Handling endianness
 
-**Il problema**: `TableIR.data` sono bytes già impacchettati. Se un
-reader legge `0x1234` come little-endian e scrive `34 12`, un writer che
-fa solo `out_path.write_bytes(ir.data)` non ha modo di sapere che quei
-due bytes rappresentano *un* valore a 16 bit che andrebbe riscritto
-`12 34` per un target big-endian — è cieco rispetto ai confini dei campi.
+**The problem**: `TableIR.data` is already-packed bytes. If a reader
+reads `0x1234` as little-endian and writes `34 12`, a writer that just
+does `out_path.write_bytes(ir.data)` has no way to know that those two
+bytes represent *one* 16-bit value that should be rewritten as
+`12 34` for a big-endian target — it's blind to field boundaries.
 
-**La soluzione**: un reader che lavora con valori multi-byte può (non
-deve) esporre anche i **valori strutturati**, non solo i bytes finali:
+**The solution**: a reader that works with multi-byte values can (not
+must) also expose the **structured values**, not just the final bytes:
 
 ```python
-ir.byte_order = "little"          # ordine in cui `data` è già impacchettata
+ir.byte_order = "little"          # order `data` is already packed in
 ir.extra["fields"] = [
     {"offset": 0, "width": 2, "value": 0x1234},
     {"offset": 2, "width": 4, "value": 0xDEADBEEF},
 ]
 ```
 
-Un writer interessato all'endianness legge `config["defaults"]["byte_order"]`
-(il target richiesto dall'utente/config) e, se diverso da `ir.byte_order`,
-usa `payload.core.byteorder.repack(ir.extra["fields"], target_order)` per
-ricostruire i bytes nell'ordine giusto — **senza dover reinterpretare
-byte grezzi alla cieca**, perché lavora sui valori originali, non sui
-bytes già impacchettati da qualcun altro.
+A writer interested in endianness reads `config["defaults"]["byte_order"]`
+(the target requested by the user/config) and, if it differs from
+`ir.byte_order`, uses `payload.core.byteorder.repack(ir.extra["fields"], target_order)`
+to rebuild the bytes in the right order — **without having to blindly
+reinterpret raw bytes**, because it works on the original values, not
+on bytes already packed by someone else.
 
 ```python
 from payload.core.byteorder import repack
@@ -374,88 +374,88 @@ class MyWriter:
         if target != ir.byte_order and ir.extra.get("fields"):
             out_path.write_bytes(repack(ir.extra["fields"], target))
         else:
-            out_path.write_bytes(ir.data)  # nessuna reinterpretazione possibile/necessaria
+            out_path.write_bytes(ir.data)  # no reinterpretation possible/needed
         return out_path
 ```
 
-**Sì, quindi, puoi avere un reader che legge little-endian e un writer
-che scrive big-endian** — a patto che il reader popoli `extra["fields"]`.
-Se non lo fa (es. `raw_text.py`, che lavora solo con singoli byte, dove
-l'ordine non ha senso), il writer non può fare nulla di intelligente:
-il comportamento corretto è **avvisare e passare i bytes così come
-sono**, mai tentare uno swap alla cieca che potrebbe corrompere dati.
-`bin_writer.py` implementa esattamente questo fallback — guardalo come
-riferimento.
+**So yes, you can have a reader that reads little-endian and a writer
+that writes big-endian** — as long as the reader populates
+`extra["fields"]`. If it doesn't (e.g. `raw_text.py`, which only works
+with single bytes, where order doesn't matter), the writer can't do
+anything smart: the correct behavior is to **warn and pass the bytes
+through as-is**, never attempt a blind swap that could corrupt data.
+`bin_writer.py` implements exactly this fallback — look at it as a
+reference.
 
-`config["defaults"]["byte_order"]` è configurabile in `table-tool.toml`
-o per singola tabella nel sidecar (vedi [USAGE.md](USAGE.md)); un reader
-dovrebbe sempre impacchettare `data` rispettando quel valore (non un
-ordine hardcoded) — `csv_reader.py` fa così.
+`config["defaults"]["byte_order"]` is configurable in `table-tool.toml`
+or per-table in the sidecar (see [USAGE.md](USAGE.md)); a reader
+should always pack `data` honoring that value (not a hardcoded order)
+— `csv_reader.py` does exactly that.
 
 ---
 
-## Legare reader e writer: default e compatibilità
+## Linking reader and writer: defaults and compatibility
 
-Per default, **qualsiasi reader funziona con qualsiasi writer** — è il
-punto del disaccoppiamento N reader × M writer. Ma questo crea due
-problemi pratici:
+By default, **any reader works with any writer** — that's the whole
+point of the N readers × M writers decoupling. But this creates two
+practical problems:
 
-1. Devi sempre specificare `--to` esplicitamente, anche quando per quel
-   formato di input c'è un output ovviamente naturale.
-2. Se scegli (per errore) un writer pensato per un formato diverso,
-   niente ti avvisa — ottieni un output "valido" ma sbagliato in silenzio.
+1. You always have to specify `--to` explicitly, even when there's an
+   obviously natural output for that input format.
+2. If you pick (by mistake) a writer meant for a different format,
+   nothing warns you — you get "valid" but silently wrong output.
 
-Due attributi opzionali risolvono questo:
+Two optional attributes solve this:
 
-**`Reader.default_writer`** — suggerisce il writer da usare quando né
-`--to` né `defaults.writer` in config specificano nulla:
+**`Reader.default_writer`** — suggests the writer to use when neither
+`--to` nor `defaults.writer` in config specify anything:
 
 ```python
 class RawTextReader:
     name = "raw_text"
-    default_writer = "bin"  # formato dati grezzo -> dump binario, scelta naturale
+    default_writer = "bin"  # raw data format -> binary dump, the natural choice
 ```
 
-Ordine di risoluzione: `--to` esplicito → `defaults.writer` in config
-(solo se qualcuno l'ha impostato davvero — il default di progetto è
-`None`, non un valore a caso) → `reader.default_writer` → errore chiaro
-(`WriterNotSpecifiedError`) invece di un fallback indovinato.
+Resolution order: explicit `--to` → `defaults.writer` in config (only
+if someone actually set it — the project default is `None`, not an
+arbitrary value) → `reader.default_writer` → a clear error
+(`WriterNotSpecifiedError`) instead of a guessed fallback.
 
-**`Writer.compatible_readers`** — se impostato, il writer rifiuta
-qualsiasi reader non elencato, **prima di eseguire `parse()`** (nessun
-lavoro sprecato su una combinazione che fallirà comunque):
+**`Writer.compatible_readers`** — if set, the writer rejects any
+reader not listed, **before running `parse()`** (no wasted work on a
+combination that would fail anyway):
 
 ```python
 class MySpecificWriter:
     name = "my_format"
-    compatible_readers = ["my_specific_reader"]  # rifiuta tutti gli altri
+    compatible_readers = ["my_specific_reader"]  # rejects everything else
 ```
 
-`None` (il default se non lo dichiari) significa "compatibile con
-qualsiasi reader" — corretto per writer come `bin`/`hex` che serializzano
-bytes senza interpretarli, quindi non hanno motivo di essere restrittivi.
-Dichiaralo solo se il tuo writer **richiede** semantica specifica del
-reader (es. si aspetta sempre `extra["fields"]` popolato in un modo
-particolare).
+`None` (the default if you don't declare it) means "compatible with
+any reader" — correct for writers like `bin`/`hex` that serialize
+bytes without interpreting them, so they have no reason to be
+restrictive. Only declare it if your writer **requires** specific
+semantics from the reader (e.g. it always expects `extra["fields"]`
+populated in a particular way).
 
 ---
 
-## Passare informazioni extra a un plugin
+## Passing extra information to a plugin
 
-`config` (il dict che `parse()`/`emit()` ricevono) contiene solo
-`defaults`/`toolchain` per default — se il tuo plugin ha bisogno di
-qualcosa che il core non conosce (un delimitatore CSV, un indirizzo
-base, un flag specifico del tuo formato), hai **due canali**, per due
-scopi diversi:
+`config` (the dict `parse()`/`emit()` receive) only contains
+`defaults`/`toolchain` by default — if your plugin needs something the
+core doesn't know about (a CSV delimiter, a base address, a
+format-specific flag), you have **two channels**, for two different
+purposes:
 
-**1. `[plugin.<nome>]` — persistente, in `table-tool.toml`/sidecar**
+**1. `[plugin.<name>]` — persistent, in `table-tool.toml`/sidecar**
 
-Non validata dal core (a differenza di `defaults`/`toolchain`): è
-territorio del plugin, il core non può sapere quali chiavi siano
-legittime per un plugin di terze parti.
+Not validated by the core (unlike `defaults`/`toolchain`): it's plugin
+territory, the core has no way to know which keys are legitimate for a
+third-party plugin.
 
 ```toml
-# table-tool.toml, o <tabella>.config.toml per il sidecar
+# table-tool.toml, or <table>.config.toml for the sidecar
 [plugin.csv]
 delimiter = ";"
 ```
@@ -466,13 +466,13 @@ def parse(self, path: Path, config: dict) -> TableIR:
     ...
 ```
 
-**2. `--opt chiave=valore` — una tantum, solo per questa invocazione**
+**2. `--opt key=value` — one-off, only for this invocation**
 
-Non tocca nessun file, non persiste. Utile per un test rapido o uno
-script che vuole un override diverso ogni volta:
+Doesn't touch any file, doesn't persist. Useful for a quick test or a
+script that wants a different override every time:
 
 ```bash
-pld build sensori/temp.csv --to bin --opt delimiter=";"
+pld build sensors/temp.csv --to bin --opt delimiter=";"
 ```
 
 ```python
@@ -481,41 +481,42 @@ def parse(self, path: Path, config: dict) -> TableIR:
     ...
 ```
 
-**`--opt` vince su `[plugin.*]`**, che vince sul default del plugin
-stesso — stesso principio di priorità già usato altrove (CLI > config >
-default). Entrambi i canali entrano nella cache key: cambiare un
-`--opt` o un valore in `[plugin.*]` invalida correttamente la cache,
-non serve `--force`.
+**`--opt` wins over `[plugin.*]`**, which wins over the plugin's own
+default — same priority principle already used elsewhere (CLI >
+config > default). Both channels go into the cache key: changing a
+`--opt` or a value in `[plugin.*]` correctly invalidates the cache,
+you don't need `--force`.
 
 ---
 
-## Plugin locali, senza `pip install`
+## Local plugins, without `pip install`
 
-Un plugin "vero" (pensato per essere riusato su più progetti,
-distribuito, versionato) va impacchettato con `pld plugin new` +
-`pip install -e .` — è quello che ti dà `entry_points`, versioning
-indipendente, installabilità via indice pip interno.
+A "real" plugin (meant to be reused across several projects,
+distributed, versioned) should be packaged with `pld plugin new` +
+`pip install -e .` — that's what gives you `entry_points`, independent
+versioning, installability via an internal pip index.
 
-Per un esperimento rapido o un formato specifico di **un solo
-progetto**, questa cerimonia può essere eccessiva. `payload` scopre
-anche plugin come **singoli file `.py`**, senza nessuna installazione:
+For a quick experiment or a format specific to **a single project**,
+that ceremony can be overkill. `payload` also discovers plugins as
+**single `.py` files**, with no installation at all:
 
-**Dove metterli** — due modi, anche insieme:
-1. Cartella `local_plugins/` accanto a `table-tool.toml` — scoperta
-   automaticamente.
-2. Variabile d'ambiente `PAYLOAD_PLUGIN_PATH` (lista di cartelle
-   separate da `:` su Unix, `;` su Windows) — utile per condividere
-   plugin tra più progetti senza pubblicarli come pacchetto.
+**Where to put them** — two ways, can be combined:
+1. A `local_plugins/` folder next to `table-tool.toml` — discovered
+   automatically.
+2. The `PAYLOAD_PLUGIN_PATH` environment variable (list of folders
+   separated by `:` on Unix, `;` on Windows) — useful for sharing
+   plugins across several projects without publishing them as a
+   package.
 
-**Convenzione nel file**: esponi la classe come variabile a livello di
-modulo, `READER`/`WRITER`/`DOCTOR_CHECK` per un plugin singolo, o
-`READERS`/`WRITERS`/`DOCTOR_CHECKS` (liste) per più plugin nello stesso
-file:
+**Convention in the file**: expose the class as a module-level
+variable, `READER`/`WRITER`/`DOCTOR_CHECK` for a single plugin, or
+`READERS`/`WRITERS`/`DOCTOR_CHECKS` (lists) for several plugins in the
+same file:
 
 ```python
 # local_plugins/my_writer.py
 class UpperWriter:
-    """Converte i dati in maiuscolo prima di scriverli (esempio)."""
+    """Converts the data to uppercase before writing it (example)."""
     name = "upper"
     extension = ".upper"
     api_version = "1.0"
@@ -524,18 +525,18 @@ class UpperWriter:
         out_path.write_bytes(ir.data.upper())
         return out_path
 
-WRITER = UpperWriter  # <- questa riga è quello che lo rende scopribile
+WRITER = UpperWriter  # <- this line is what makes it discoverable
 ```
 
-Da quel momento `pld build tabella.raw --to upper` funziona, senza
-nessun `pip install`. File che iniziano con `_` sono ignorati (utile
-per moduli helper condivisi tra più plugin locali che non sono loro
-stessi un plugin).
+From that point on `pld build table.raw --to upper` works, with no
+`pip install`. Files starting with `_` are ignored (useful for helper
+modules shared between several local plugins that aren't themselves a
+plugin).
 
-### Se il plugin ha bisogno di librerie terze
+### If the plugin needs third-party libraries
 
-Un plugin locale può dichiarare le proprie dipendenze con `REQUIRES` a
-livello di modulo:
+A local plugin can declare its own dependencies with a module-level
+`REQUIRES`:
 
 ```python
 # local_plugins/my_writer.py
@@ -545,99 +546,99 @@ class MyWriter:
     ...
 ```
 
-Verificato **prima** di tentare il caricamento del modulo (lettura
-statica del sorgente via `ast`, senza eseguirlo) — così, anche se il
-modulo fallirebbe con un `ModuleNotFoundError` poco chiaro perché
-`numpy` non è installato, l'errore che vedi dice esattamente quale
-dipendenza manca, invece di un traceback generico:
+Checked **before** attempting to load the module (a static read of the
+source via `ast`, without executing it) — so even though the module
+would fail with an unclear `ModuleNotFoundError` because `numpy` isn't
+installed, the error you see says exactly which dependency is missing,
+instead of a generic traceback:
 
 ```bash
 pld plugin install-deps local_plugins/my_writer.py
 ```
 
-installa con `pip`, nell'ambiente corrente, tutto quello che `REQUIRES`
-dichiara e che non è già presente. `pld doctor` include anche un check
-(`local_plugin_deps`, non bloccante) che scansiona tutti i plugin
-locali del progetto e segnala quelli con dipendenze mancanti, senza che
-tu debba controllarli uno per uno.
+installs, with `pip`, into the current environment, everything
+`REQUIRES` declares that isn't already present. `pld doctor` also
+includes a check (`local_plugin_deps`, non-blocking) that scans every
+local plugin in the project and flags the ones with missing
+dependencies, without you having to check them one by one.
 
-**Limite onesto**: il controllo verifica solo "il pacchetto è
-importabile sì/no" — non è una vera risoluzione delle dipendenze
-(non controlla che la versione installata soddisfi `>=1.20`, per
-esempio). Per quello serve comunque un vero ambiente gestito da pip con
-`requirements.txt`/pinning versioni, se il tuo progetto ne ha bisogno
-sul serio — `REQUIRES` è pensato per "manca completamente" molto più
-che per "è la versione sbagliata".
+**Honest limitation**: the check only verifies "is the package
+importable, yes or no" — it's not real dependency resolution (it
+doesn't check that the installed version satisfies `>=1.20`, for
+example). For that you still need a real pip-managed environment with
+a `requirements.txt`/version pinning, if your project genuinely needs
+it — `REQUIRES` is meant for "completely missing" much more than for
+"wrong version".
 
-**Limiti da tenere a mente**: nessun versioning indipendente del
-plugin stesso, nessuna distribuzione facile ad altri team (per quello
-resta meglio un vero pacchetto pip). Per tutto il resto — errori
+**Limits to keep in mind**: no independent versioning for the plugin
+itself, no easy distribution to other teams (a real pip package is
+still better for that). For everything else — errors
 (`ReaderParseError`/`WriterEmitError`), `default_writer`/`compatible_readers`,
-conformità (`pld plugin validate`) — funziona esattamente come un
-plugin installato via pip.
+conformance (`pld plugin validate`) — it works exactly like a plugin
+installed via pip.
 
 ---
 
-## Come sono organizzate le tabelle nelle directory
+## How tables are organized across directories
 
-**Nessuna struttura imposta.** Una tabella è un file sorgente; puoi
-averne quante vuoi nella stessa cartella, e la gerarchia di cartelle è
-libera — `pld build-all` scopre ricorsivamente tutti i sorgenti sotto la
-root, a qualunque profondità.
+**No structure is imposed.** A table is a source file; you can have as
+many as you want in the same folder, and the folder hierarchy is free
+— `pld build-all` recursively discovers every source under the root,
+at any depth.
 
 ```
-progetto/
+project/
 ├── table-tool.toml
-├── sensori/
+├── sensors/
 │   ├── temp_table.raw
-│   ├── temp_table.config.toml   # sidecar, stesso nome, stessa cartella
+│   ├── temp_table.config.toml   # sidecar, same name, same folder
 │   └── pressure_table.csv
-└── attuatori/
+└── actuators/
     └── output_table.raw
 ```
 
-**Unico vincolo reale**: il **nome tabella** (il filename senza
-estensione) deve essere **unico in tutto il progetto**, non solo nella
-stessa cartella. Il nome è l'identità usata ovunque — file di output in
-`build/`, snapshot e riferimento golden in `.payload_history/` — tutti
-indicizzati per nome, non per percorso completo. Due file con lo
-stesso stem in cartelle diverse (`sensori/temp.raw` e `attuatori/temp.raw`)
-collidono silenziosamente su questi fronti. `pld build-all` e `pld
-doctor` rilevano questa collisione e la segnalano con
-`DuplicateTableNameError` invece di lasciarti scoprire una sovrascrittura
-a sorpresa.
+**The one real constraint**: the **table name** (the filename without
+its extension) must be **unique across the whole project**, not just
+within the same folder. The name is the identity used everywhere —
+output files in `build/`, snapshots and the golden reference in
+`.payload_history/` — all indexed by name, not by full path. Two files
+with the same stem in different folders (`sensors/temp.raw` and
+`actuators/temp.raw`) silently collide on these fronts. `pld build-all`
+and `pld doctor` detect this collision and flag it with
+`DuplicateTableNameError` instead of letting you discover an overwrite
+by surprise.
 
 ---
 
-## Checklist prima di considerare un plugin pronto
+## Checklist before considering a plugin ready
 
-- [ ] `name`, `api_version` presenti (per reader anche `extensions`, per writer `extension`)
-- [ ] `api_version = PLUGIN_API_VERSION` importato da `payload.core.ir` (non una stringa hardcoded)
-- [ ] **Docstring sulla CLASSE** (non solo sul modulo) che spiega il formato con un esempio concreto — è quello che `pld plugin info <nome>` mostra a chi installa il tuo plugin senza leggere il codice
-- [ ] Errori sollevati come `ReaderParseError`/`WriterEmitError`, mai `Exception` generica
-- [ ] `sniff()` implementato solo se serve davvero disambiguare (altrimenti `return False` va bene)
-- [ ] Nessuna dipendenza dal formato di provenienza/destinazione dell'altro lato della pipeline
-- [ ] Entry point dichiarato nel gruppo giusto (`payload.readers` / `payload.writers`)
-- [ ] `pld plugins` mostra il plugin dopo `pip install -e .`
+- [ ] `name`, `api_version` present (for a reader also `extensions`, for a writer `extension`)
+- [ ] `api_version = PLUGIN_API_VERSION` imported from `payload.core.ir` (not a hardcoded string)
+- [ ] **Docstring on the CLASS** (not just the module) explaining the format with a concrete example — it's what `pld plugin info <name>` shows to anyone who installs your plugin without reading the code
+- [ ] Errors raised as `ReaderParseError`/`WriterEmitError`, never a generic `Exception`
+- [ ] `sniff()` implemented only if disambiguation is really needed (otherwise `return False` is fine)
+- [ ] No dependency on the format of the other side of the pipeline (where it came from / where it's going)
+- [ ] Entry point declared in the right group (`payload.readers` / `payload.writers`)
+- [ ] `pld plugins` shows the plugin after `pip install -e .`
 
 ---
 
-## Validare che il plugin rispetti davvero il contratto
+## Validating that the plugin really honors the contract
 
-"Scrivere dei test" da solo non garantisce che il plugin sia corretto — un
-test potrebbe non verificare nulla di significativo. `payload` fornisce
-invece una **suite di conformità** (`payload.testing`) che verifica
-comportamenti specifici del contratto Reader/Writer: tipo di ritorno
-corretto, errori sollevati come si deve, attributi richiesti presenti.
+Just "writing tests" on your own doesn't guarantee the plugin is
+correct — a test might not check anything meaningful. `payload`
+instead provides a **conformance suite** (`payload.testing`) that
+verifies specific behaviors of the Reader/Writer contract: correct
+return type, errors raised properly, required attributes present.
 
-Nel tuo plugin, in un test pytest:
+In your plugin, in a pytest test:
 
 ```python
 from payload.testing import assert_reader_conforms
 
 def test_my_reader_conforms(tmp_path):
     sample = tmp_path / "sample.myext"
-    sample.write_text("...")  # contenuto valido per il tuo formato
+    sample.write_text("...")  # valid content for your format
     assert_reader_conforms(MyReader(), sample)
 ```
 
@@ -653,24 +654,24 @@ def test_my_writer_conforms(tmp_path):
     assert_writer_conforms(MyWriter(), sample_ir, tmp_path)
 ```
 
-`pld plugin new` genera già questi test come stub commentati — basta
-scommentarli e adattare il sample.
+`pld plugin new` already generates these tests as commented-out stubs
+— just uncomment them and adapt the sample.
 
-**Anche senza pytest**, puoi validare un plugin già installato a runtime:
+**Even without pytest**, you can validate an already-installed plugin
+at runtime:
 
 ```bash
-pld plugin validate <nome> --sample percorso/file/esempio.ext
+pld plugin validate <name> --sample path/to/sample/file.ext
 ```
 
-Questo esegue la stessa suite senza bisogno della test suite del
-pacchetto — utile per verificare rapidamente un plugin di terze parti
-prima di fidarti, o in CI dopo l'installazione.
+This runs the same suite without needing the package's test suite —
+useful for quickly checking a third-party plugin before trusting it,
+or in CI right after installation.
 
-**Perché non è un requisito bloccante al caricamento**: quando un
-plugin è installato via `pip`, i suoi test di sviluppo non vengono
-distribuiti insieme al pacchetto — il core non ha modo di sapere a
-runtime se esistono, tanto meno se passano. `pld plugin validate` è
-pensato per essere eseguito esplicitamente (a mano o in CI), non come
-gate automatico al load — un gate automatico romperebbe silenziosamente
-il tool per chiunque installi un plugin di terze parti scritto prima
-che questa suite esistesse.
+**Why it's not a blocking requirement at load time**: when a plugin is
+installed via `pip`, its development tests aren't distributed together
+with the package — the core has no way to know at runtime whether they
+exist, let alone whether they pass. `pld plugin validate` is meant to
+be run explicitly (by hand or in CI), not as an automatic gate at load
+time — an automatic gate would silently break the tool for anyone
+installing a third-party plugin written before this suite existed.

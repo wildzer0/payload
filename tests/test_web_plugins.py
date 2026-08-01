@@ -32,9 +32,9 @@ def test_plugins_list(tmp_path):
 
 
 def test_plugins_list_marks_payload_own_plugins_as_builtin(tmp_path):
-    """raw_text/bin/... vengono con payload stesso — la webapp li mette
-    in secondo piano rispetto ai plugin scritti dall'utente, vedi
-    'builtin' nella risposta e _pluginColumnHtml() in app.js."""
+    """raw_text/bin/... ship with payload itself — the webapp puts
+    them below plugins the user wrote, see 'builtin' in the response
+    and _pluginColumnHtml() in app.js."""
     root = _init_project(tmp_path)
     client = _client(root)
 
@@ -73,10 +73,11 @@ def test_plugin_info_reader(tmp_path):
 
 
 def test_plugin_info_docstring_preserves_example_indentation(tmp_path):
-    """inspect.getdoc() invece del __doc__ grezzo: dedent PEP 257 sulle
-    righe di prosa, ma l'indentazione RELATIVA del blocco d'esempio
-    dentro la docstring resta intatta — è quella che il frontend usa
-    per distinguere prosa (paragrafi) da esempio (blocco preformattato)."""
+    """inspect.getdoc() instead of the raw __doc__: PEP 257 dedent on
+    the prose lines, but the RELATIVE indentation of the example block
+    inside the docstring stays intact — that's what the frontend uses
+    to distinguish prose (paragraphs) from example (preformatted
+    block)."""
     root = _init_project(tmp_path)
     client = _client(root)
 
@@ -84,15 +85,15 @@ def test_plugin_info_docstring_preserves_example_indentation(tmp_path):
 
     assert r.status_code == 200
     doc = r.json()["docstring"]
-    assert "\n    # commento di linea intera, ignorato" in doc
-    assert doc.startswith("Formato testuale minimale")
+    assert "\n    # whole-line comment, ignored" in doc
+    assert doc.startswith("Minimal text format")
 
 
 def test_plugin_info_unknown_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.get("/api/plugin/non_esiste")
+    r = client.get("/api/plugin/does_not_exist")
 
     assert r.status_code == 404
 
@@ -122,10 +123,10 @@ def test_plugin_validate_reader_with_sample(tmp_path):
 
 
 def test_plugin_validate_reader_sample_resolves_relative_to_root_not_cwd(tmp_path, monkeypatch):
-    """Regressione: un path 'sample' relativo va risolto rispetto alla
-    root del progetto servito, non alla cwd del processo server (stesso
-    bug corretto in core/doctor.py — 'pld serve' lanciato da una
-    cartella diversa dal progetto è un caso legittimo)."""
+    """Regression: a relative 'sample' path must be resolved against
+    the served project's root, not the server process's cwd (same bug
+    fixed in core/doctor.py — 'pld serve' launched from a folder other
+    than the project is a legitimate case)."""
     root = _init_project(tmp_path)
     (root / "sample.raw").write_text("0x0A\n")
     elsewhere = tmp_path / "elsewhere"
@@ -153,7 +154,7 @@ def test_plugin_validate_unknown_404(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.post("/api/plugin/validate", json={"name": "non_esiste"})
+    r = client.post("/api/plugin/validate", json={"name": "does_not_exist"})
 
     assert r.status_code == 404
 
@@ -192,12 +193,12 @@ def test_plugin_install_deps_noop_without_requires(tmp_path):
 def test_plugin_install_deps_pip_failure(tmp_path):
     root = _init_project(tmp_path)
     f = root / "p.py"
-    f.write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
+    f.write_text('REQUIRES = ["nonexistent_library_xyz_123"]\n')
     client = _client(root)
 
     with patch("payload.web.routes.plugins.subprocess.run") as mock_run:
         mock_run.return_value.returncode = 1
-        mock_run.return_value.stderr = "errore pip"
+        mock_run.return_value.stderr = "pip error"
         r = client.post("/api/plugin/install-deps", json={"file": str(f), "confirm": True})
 
     assert r.status_code == 422  # BuildError (ToolchainExecutionError) -> 422
@@ -218,7 +219,7 @@ def test_plugin_install_deps_noop_when_satisfied(tmp_path):
 def test_plugin_install_deps_requires_confirmation(tmp_path):
     root = _init_project(tmp_path)
     f = root / "p.py"
-    f.write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
+    f.write_text('REQUIRES = ["nonexistent_library_xyz_123"]\n')
     client = _client(root)
 
     r = client.post("/api/plugin/install-deps", json={"file": str(f)})
@@ -230,7 +231,7 @@ def test_plugin_install_deps_requires_confirmation(tmp_path):
 def test_plugin_install_deps_confirmed_calls_pip(tmp_path):
     root = _init_project(tmp_path)
     f = root / "p.py"
-    f.write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
+    f.write_text('REQUIRES = ["nonexistent_library_xyz_123"]\n')
     client = _client(root)
 
     with patch("payload.web.routes.plugins.subprocess.run") as mock_run:

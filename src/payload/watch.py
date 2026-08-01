@@ -1,16 +1,16 @@
 """
-'pld watch': rebuild automatico al salvataggio, con debounce.
+'pld watch': automatic rebuild on save, with debounce.
 
-Punti chiave (vedi discussione precedente):
-- Debounce: molti editor generano più eventi per un singolo salvataggio
-  (write + rename, file di backup temporaneo). Un timer per-file raggruppa
-  eventi ravvicinati prima di triggerare il build.
-- La output dir è sempre esclusa dal watch, per evitare loop
-  (build -> genera file -> trigger watch -> rebuild...).
-- Un errore di build in watch mode non killa il processo: si logga e si
-  continua a osservare, altrimenti l'esperienza iterativa si rompe.
-- Riusa build() e la cache esistente: se il contenuto non è davvero
-  cambiato (save senza modifiche), la cache fa comunque skip.
+Key points (see earlier discussion):
+- Debounce: many editors generate several events for a single save
+  (write + rename, temporary backup file). A per-file timer groups
+  events that happen close together before triggering a build.
+- The output dir is always excluded from the watch, to avoid loops
+  (build -> generates a file -> triggers watch -> rebuild...).
+- A build error in watch mode never kills the process: it's logged and
+  watching continues, otherwise the iterative experience would break.
+- Reuses build() and the existing cache: if the content hasn't really
+  changed (save without modifications), the cache still skips it.
 """
 from __future__ import annotations
 
@@ -29,8 +29,9 @@ DEFAULT_DEBOUNCE_SECONDS = 0.3
 
 
 class _DebouncedTableHandler(FileSystemEventHandler):
-    """Filtra eventi per estensioni note, esclude output_dir, e raggruppa
-    eventi ravvicinati sullo stesso file con un timer per-file."""
+    """Filters events by known extensions, excludes output_dir, and
+    groups events happening close together on the same file with a
+    per-file timer."""
 
     def __init__(
         self,
@@ -69,7 +70,7 @@ class _DebouncedTableHandler(FileSystemEventHandler):
     def _fire(self, path: Path) -> None:
         with self._lock:
             self._timers.pop(path, None)
-        if path.exists():  # potrebbe essere stato cancellato/rinominato nel frattempo
+        if path.exists():  # could have been deleted/renamed in the meantime
             self._on_change(path)
 
     def on_modified(self, event):
@@ -90,26 +91,26 @@ def watch(
     on_change: Callable[[Path], None],
     debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
 ) -> None:
-    """Blocca fino a Ctrl+C. on_change(path) viene invocato (in un thread
-    del timer di debounce) per ogni file cambiato che rispetta il filtro."""
+    """Blocks until Ctrl+C. on_change(path) is invoked (on a debounce
+    timer thread) for every changed file that passes the filter."""
 
     def _safe_on_change(path: Path) -> None:
         try:
             on_change(path)
         except Exception as e:
-            # un errore di build non deve mai killare il watch
-            logger.error("Errore durante il rebuild di %s: %s", path.name, e)
+            # a build error must never kill the watch
+            logger.error("Error while rebuilding %s: %s", path.name, e)
 
     handler = _DebouncedTableHandler(known_extensions, output_dir, _safe_on_change, debounce_seconds)
     observer = Observer()
     observer.schedule(handler, str(root), recursive=True)
     observer.start()
-    logger.info("Watch avviato su %s (Ctrl+C per uscire)", root)
+    logger.info("Watch started on %s (Ctrl+C to exit)", root)
     try:
         while True:
             time.sleep(0.5)
     except KeyboardInterrupt:
-        logger.info("Watch interrotto")
+        logger.info("Watch interrupted")
     finally:
         observer.stop()
         observer.join()

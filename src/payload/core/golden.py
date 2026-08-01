@@ -1,19 +1,19 @@
 """
-Golden: quale snapshot storico di una tabella è il riferimento di
-regressione "corretto". Non più un file frozen separato (vecchio
-golden/*.golden) ma un puntatore a uno snapshot già registrato in
-HistoryStore — ogni commit cattura già sorgente+output insieme,
-content-addressed e deduplicato, quindi "congelare" un golden è solo
-scegliere QUALE snapshot fidarsi, zero copie di file aggiuntive.
+Golden: which historical snapshot of a table is the "correct"
+regression reference. No longer a separate frozen file (the old
+golden/*.golden) but a pointer to a snapshot already recorded in
+HistoryStore — every commit already captures source+output together,
+content-addressed and deduplicated, so "freezing" a golden is just
+choosing WHICH snapshot to trust, zero extra file copies.
 
-Stato a 4 valori invece dei 3 di prima (match/mismatch/missing):
-- match: sorgente E output attuali coincidono con lo snapshot golden
-- mismatch: sorgente invariato, ma l'output attuale è diverso — una
-  vera regressione, il caso per cui golden esiste
-- stale: il SORGENTE è cambiato dopo lo snapshot golden — un mismatch
-  qui non significa ancora "regressione", solo "non ancora verificato
-  di nuovo" (prima non era distinguibile dal caso sopra)
-- missing: nessun golden impostato per questa tabella
+4-value status instead of the previous 3 (match/mismatch/missing):
+- match: current source AND output both match the golden snapshot
+- mismatch: source unchanged, but the current output differs — a real
+  regression, the case golden exists for
+- stale: the SOURCE changed after the golden snapshot — a mismatch
+  here doesn't yet mean "regression", just "not re-verified yet"
+  (previously indistinguishable from the case above)
+- missing: no golden set for this table
 """
 from __future__ import annotations
 
@@ -60,14 +60,14 @@ def check_golden(
 
 
 def set_golden(history: HistoryStore, table_name: str, snapshot_id: int | None = None) -> int:
-    """snapshot_id=None -> l'ultimo snapshot della tabella. Ritorna
-    l'id effettivamente impostato (utile quando None viene risolto)."""
+    """snapshot_id=None -> the table's latest snapshot. Returns the id
+    that was actually set (useful when None gets resolved)."""
     if snapshot_id is None:
         last = history.last_snapshot(table_name)
         if last is None:
-            raise SnapshotNotFoundError(table_name, reason="nessuno snapshot esistente, esegui prima 'pld commit'")
+            raise SnapshotNotFoundError(table_name, reason="no snapshot exists yet, run 'pld commit' first")
         snapshot_id = last.id
-    history.get_snapshot(table_name, snapshot_id)  # valida che esista, solleva se manca
+    history.get_snapshot(table_name, snapshot_id)  # validates it exists, raises if missing
     history.set_golden(table_name, snapshot_id)
     return snapshot_id
 
@@ -79,10 +79,10 @@ def clear_golden(history: HistoryStore, table_name: str) -> bool:
 def golden_diff(
     history: HistoryStore, table_name: str, output_paths: list[Path]
 ) -> dict[str, list[dict]]:
-    """{nome file: [chunk, ...]} per ogni output che differisce dal
-    golden — solo i file effettivamente diversi, un file identico non
-    compare nel risultato. Solleva GoldenMissingError se non c'è un
-    golden impostato (niente da cui calcolare un diff)."""
+    """{file name: [chunk, ...]} for every output that differs from
+    the golden — only files that are actually different, an identical
+    file doesn't show up in the result. Raises GoldenMissingError if
+    no golden is set (nothing to diff against)."""
     golden_id = history.golden_snapshot_id(table_name)
     if golden_id is None:
         raise GoldenMissingError(table_name)

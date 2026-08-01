@@ -8,7 +8,7 @@ from payload.core.history import HistoryStore
 def _commit(history, table, src, out, src_content, out_content):
     src.write_bytes(src_content)
     out.write_bytes(out_content)
-    return history.commit(table, [src], [out], f"snapshot con out={out_content!r}")
+    return history.commit(table, [src], [out], f"snapshot with out={out_content!r}")
 
 
 def test_check_golden_missing_when_never_set(tmp_path):
@@ -43,7 +43,7 @@ def test_check_golden_mismatch_source_unchanged_output_different(tmp_path):
     snap = _commit(history, "t", src, out, b"src1", b"out1")
     set_golden(history, "t", snap.id)
 
-    out.write_bytes(b"out-diverso")  # sorgente invariato, solo l'output cambia
+    out.write_bytes(b"out-different")  # source unchanged, only the output changes
 
     status = check_golden(history, "t", [src], [out])
 
@@ -57,7 +57,7 @@ def test_check_golden_stale_when_source_changed(tmp_path):
     snap = _commit(history, "t", src, out, b"src1", b"out1")
     set_golden(history, "t", snap.id)
 
-    src.write_bytes(b"src-diverso")  # il sorgente stesso è cambiato
+    src.write_bytes(b"src-different")  # the source itself changed
 
     status = check_golden(history, "t", [src], [out])
 
@@ -163,9 +163,9 @@ def test_golden_diff_skips_missing_output_file(tmp_path):
 
 
 def test_golden_diff_new_output_file_not_in_golden_snapshot(tmp_path):
-    """Un output non presente nello snapshot golden (es. writer nuovo
-    aggiunto dopo) viene trattato come diverso da 'niente' (b''),
-    quindi appare nel diff invece di essere ignorato silenziosamente."""
+    """An output not present in the golden snapshot (e.g. a new writer
+    added later) is treated as different from 'nothing' (b''), so it
+    shows up in the diff instead of being silently ignored."""
     history = HistoryStore(tmp_path)
     src = tmp_path / "t.raw"
     out = tmp_path / "t.bin"
@@ -173,7 +173,7 @@ def test_golden_diff_new_output_file_not_in_golden_snapshot(tmp_path):
     set_golden(history, "t", snap.id)
 
     new_out = tmp_path / "t.hex"
-    new_out.write_bytes(b"nuovo")
+    new_out.write_bytes(b"new")
 
     diff = golden_diff(history, "t", [out, new_out])
 
@@ -182,26 +182,26 @@ def test_golden_diff_new_output_file_not_in_golden_snapshot(tmp_path):
 
 
 def test_check_golden_old_manifest_matches_by_value_not_filename(tmp_path):
-    """Stessa regressione di history.py: uno snapshot golden scritto
-    prima delle tabelle batch non conosce il filename reale — il
-    confronto di staleness deve funzionare comunque per valore."""
+    """Same regression as history.py: a golden snapshot written before
+    batch tables doesn't know the real filename — the staleness
+    comparison must still work by value."""
     history = HistoryStore(tmp_path)
     src = tmp_path / "t.raw"
     out = tmp_path / "t.bin"
-    src.write_bytes(b"src invariato")
+    src.write_bytes(b"src unchanged")
     out.write_bytes(b"out1")
     history._ensure_dirs()
-    blob_hash = history._write_blob(b"src invariato")
+    blob_hash = history._write_blob(b"src unchanged")
     out_hash = history._write_blob(b"out1")
     history._manifest_path("t").write_text(
-        '[{"id": 1, "timestamp": "2020-01-01T00:00:00", "message": "vecchio", '
+        '[{"id": 1, "timestamp": "2020-01-01T00:00:00", "message": "old", '
         f'"source_blob": "{blob_hash}", "output_blobs": {{"t.bin": "{out_hash}"}}}}]'
     )
     set_golden(history, "t", 1)
 
     assert check_golden(history, "t", [src], [out]).status == "match"
 
-    src.write_bytes(b"src cambiato")
+    src.write_bytes(b"src changed")
     assert check_golden(history, "t", [src], [out]).status == "stale"
 
 
@@ -209,8 +209,8 @@ def test_check_golden_batch_stale_when_any_member_source_changes(tmp_path):
     row1 = tmp_path / "ROW1.txt"
     row2 = tmp_path / "ROW2.txt"
     out = tmp_path / "rows.bin"
-    row1.write_bytes(b"uno")
-    row2.write_bytes(b"due")
+    row1.write_bytes(b"one")
+    row2.write_bytes(b"two")
     out.write_bytes(b"out1")
     history = HistoryStore(tmp_path)
     snap = history.commit("rows", [row1, row2], [out], "v1")
@@ -218,5 +218,5 @@ def test_check_golden_batch_stale_when_any_member_source_changes(tmp_path):
 
     assert check_golden(history, "rows", [row1, row2], [out]).status == "match"
 
-    row2.write_bytes(b"due-modificato")
+    row2.write_bytes(b"two-modified")
     assert check_golden(history, "rows", [row1, row2], [out]).status == "stale"

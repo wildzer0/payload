@@ -50,7 +50,7 @@ def test_register_reader_warns_on_name_collision(caplog):
         registry.register_reader(FakeReader())
         registry.register_reader(FakeReader())
 
-    assert any("già registrato" in r.message for r in caplog.records)
+    assert any("already registered" in r.message for r in caplog.records)
     assert len(registry.readers) == 1
 
 
@@ -61,14 +61,14 @@ def test_register_doctor_check_basic_and_collision_warning(caplog):
 
     with caplog.at_level(logging.WARNING):
         registry.register_doctor_check(_DoctorCheckStub())
-    assert any("già registrato" in r.message for r in caplog.records)
+    assert any("already registered" in r.message for r in caplog.records)
 
 
 def test_find_reader_explicit_unknown_raises(tmp_path):
     registry = PluginRegistry()
     registry.register_reader(FakeReader())
     with pytest.raises(NoReaderFoundError):
-        registry.find_reader(tmp_path / "t.fake", explicit="non_esiste")
+        registry.find_reader(tmp_path / "t.fake", explicit="does_not_exist")
 
 
 def test_find_reader_explicit_known_returns_it(tmp_path):

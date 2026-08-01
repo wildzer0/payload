@@ -1,23 +1,23 @@
 """
-Reader di esempio: formato CSV con colonne 'value' (obbligatoria, hex o
-decimale), 'width' (opzionale, larghezza in bytes: 1/2/4/8, default 1) e
-'comment' (opzionale). L'offset è implicito dall'ordine delle righe,
-salvo colonna 'offset' esplicita.
+Example reader: CSV format with a 'value' column (required, hex or
+decimal), a 'width' column (optional, width in bytes: 1/2/4/8, default
+1) and a 'comment' column (optional). The offset is implicit from row
+order, unless an explicit 'offset' column is given.
 
-Serve come secondo esempio, più realistico di raw_text.py, per mostrare:
-- come un reader gestisce un formato strutturato (non solo testo libero)
-- come si popolano TUTTI i campi di TableIR, comments incluso
-- come si segnalano errori di parsing riga per riga
-- come un reader con valori multi-byte gestisce l'endianness (vedi
-  src/payload/docs/PLUGINS.md, sezione "Gestire l'endianness")
+Serves as a second, more realistic example than raw_text.py, to show:
+- how a reader handles a structured format (not just free text)
+- how ALL of TableIR's fields get populated, comments included
+- how parsing errors are reported line by line
+- how a reader with multi-byte values handles endianness (see
+  src/payload/docs/PLUGINS.md, "Handling endianness" section)
 
     value,width,comment
-    0x0A,1,soglia min
+    0x0A,1,min threshold
     0x1234,2,timeout in ms
     0xDEADBEEF,4,magic number
 
-Senza colonna 'width', ogni valore è trattato come singolo byte (come
-prima) — retrocompatibile con CSV scritti prima di questa estensione.
+Without a 'width' column, every value is treated as a single byte (as
+before) — backward compatible with CSVs written before this extension.
 """
 from __future__ import annotations
 
@@ -32,20 +32,20 @@ _MAX_BY_WIDTH = {1: 0xFF, 2: 0xFFFF, 4: 0xFFFFFFFF, 8: 0xFFFFFFFFFFFFFFFF}
 
 
 class CsvReader:
-    """CSV strutturato con colonne 'value' (obbligatoria, hex o
-    decimale), 'width' (opzionale, larghezza in bytes: 1/2/4/8, default
-    1) e 'comment' (opzionale). Offset implicito dall'ordine delle
-    righe, salvo colonna 'offset' esplicita.
+    """Structured CSV with a 'value' column (required, hex or
+    decimal), a 'width' column (optional, width in bytes: 1/2/4/8,
+    default 1) and a 'comment' column (optional). Offset implicit from
+    row order, unless an explicit 'offset' column is given.
 
-    Esempio:
+    Example:
         value,width,comment
-        0x0A,1,soglia min
+        0x0A,1,min threshold
         0x1234,2,timeout in ms
         0xDEADBEEF,4,magic number
 
-    Rispetta 'defaults.byte_order' dalla config per i valori multi-byte
-    (vedi src/payload/docs/PLUGINS.md, sezione "Gestire l'endianness"). Senza
-    colonna 'width', ogni valore è un singolo byte (retrocompatibile)."""
+    Honors 'defaults.byte_order' from config for multi-byte values
+    (see src/payload/docs/PLUGINS.md, "Handling endianness" section). Without
+    a 'width' column, every value is a single byte (backward compatible)."""
 
     name = "csv"
     extensions = [".csv"]
@@ -69,41 +69,41 @@ class CsvReader:
         with path.open(newline="") as f:
             reader = csv.DictReader(f)
             if reader.fieldnames is None or "value" not in reader.fieldnames:
-                raise ReaderParseError(path, "manca la colonna obbligatoria 'value'")
+                raise ReaderParseError(path, "missing the required 'value' column")
 
-            for row_num, row in enumerate(reader, start=2):  # start=2: la riga 1 è l'header
+            for row_num, row in enumerate(reader, start=2):  # start=2: row 1 is the header
                 raw_value = (row.get("value") or "").strip()
                 if not raw_value:
                     continue
 
                 try:
-                    value = int(raw_value, 0)  # base 0: accetta sia '0x0A' che '10'
+                    value = int(raw_value, 0)  # base 0: accepts both '0x0A' and '10'
                 except ValueError as e:
                     raise ReaderParseError(
-                        path, f"riga {row_num}: valore non valido '{raw_value}'"
+                        path, f"row {row_num}: invalid value '{raw_value}'"
                     ) from e
 
                 width_field = (row.get("width") or "").strip()
                 width = int(width_field) if width_field else 1
                 if width not in _MAX_BY_WIDTH:
                     raise ReaderParseError(
-                        path, f"riga {row_num}: larghezza non supportata '{width}' (ammessi: 1, 2, 4, 8)"
+                        path, f"row {row_num}: unsupported width '{width}' (allowed: 1, 2, 4, 8)"
                     )
                 if not 0 <= value <= _MAX_BY_WIDTH[width]:
                     raise ReaderParseError(
-                        path, f"riga {row_num}: valore fuori range per {width} byte: {value}"
+                        path, f"row {row_num}: value out of range for {width} byte(s): {value}"
                     )
 
                 offset_field = (row.get("offset") or "").strip()
                 offset = int(offset_field, 0) if offset_field else len(data)
 
-                # se l'offset esplicito lascia un buco rispetto ai dati già
-                # scritti, riempiamo con zeri per mantenere data contigua
+                # if the explicit offset leaves a gap relative to the data
+                # already written, fill with zeros to keep data contiguous
                 while len(data) < offset:
                     data.append(0)
                 if offset < len(data):
                     raise ReaderParseError(
-                        path, f"riga {row_num}: offset {offset} sovrappone dati già scritti"
+                        path, f"row {row_num}: offset {offset} overlaps data already written"
                     )
 
                 data += pack_value(value, width, byte_order)
