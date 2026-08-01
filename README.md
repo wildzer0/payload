@@ -74,8 +74,7 @@ offline/corporate scenarios.
 
 For a `pip`-free distribution (a single `pld.exe` on Windows, with
 Python and dependencies already bundled in), see
-[src/payload/docs/USAGE.md](src/payload/docs/USAGE.md#standalone-exe-distribution-windows)
-— built automatically by `.github/workflows/build-exe.yml`.
+[src/payload/docs/USAGE.md](src/payload/docs/USAGE.md#standalone-exe-distribution-windows).
 
 
 ## Included plugins

@@ -645,11 +645,8 @@ there's a self-contained build made with
 [PyInstaller](https://pyinstaller.org): a single `pld.exe` with Python
 and all dependencies already bundled in.
 
-**How to get it**: the `.github/workflows/build-exe.yml` pipeline
-builds it automatically on push of a `v*` tag (attached to the GitHub
-Release) or manually from "Actions → build-exe → Run workflow".
-
-To build it locally (needs Windows, PyInstaller doesn't cross-compile):
+**How to get it**: there's no automated CI build for this anymore — build
+it locally (needs Windows, PyInstaller doesn't cross-compile):
 ```bash
 pip install -e ".[build]"
 pyinstaller --onefile --name pld --copy-metadata payload ^
@@ -662,8 +659,8 @@ pyinstaller --onefile --name pld --copy-metadata payload ^
 The **builtin plugins** (`raw_text`, `csv`, `c_source`, `bin`, `hex`,
 `obj`) are already inside the exe, they work right away — they require
 `--copy-metadata payload` at build time (already included in the
-pipeline) because they're discovered via `entry_points`, which needs
-the package's metadata even inside a frozen binary.
+command above) because they're discovered via `entry_points`, which
+needs the package's metadata even inside a frozen binary.
 
 **External plugins** (third-party `.py` files, without recompiling the
 exe) work through the same "local plugins" mechanism already covered
