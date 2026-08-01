@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from payload.core.batch_tables import effective_config
-from payload.core.config import load_config
+from payload.core.config import GLOBAL_CONFIG_FILENAME, create_batch_table, load_config
 from payload.core.discovery import all_table_refs, discover_for_history, resolve_table_ref
 from payload.core.errors import NoOutputToCommitError, NothingToCommitError, SnapshotNotFoundError, TableNotFoundError
 from payload.core.history import HistoryStore, legacy_compatible_source_blobs
@@ -221,9 +221,11 @@ async def restore_route(request: Request) -> JSONResponse:
     """snapshot_id omitted = the latest one (useful to undo a deletion
     without first having to check the history). If the table is no
     longer on disk (e.g. deleted with 'pld rm'/the equivalent web
-    action, or by hand) and it's a single-file one, it gets recreated
-    from scratch — deleted batch tables aren't restorable this way (see
-    src/payload/docs/BATCH.md)."""
+    action, or by hand), it gets recreated from scratch — for a batch
+    table fully removed (source files AND its [[batch_table]] entry),
+    the config entry is re-added too, with the reader/writer recorded
+    at commit time (an explicit multi-stage pipeline isn't
+    reconstructed automatically, see src/payload/docs/BATCH.md)."""
     body = await request.json()
     table_name = body.get("table_name")
     snapshot_id = body.get("snapshot_id")
@@ -243,18 +245,15 @@ async def restore_route(request: Request) -> JSONResponse:
         ref = resolve_table_ref(sources, batch_tables, table_name)
 
         recreating = False
+        recreate_batch_entry = False
         if ref is not None:
             source_paths = ref.source_paths
             is_batch = ref.is_batch
         else:
-            if len(snapshot.source_blobs) != 1:
-                raise TableNotFoundError(
-                    table_name,
-                    hint="It's not on disk and can't be restored automatically (it was a batch table)",
-                )
             source_paths = history.source_paths_for_snapshot(table_name, resolved_snapshot_id)
-            is_batch = False
+            is_batch = len(snapshot.source_blobs) > 1
             recreating = True
+            recreate_batch_entry = is_batch
 
         if not confirm:
             return {
@@ -263,7 +262,24 @@ async def restore_route(request: Request) -> JSONResponse:
                 "sources": [str(p) for p in source_paths],
                 "snapshot_id": resolved_snapshot_id,
                 "recreating": recreating,
+                "recreate_batch_entry": recreate_batch_entry,
             }
+
+        pipeline_warning = None
+        if recreate_batch_entry:
+            writers = snapshot.writers
+            create_batch_table(
+                root, table_name,
+                [str(p.relative_to(root).as_posix()) for p in source_paths],
+                reader=snapshot.reader,
+                writer=writers[0] if len(writers) == 1 else None,
+            )
+            if snapshot.pipeline_explicit:
+                pipeline_warning = (
+                    f"snapshot #{resolved_snapshot_id} had an explicit pipeline "
+                    f"({snapshot.pipeline_description}) — add [[batch_table]].stages back by hand "
+                    f"in {GLOBAL_CONFIG_FILENAME} if needed"
+                )
 
         result = history.restore(table_name, resolved_snapshot_id, source_paths, resolve(root, config.defaults.output_dir))
         return {
@@ -271,6 +287,8 @@ async def restore_route(request: Request) -> JSONResponse:
             "snapshot_id": resolved_snapshot_id,
             "written": [str(w) for w in result.written],
             "removed": [str(r) for r in result.removed],
+            "recreated_batch_entry": recreate_batch_entry,
+            "pipeline_warning": pipeline_warning,
         }
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))

@@ -20,9 +20,14 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeEl
 from rich.table import Table
 
 from payload.core.batch import run_batch_build
-from payload.core.batch_tables import effective_config, resolve_batch_tables
+from payload.core.batch_tables import BatchTable, effective_config, resolve_batch_tables
 from payload.core.cache import BuildCache
-from payload.core.config import GLOBAL_CONFIG_FILENAME, load_config, resolve_config_with_provenance
+from payload.core.config import (
+    GLOBAL_CONFIG_FILENAME,
+    create_batch_table,
+    load_config,
+    resolve_config_with_provenance,
+)
 from payload.core.discovery import (
     TableRef,
     all_table_refs,
@@ -385,14 +390,14 @@ def watch(
         # The initial build must never prevent watch from starting —
         # same philosophy as payload/watch.py, which never dies from a
         # build error while watching live.
-        batch_member_paths: set[Path] = set()
+        batch_member_paths: dict[Path, BatchTable] = {}
         try:
             sources = discover_table_sources(root, known_ext, Path(config.defaults.output_dir), filter_glob)
             duplicates = find_duplicate_stems(sources)
             if duplicates:
                 raise DuplicateTableNameError(duplicates)
             batch_tables = resolve_batch_tables(root, config)
-            batch_member_paths = {p.resolve() for bt in batch_tables for p in bt.source_paths}
+            batch_member_paths = {p.resolve(): bt for bt in batch_tables for p in bt.source_paths}
             sources = exclude_batch_members(sources, batch_tables)
             check_no_batch_name_collisions(sources, batch_tables)
             tables = all_table_refs(sources, batch_tables)
@@ -412,16 +417,24 @@ def watch(
             console.print(f"[yellow]![/] initial build failed ({e.message}) — continuing with watch anyway")
 
         def on_change(src: Path):
-            if src.resolve() in batch_member_paths:
-                # part of a [[batch_table]]: rebuilding it as if it
-                # were a standalone (single-file) table would produce a
-                # wrong/duplicate output — live-reload for batch tables
-                # isn't supported (see BATCH.md), 'pld build
-                # <batch_name>' remains the way to update it.
-                console.print(
-                    f"[dim]— {src.name} is part of a batch table: automatic rebuild "
-                    "not supported in watch, use 'pld build <batch_name>'[/]"
+            batch = batch_member_paths.get(src.resolve())
+            if batch is not None:
+                # part of a [[batch_table]]: rebuilding just this one
+                # file as if it were a standalone table would produce a
+                # wrong/duplicate output — rebuild the whole batch
+                # instead. If several member files are saved within the
+                # debounce window, the batch rebuilds once per file
+                # that settles: redundant but harmless, the cache makes
+                # the extra runs cheap.
+                per_table_config = effective_config(load_config(project_root), batch)
+                out_paths, was_built = build(
+                    batch.source_paths, registry, per_table_config, out,
+                    cache=cache, writer_name=to, table_name=batch.name,
                 )
+                cache.save()
+                status = "rebuilt" if was_built else "unchanged (cache)"
+                destinations = ", ".join(str(p) for p in out_paths)
+                console.print(f"[green]✓[/] {src.name} (member of '{batch.name}') → {destinations} ({status})")
                 return
             per_table_config = load_config(project_root, source_path=src)
             out_paths, was_built = build(
@@ -690,9 +703,13 @@ def restore_cmd(
     of a previous snapshot (the latest, if not specified — useful to
     undo an accidental 'pld rm' without first checking 'pld log'). If
     the source is no longer on disk (e.g. deleted with 'pld rm' or by
-    hand) and it's a single-file table, it's recreated from scratch at
-    the location it lived in at commit time — deleted batch tables
-    aren't restorable this way (see src/payload/docs/BATCH.md)."""
+    hand), it's recreated from scratch at the location(s) it lived in
+    at commit time — for a batch table fully removed (source files AND
+    its [[batch_table]] entry, e.g. 'pld rm <name>' without --member),
+    the [[batch_table]] entry is re-added to table-tool.toml too, with
+    the reader/writer recorded at commit time (an explicit multi-stage
+    pipeline, if there was one, isn't reconstructed automatically —
+    see src/payload/docs/BATCH.md)."""
 
     def _run():
         require_project_root(root)
@@ -707,30 +724,42 @@ def restore_cmd(
         ref = resolve_table_ref(sources, batch_tables, table_name)
 
         recreating = False
+        recreate_batch_entry = False
         if ref is not None:
             source_paths = ref.source_paths
         else:
-            if len(snapshot.source_blobs) != 1:
-                console.print(
-                    f"[red]✗[/] '{table_name}' is not on disk and can't be restored automatically "
-                    "(it was a batch table — see src/payload/docs/BATCH.md)"
-                )
-                raise typer.Exit(code=4)
             source_paths = history.source_paths_for_snapshot(table_name, resolved_snapshot_id)
             recreating = True
+            recreate_batch_entry = len(snapshot.source_blobs) > 1
 
         if not yes:
             names = ", ".join(p.name for p in source_paths)
             verb = "recreated" if recreating else "overwritten"
+            batch_note = f" Its \\[\\[batch_table]] entry in {GLOBAL_CONFIG_FILENAME} will also be re-added." if recreate_batch_entry else ""
             console.print(
                 f"{names} and its outputs will be {verb} "
-                f"with the state of snapshot #{resolved_snapshot_id}. "
+                f"with the state of snapshot #{resolved_snapshot_id}.{batch_note} "
                 "No new snapshot is created: only the current pointer moves back, "
                 "the history stays intact."
             )
             if not typer.confirm("Confirm?"):
                 console.print("Cancelled.")
                 return
+
+        if recreate_batch_entry:
+            writers = snapshot.writers
+            create_batch_table(
+                root, table_name,
+                [p.relative_to(root).as_posix() for p in source_paths],
+                reader=snapshot.reader,
+                writer=writers[0] if len(writers) == 1 else None,
+            )
+            console.print(f"[green]✓[/] \\[\\[batch_table]] '{table_name}' re-added to {GLOBAL_CONFIG_FILENAME}")
+            if snapshot.pipeline_explicit:
+                console.print(
+                    f"[yellow]![/] snapshot #{resolved_snapshot_id} had an explicit pipeline "
+                    f"({snapshot.pipeline_description}) — add \\[\\[batch_table]].stages back by hand if needed"
+                )
 
         result = history.restore(table_name, resolved_snapshot_id, source_paths, Path(config.defaults.output_dir))
         for w in result.written:

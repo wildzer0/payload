@@ -623,10 +623,12 @@ async function viewDashboard() {
       btn.disabled = true;
       try {
         const preview = await api("/api/restore", { body: { table_name: name } });
-        const ok = await confirmDialog(`'${name}' will be recreated from the last snapshot (#${preview.snapshot_id}).`, { confirmLabel: "Restore" });
+        const batchNote = preview.recreate_batch_entry ? " Its [[batch_table]] entry will also be re-added to table-tool.toml." : "";
+        const ok = await confirmDialog(`'${name}' will be recreated from the last snapshot (#${preview.snapshot_id}).${batchNote}`, { confirmLabel: "Restore" });
         if (!ok) { btn.disabled = false; return; }
-        await api("/api/restore", { body: { table_name: name, snapshot_id: preview.snapshot_id, confirm: true } });
+        const r = await api("/api/restore", { body: { table_name: name, snapshot_id: preview.snapshot_id, confirm: true } });
         toast(`'${name}' restored`, "ok");
+        if (r.pipeline_warning) toast(r.pipeline_warning, "warn");
         viewDashboard();
       } catch (e) {
         toastError(e);
@@ -1498,54 +1500,58 @@ const PLUGIN_KIND_META = {
 };
 
 function _pluginCardHtml(p) {
+  const meta = PLUGIN_KIND_META[p.kind];
   const extPills = p.extensions.map((e) => `<span class="pill pill-dim mono">${escapeHtml(e)}</span>`).join("");
   return `
     <a class="plugin-card${p.builtin ? " plugin-card-builtin" : ""}" href="#/plugin/${encodeURIComponent(p.name)}">
+      <div class="plugin-card-kind">${iconSpan(meta.icon)}${meta.title}</div>
       <div class="plugin-card-name">${escapeHtml(p.name)}</div>
       <div class="plugin-card-meta">${extPills}<span class="pill pill-dim">v${escapeHtml(p.api_version)}</span></div>
     </a>`;
 }
 
-// payload's built-in plugins (raw_text, bin, hex, ...) always stay in
-// the background compared to the ones the user wrote — even when the
-// user hasn't written any yet — inside a <details> closed by default,
-// instead of sitting on equal footing in the same list.
-function _pluginColumnHtml(kind, plugins) {
-  const meta = PLUGIN_KIND_META[kind];
-  const items = plugins.filter((p) => p.kind === kind);
-  const custom = items.filter((p) => !p.builtin);
-  const builtin = items.filter((p) => p.builtin);
-
-  // If there are no custom plugins yet in this category but built-ins
-  // exist, don't show any "empty" message: the built-in accordion
-  // below is already the column's content, no apologetic text taking
-  // up space for no reason.
-  let customList = "";
-  if (items.length === 0) {
-    customList = '<div class="plugin-column-list"><p class="plugin-column-empty">None registered.</p></div>';
-  } else if (custom.length > 0) {
-    customList = `<div class="plugin-column-list">${custom.map(_pluginCardHtml).join("")}</div>`;
+// Used to be 3 boxes (one per kind), each with its own built-ins
+// <details> — expanding one grew only that box, so the row never lined
+// up (the box's size wasn't fixed, it tracked whatever was open). A
+// single flat grid with a filter bar reflows as one predictable unit
+// instead, the same way a search result list does, and no box is ever
+// bigger or smaller than its neighbor because there ARE no neighbors —
+// just one grid.
+function _pluginGridHtml(plugins, kindFilter, showBuiltin) {
+  const filtered = plugins.filter((p) => (!kindFilter || p.kind === kindFilter) && (showBuiltin || !p.builtin));
+  if (filtered.length === 0) {
+    return '<p class="empty-state">No plugin matches this filter.</p>';
   }
+  return `<div class="plugin-grid">${filtered.map(_pluginCardHtml).join("")}</div>`;
+}
 
-  const builtinBody = builtin.length ? `
-    <details class="plugin-builtin-group">
-      <summary>payload built-ins (${builtin.length})</summary>
-      <div class="plugin-column-list-builtin">${builtin.map(_pluginCardHtml).join("")}</div>
-    </details>` : "";
-
+function _pluginToolbarHtml(plugins) {
+  const counts = { "": plugins.length };
+  for (const kind of Object.keys(PLUGIN_KIND_META)) counts[kind] = plugins.filter((p) => p.kind === kind).length;
+  const builtinCount = plugins.filter((p) => p.builtin).length;
+  const chip = (kind, label) => `
+    <button type="button" class="toggle-chip plugin-filter-chip${kind === "" ? " active" : ""}" data-kind-filter="${kind}">
+      ${escapeHtml(label)} <span class="pill pill-dim">${counts[kind]}</span>
+    </button>`;
   return `
-    <div class="plugin-column">
-      <div class="plugin-column-header">${iconSpan(meta.icon)}<h2>${meta.title}</h2><span class="pill pill-dim">${items.length}</span></div>
-      ${customList}
-      ${builtinBody}
+    <div class="plugin-toolbar">
+      <div class="toggle-chip-row" id="plugin-kind-filters" style="margin:0">
+        ${chip("", "All")}
+        ${Object.entries(PLUGIN_KIND_META).map(([kind, meta]) => chip(kind, meta.title)).join("")}
+      </div>
+      <label class="toggle-chip">
+        <input type="checkbox" id="plugin-show-builtin">
+        Show payload built-ins <span class="pill pill-dim">${builtinCount}</span>
+      </label>
     </div>`;
 }
 
 async function viewPlugins() {
   const [r, local] = await Promise.all([api("/api/plugins"), api("/api/local-plugins")]);
-  const columns = raw(
-    ["reader", "writer", "doctor_check"].map((kind) => _pluginColumnHtml(kind, r.plugins)).join("")
-  );
+  let kindFilter = "";
+  
+  let showBuiltin = localStorage.getItem("showBuiltinPlugins") === "true";
+
   const localRows = local.files.map((f) => render`
     <div class="local-plugin-row">
       <span class="mono">${f.filename}</span>
@@ -1556,9 +1562,11 @@ async function viewPlugins() {
       </div>
     </div>
   `);
+
   document.getElementById("content").innerHTML = render`
     ${raw(pageHeader("Plugins"))}
-    <div class="plugin-columns">${columns}</div>
+    ${raw(_pluginToolbarHtml(r.plugins))}
+    <div id="plugin-grid-wrap">${raw(_pluginGridHtml(r.plugins, kindFilter, showBuiltin))}</div>
     ${raw(detailsCard(
       "Local plugins (local_plugins/)",
       `<div class="local-plugin-list">${localRows.join("") || '<p class="empty-state">No local plugin in this project.</p>'}</div>`,
@@ -1575,6 +1583,7 @@ async function viewPlugins() {
       <button class="primary" id="pn-create">${icon("plus")}Create and open in editor</button>
     </div>
   `;
+
   document.getElementById("pn-create").onclick = async () => {
     try {
       const r2 = await api("/api/plugin/new-local", { body: { name: val("pn-name"), kind: document.getElementById("pn-kind").value } });
@@ -1590,7 +1599,30 @@ async function viewPlugins() {
   document.querySelectorAll("[data-del-local-plugin]").forEach((btn) => {
     btn.onclick = () => deleteLocalPlugin(btn.dataset.delLocalPlugin, viewPlugins);
   });
+
+  const rerenderPluginGrid = () => {
+    document.getElementById("plugin-grid-wrap").innerHTML = _pluginGridHtml(r.plugins, kindFilter, showBuiltin);
+  };
+
+  document.querySelectorAll("#plugin-kind-filters [data-kind-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      kindFilter = btn.dataset.kindFilter;
+      document.querySelectorAll("#plugin-kind-filters [data-kind-filter]").forEach((b) => b.classList.toggle("active", b === btn));
+      rerenderPluginGrid();
+    };
+  });
+
+  const showBuiltinCheckbox = document.getElementById("plugin-show-builtin");
+  if (showBuiltinCheckbox) {
+    showBuiltinCheckbox.checked = showBuiltin;
+    showBuiltinCheckbox.onchange = (e) => {
+      showBuiltin = e.target.checked;
+      localStorage.setItem("showBuiltinPlugins", showBuiltin);
+      rerenderPluginGrid();
+    };
+  }
 }
+
 
 async function deleteLocalPlugin(filename, onDeleted) {
   const ok = await confirmDialog(`Permanently delete '${filename}'? This action can't be undone.`, { danger: true, confirmLabel: "Delete" });
@@ -2174,6 +2206,54 @@ async function viewDocDetail(slug) {
     <div class="card"><div class="doc-content">${raw(renderMarkdown(r.content))}</div></div>
   `;
 }
+
+/* ---------- smooth <details> expand/collapse ---------- */
+
+/* Native <details> snaps open/closed instantly, which reads as a bug
+ * anywhere its content sits inside a layout that reacts to the size
+ * change (e.g. the plugin-columns grid: expanding one column's
+ * built-ins accordion used to jump that column's whole box to a new
+ * height with no transition). Animate the height instead, delegated
+ * on #content so it keeps working across route re-renders without
+ * re-binding a listener per <details> every time a page redraws. */
+function _animateDetailsToggle(details) {
+  if (details._detailsAnim) details._detailsAnim.cancel();
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const wasOpen = details.open;
+  if (reduceMotion) {
+    details.open = !wasOpen;
+    return;
+  }
+  const startHeight = details.offsetHeight;
+  // Flip twice, synchronously, to measure the other state's height
+  // without ever letting the browser paint the intermediate frame.
+  details.open = !wasOpen;
+  const endHeight = details.offsetHeight;
+  details.open = wasOpen;
+  if (!wasOpen) details.open = true;
+  details.style.overflow = "hidden";
+  requestAnimationFrame(() => {
+    const anim = details.animate(
+      { height: [`${startHeight}px`, `${endHeight}px`] },
+      { duration: 160, easing: "ease-out" }
+    );
+    details._detailsAnim = anim;
+    anim.onfinish = anim.oncancel = () => {
+      details.open = !wasOpen;
+      details.style.height = "";
+      details.style.overflow = "";
+      details._detailsAnim = null;
+    };
+  });
+}
+
+document.getElementById("content").addEventListener("click", (e) => {
+  const summary = e.target.closest("summary");
+  const details = summary && summary.parentElement;
+  if (!details || details.tagName !== "DETAILS") return;
+  e.preventDefault();
+  _animateDetailsToggle(details);
+});
 
 /* ---------- bootstrap ---------- */
 

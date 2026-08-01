@@ -926,55 +926,34 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
   .local-plugin-row-actions { justify-content: flex-start; }
 }
 
-/* ---------- plugin list (by category, 3 columns) ---------- */
+/* ---------- plugin list (flat grid + filter bar) ----------
+ * Used to be 3 boxes (reader/writer/doctor check), each with its own
+ * built-ins <details> — expanding one grew only that box, so the
+ * boxes never lined up: nothing about their size was fixed, it
+ * tracked whichever accordion happened to be open. A single grid
+ * with a filter bar above it reflows as one predictable unit instead
+ * — filtering behaves like a search result list, not like 3
+ * independently-sized boxes next to each other. */
 
-.plugin-columns {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  /* start, not stretch (grid's default): each column as tall as its
-     own content, otherwise shorter columns stretch to match the
-     tallest one and their empty states end up with a sea of white
-     space around a single line of text. */
-  align-items: start;
-  margin-bottom: 16px;
-}
-@media (max-width: 900px) {
-  .plugin-columns { grid-template-columns: 1fr; }
-}
-.plugin-column {
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
-  overflow: hidden;
-}
-.plugin-column-header {
+.plugin-toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-subtle);
+  margin-bottom: 16px;
 }
-.plugin-column-header .icon {
-  width: 18px; height: 18px;
-  color: var(--accent);
+.plugin-filter-chip.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-subtle));
 }
-.plugin-column-header h2 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  flex: 1;
-}
-.plugin-column-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  flex: 1;
+
+.plugin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
 }
 .plugin-card {
   display: block;
@@ -992,50 +971,24 @@ label { font-size: 12.5px; color: var(--text-dim); display: block; margin-bottom
   box-shadow: var(--shadow-sm);
   transform: translateY(-1px);
 }
+.plugin-card-kind {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-faint);
+  margin-bottom: 6px;
+}
+.plugin-card-kind .icon { width: 12px; height: 12px; }
 .plugin-card-name { font-weight: 600; font-size: 13.5px; }
 .plugin-card-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 6px;
-}
-.plugin-column-empty {
-  padding: 4px 4px 10px;
-  color: var(--text-faint);
-  font-size: 12.5px;
-  text-align: left;
-}
-
-/* payload's built-in plugins: always in the background compared to
-   the user's own, even when none exist yet — a <details> closed by
-   default instead of a list on equal footing. */
-.plugin-builtin-group {
-  border-top: 1px solid var(--border);
-  padding: 4px 12px 12px;
-}
-.plugin-builtin-group summary {
-  cursor: pointer;
-  padding: 8px 4px;
-  font-size: 12px;
-  color: var(--text-faint);
-  list-style: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  user-select: none;
-}
-.plugin-builtin-group summary::-webkit-details-marker { display: none; }
-.plugin-builtin-group summary::before {
-  content: "▸";
-  font-size: 10px;
-  transition: transform 0.12s ease;
-}
-.plugin-builtin-group[open] summary::before { transform: rotate(90deg); }
-.plugin-column-list-builtin {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-top: 6px;
 }
 .plugin-card-builtin {
   border-left-color: var(--text-faint);

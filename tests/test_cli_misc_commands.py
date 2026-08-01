@@ -156,10 +156,11 @@ def test_watch_on_change_rebuilds_and_prints(tmp_path, monkeypatch, capsys):
     assert "example_table.raw" in out
 
 
-def test_watch_on_change_skips_batch_table_member_file(tmp_path, monkeypatch, capsys):
-    """Regression: a file that's part of a [[batch_table]] must not
-    be rebuilt as a standalone table when it changes — see
-    src/payload/docs/BATCH.md, watch live-reload limits section."""
+def test_watch_on_change_rebuilds_whole_batch_table(tmp_path, monkeypatch, capsys):
+    """A file that's part of a [[batch_table]] triggers a rebuild of
+    the WHOLE batch table (not a standalone build of just that file,
+    which would produce a wrong/duplicate output) — see
+    src/payload/docs/BATCH.md."""
     proj = _init_project(tmp_path, monkeypatch)
     (proj / "ROW1.txt").write_text("0x01\n")
     (proj / "ROW2.txt").write_text("0x02\n")
@@ -178,8 +179,9 @@ def test_watch_on_change_skips_batch_table_member_file(tmp_path, monkeypatch, ca
 
     captured["on_change"](proj / "ROW1.txt")
     out = capsys.readouterr().out
-    assert "is part of a batch table" in out
+    assert "member of 'rows'" in out
     assert not (proj / "build" / "ROW1.bin").exists()
+    assert (proj / "build" / "rows.bin").exists()
 
 
 # --- pipeline show: remaining branches --------------------------------------

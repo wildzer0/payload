@@ -159,7 +159,7 @@ pld status                     # shows "rows" with a "(batch, N files)" marker
 pld commit -m "..."            # also commits changed batch tables
 pld log rows
 pld diff rows                  # differences for each changed member file
-pld restore rows <N>           # only if "rows" still exists — see 'pld rm' below
+pld restore rows <N>           # works even if "rows" was fully removed — see 'pld rm' below
 pld golden set rows
 pld import a.txt b.txt --new-batch rows   # creates the "rows" [[batch_table]] from two files
 pld import c.txt --batch rows             # adds a third member
@@ -181,13 +181,6 @@ getting a visual builder in a later phase.
 
 ## Explicit limits at this stage
 
-- **`pld watch` doesn't automatically rebuild a batch table** when a
-  member file changes — live-reload stays single-file. `pld watch`'s
-  initial build still includes batch tables; a member file modified
-  while watching is flagged but doesn't trigger a rebuild —
-  `pld build <batch_name>` remains the way to update it. The web app
-  has no "watch" page (removed: it's a terminal feature, not a
-  browser one).
 - **`pld view` doesn't support batch tables** — there's no obvious
   "which file do I show" mapping for a command meant to inspect a
   single file.
@@ -199,15 +192,32 @@ getting a visual builder in a later phase.
   interrupted midway through a multi-stage pipeline — it starts over
   from scratch on the next attempt (still correct behavior, just not
   as optimized as for a single-file table).
-- **`pld restore` doesn't recreate an entirely deleted batch table**
+- **A new member file matched by a glob (not a literal path) isn't
+  picked up while `pld watch` is already running** — `sources =
+  ["ROW*.txt"]` is expanded once at watch startup; a file created
+  afterward that would match the glob is treated as its own
+  standalone table until watch is restarted. A literal path added to
+  `sources` by hand always requires a restart anyway (it's a config
+  change), so this only affects the glob case.
+
+### Closed in this version
+
+- **`pld watch` rebuilds a batch table when a member file changes** —
+  live-reload now covers the whole batch (all its member files are
+  re-read and the table rebuilt as one unit), not just single-file
+  tables. If several members are saved within the debounce window,
+  the batch rebuilds once per file that settles — redundant but
+  harmless, the cache makes the extra runs cheap.
+- **`pld restore` recreates an entirely deleted batch table**
   (`pld rm rows` without `--member`, which also removes the
-  `[[batch_table]]` from config) — unlike a single-file table, where
-  `pld restore` recreates the file from scratch even if it no longer
-  exists on disk. For a batch table, the `[[batch_table]]` needs to be
-  redeclared by hand first (or recreated with `pld import --new-batch`);
-  the snapshots/blobs still stay in the history, browsable with
-  `pld log`, there's just no command yet that puts them back in one
-  shot.
+  `[[batch_table]]` from config): the source files are written back
+  from history AND the `[[batch_table]]` entry is re-added to
+  `table-tool.toml`, using the reader/writer recorded at commit time.
+  An explicit multi-stage `stages` pipeline, if there was one, is
+  **not** reconstructed automatically (there's no reliable way to turn
+  the snapshot's human-readable pipeline description back into
+  `stages` entries) — `pld restore` prints what the recorded pipeline
+  was so it can be re-added by hand.
 
 ---
 

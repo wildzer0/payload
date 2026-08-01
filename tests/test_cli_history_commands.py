@@ -349,10 +349,12 @@ def test_restore_recreates_source_deleted_from_disk(tmp_path, monkeypatch):
     assert (proj / "example_table.raw").read_bytes() == original
 
 
-def test_restore_batch_table_fully_deleted_not_supported(tmp_path, monkeypatch):
+def test_restore_recreates_fully_deleted_batch_table(tmp_path, monkeypatch):
     """A batch table deleted entirely (files + [[batch_table]], e.g.
-    via 'pld rm' without --member) isn't automatically restorable —
-    unlike a single-file table, see src/payload/docs/BATCH.md."""
+    via 'pld rm' without --member) is restorable: the source files
+    come back AND the [[batch_table]] entry is re-added to
+    table-tool.toml, so the table is usable again right away — see
+    src/payload/docs/BATCH.md."""
     proj = _init_project(tmp_path, monkeypatch)
     (proj / "ROW1.txt").write_text("0x01\n")
     (proj / "ROW2.txt").write_text("0x02\n")
@@ -363,11 +365,41 @@ def test_restore_batch_table_fully_deleted_not_supported(tmp_path, monkeypatch):
     runner.invoke(app, ["commit", "-m", "first", "--only", "rows"])
     rm_result = runner.invoke(app, ["rm", "rows", "--force", "--yes"])
     assert rm_result.exit_code == 0, rm_result.stdout
+    assert "[[batch_table]]" not in (proj / "table-tool.toml").read_text()
 
     result = runner.invoke(app, ["restore", "rows", "1", "--yes"])
 
-    assert result.exit_code == 4
-    assert "batch" in (result.stdout + result.stderr).lower()
+    assert result.exit_code == 0, result.stdout
+    assert (proj / "ROW1.txt").read_text() == "0x01\n"
+    assert (proj / "ROW2.txt").read_text() == "0x02\n"
+    assert 'name = "rows"' in (proj / "table-tool.toml").read_text()
+
+    rebuild = runner.invoke(app, ["build", "rows", "--to", "bin"])
+    assert rebuild.exit_code == 0, rebuild.stdout
+
+
+def test_restore_recreated_batch_table_warns_about_explicit_pipeline(tmp_path, monkeypatch):
+    """The reader/writer are recovered automatically, but an explicit
+    multi-stage [[batch_table]].stages isn't — 'pld restore' must say
+    so instead of silently dropping it."""
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "ROW1.txt").write_text("0x01\n")
+    (proj / "ROW2.txt").write_text("0x02\n")
+    (proj / "table-tool.toml").write_text(
+        (proj / "table-tool.toml").read_text()
+        + '\n[[batch_table]]\nname = "rows"\nsources = ["ROW1.txt", "ROW2.txt"]\n'
+        + 'stages = [{ type = "reader", name = "raw_text" }, { type = "writer", name = "bin" }]\n'
+    )
+    runner.invoke(app, ["build", "rows"])
+    runner.invoke(app, ["commit", "-m", "first", "--only", "rows"])
+    rm_result = runner.invoke(app, ["rm", "rows", "--force", "--yes"])
+    assert rm_result.exit_code == 0, rm_result.stdout
+
+    result = runner.invoke(app, ["restore", "rows", "1", "--yes"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "explicit pipeline" in result.stdout
+    assert "stages" in result.stdout
 
 
 def test_restore_unknown_snapshot_id_fails(tmp_path, monkeypatch):

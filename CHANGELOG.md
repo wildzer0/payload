@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.5.0 (not yet released)
+
+**Batch table follow-ups** — closes the two gaps `v0.4.0`'s batch
+tables explicitly deferred, see
+[src/payload/docs/BATCH.md](src/payload/docs/BATCH.md).
+
+- `pld watch` rebuilds the whole batch table when a member file
+  changes, instead of just flagging that live-reload doesn't apply
+- `pld restore` recreates a batch table that was fully removed
+  (`pld rm <name>` without `--member`): source files come back from
+  history and the `[[batch_table]]` entry is re-added to
+  `table-tool.toml` with the recorded reader/writer — an explicit
+  multi-stage pipeline isn't reconstructed automatically, `pld
+  restore` prints the recorded pipeline so it can be re-added by hand
+- Reworked the "Plugins" page in `pld serve`'s web UI: a single
+  filterable grid (kind + "show built-ins" toggle) instead of three
+  independently-resizing columns, so the layout stays visually stable
+  regardless of what's expanded
+
 ## v0.2.0
 
 **Configurable pipeline** — a single model for every build, see
@@ -60,7 +79,7 @@ verified with real toolchains where applicable.
 - Fix: `pld watch <subfolder>` never found the global config (`table-tool.toml`) if the watched subfolder didn't match the folder `pld` was launched from — the global config is now always looked up from `Path.cwd()`, consistent with `pld build`. The per-table sidecar was never affected (it's always resolved relative to the file, not to `root`)
 - New `pld plugin new-local <name> --kind reader|writer|doctor-check` command: quick scaffold for a local plugin (single file in `local_plugins/`, no `pip install`) — previously the only scaffold available (`pld plugin new`) generated a whole pip package, overkill for a project-local plugin
 
-## v0.1.0 (not yet released)
+## v0.1.0
 
 First working version of the tool.
 

@@ -534,9 +534,11 @@ def test_restore_confirmation_required_flags_recreating(tmp_path):
     assert r.json()["recreating"] is True
 
 
-def test_restore_batch_table_fully_deleted_not_supported(tmp_path):
-    """A batch table deleted entirely (files + [[batch_table]]) isn't
-    automatically restorable — unlike a single-file table, see
+def test_restore_recreates_fully_deleted_batch_table(tmp_path):
+    """A batch table deleted entirely (files + [[batch_table]]) is
+    restorable: the source files come back AND the [[batch_table]]
+    entry is re-added to table-tool.toml — this is exactly the
+    Dashboard's 'Deleted but restorable tables' flow, see
     src/payload/docs/BATCH.md."""
     root = _init_project(tmp_path)
     (root / "ROW1.txt").write_text("0x01\n")
@@ -552,6 +554,43 @@ def test_restore_batch_table_fully_deleted_not_supported(tmp_path):
     del_resp = client.post("/api/table/delete", json={"table_name": "rows", "confirm": True})
     assert del_resp.json()["batch_entry_removed"] is True
 
+    preview = client.post("/api/restore", json={"table_name": "rows"})
+    assert preview.status_code == 200
+    assert preview.json()["recreate_batch_entry"] is True
+
     r = client.post("/api/restore", json={"table_name": "rows", "confirm": True})
 
-    assert r.status_code == 404
+    assert r.status_code == 200, r.json()
+    assert r.json()["recreated_batch_entry"] is True
+    assert r.json()["pipeline_warning"] is None
+    assert (root / "ROW1.txt").read_text() == "0x01\n"
+    assert (root / "ROW2.txt").read_text() == "0x02\n"
+    assert 'name = "rows"' in (root / "table-tool.toml").read_text()
+
+    rebuild = client.post("/api/build", json={"source": "rows", "to": "bin"})
+    assert rebuild.status_code == 200, rebuild.json()
+
+
+def test_restore_recreated_batch_table_warns_about_explicit_pipeline(tmp_path):
+    """Same as the CLI's counterpart: reader/writer come back
+    automatically, but an explicit [[batch_table]].stages doesn't —
+    the response must say so instead of silently dropping it."""
+    root = _init_project(tmp_path)
+    (root / "ROW1.txt").write_text("0x01\n")
+    (root / "ROW2.txt").write_text("0x02\n")
+    (root / "table-tool.toml").write_text(
+        (root / "table-tool.toml").read_text()
+        + '\n[[batch_table]]\nname = "rows"\nsources = ["ROW1.txt", "ROW2.txt"]\n'
+        + 'stages = [{ type = "reader", name = "raw_text" }, { type = "writer", name = "bin" }]\n'
+    )
+    client = _client(root)
+    client.post("/api/build", json={"source": "rows"})
+    commit_resp = client.post("/api/commit", json={"message": "first", "only": ["rows"]})
+    assert commit_resp.json()["committed"], commit_resp.json()
+    client.post("/api/table/delete", json={"table_name": "rows", "confirm": True})
+
+    r = client.post("/api/restore", json={"table_name": "rows", "confirm": True})
+
+    assert r.status_code == 200, r.json()
+    assert r.json()["pipeline_warning"] is not None
+    assert "stages" in r.json()["pipeline_warning"]
