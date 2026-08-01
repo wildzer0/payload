@@ -114,7 +114,18 @@ def import_new_batch_table(
     filenames = [_validate_filename(f) for f in files]
     for filename, data in files.items():
         _validate_not_empty(filename, data)
-        registry.find_reader(project_root / filename)
+        target = project_root / filename
+        # A member filename that already exists on disk would otherwise
+        # be silently overwritten by write_bytes below — e.g. it
+        # collides with an already-tracked single-file table — and
+        # folded into this new [[batch_table]], destroying the
+        # original table with no confirmation. _name_taken() above
+        # only guards the new batch's OWN name, not its members', so
+        # this has to be checked separately, for every file, before
+        # any write happens.
+        if target.exists():
+            raise TableAlreadyExistsError(target.stem)
+        registry.find_reader(target)
 
     for filename, data in files.items():
         (project_root / filename).write_bytes(data)

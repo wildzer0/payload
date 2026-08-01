@@ -121,6 +121,22 @@ def test_import_new_batch_table_rejects_empty_file(tmp_path):
     assert not (tmp_path / "ROW2.fake").exists()
 
 
+def test_import_new_batch_table_member_filename_collision_preserves_existing_file(tmp_path):
+    """A member filename that collides with an already-tracked table's
+    source must NOT be silently overwritten and folded into the new
+    batch — regression test for a data-loss bug where dragging in two
+    files, one sharing its name with an existing table, erased that
+    table with no confirmation."""
+    existing = tmp_path / "sensor.fake"
+    existing.write_bytes(b"old")
+    with pytest.raises(TableAlreadyExistsError):
+        import_new_batch_table(
+            tmp_path, _registry(), {"sensor.fake": b"new", "other.fake": b"y"}, "combo", [existing], [],
+        )
+    assert existing.read_bytes() == b"old"
+    assert not (tmp_path / "other.fake").exists()
+
+
 # --- import_batch_member ----------------------------------------------------
 
 def test_import_batch_member_adds_file_and_config(tmp_path):
