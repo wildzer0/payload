@@ -94,13 +94,19 @@ def test_on_modified_schedules_and_calls_on_change_after_debounce(tmp_path):
 
 def test_rapid_successive_events_debounced_into_one_call(tmp_path):
     on_change = MagicMock()
-    h, _ = _handler(tmp_path, on_change=on_change, debounce=0.05)
+    # debounce kept generous relative to the inter-event sleep below: each
+    # on_modified() must cancel the previous real threading.Timer before it
+    # fires, and on a loaded/throttled CI runner (observed on macOS) the
+    # scheduling overhead between two events can itself grow to tens of ms —
+    # too tight a margin here caused an earlier timer to fire before being
+    # cancelled, coalescing into 2 calls instead of 1.
+    h, _ = _handler(tmp_path, on_change=on_change, debounce=0.3)
     src = tmp_path / "t.raw"
     src.write_text("x")
 
     for _ in range(5):
         h.on_modified(_FakeEvent(str(src)))
-        time.sleep(0.01)
+        time.sleep(0.02)
 
     _wait_until_called(on_change)
     on_change.assert_called_once_with(src)
