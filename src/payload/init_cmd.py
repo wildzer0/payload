@@ -123,7 +123,13 @@ def init_project(
             config_content = _render_toml(writer, byte_order)
         resolved_project_name = project_name or target_dir.resolve().name
         config_content = _render_project_section(resolved_project_name, project_description) + "\n" + config_content
-        config_dest.write_text(config_content)
+        # newline="\n": without it, Path.write_text() translates '\n' to
+        # os.linesep on write (CRLF on Windows), while everything that reads
+        # it back (Path.read_text(), the web source editor's raw_bytes.decode())
+        # doesn't agree on whether that translation happened — LF is forced
+        # here so the file is byte-identical across platforms, matching the
+        # templates in the repo (.gitattributes already forces eol=lf there).
+        config_dest.write_text(config_content, newline="\n")
         created.append(config_dest)
 
     build_dir = target_dir / "build"
@@ -136,13 +142,13 @@ def init_project(
         created.append(local_plugins_dir)
         readme_dest = local_plugins_dir / "README.md"
         if not readme_dest.exists() or force:
-            readme_dest.write_text(LOCAL_PLUGINS_README)
+            readme_dest.write_text(LOCAL_PLUGINS_README, newline="\n")
             created.append(readme_dest)
 
     if include_example:
         example_dest = target_dir / "example_table.raw"
         if not example_dest.exists() or force:
-            example_dest.write_text((templates / "example_table.raw").read_text())
+            example_dest.write_text((templates / "example_table.raw").read_text(), newline="\n")
             created.append(example_dest)
 
     return created

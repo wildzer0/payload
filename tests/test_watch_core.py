@@ -17,6 +17,17 @@ class _FakeEvent:
         self.is_directory = is_directory
 
 
+def _wait_until_called(mock, timeout=2.0, interval=0.01):
+    """Polls instead of a single fixed sleep: a real threading.Timer on a
+    loaded/throttled CI runner (observed on macOS) can fire later than a
+    tight fixed sleep expects, without anything actually being wrong."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if mock.called:
+            return
+        time.sleep(interval)
+
+
 def _handler(tmp_path, on_change=None, debounce=0.03):
     out_dir = tmp_path / "build"
     return _DebouncedTableHandler(
@@ -77,7 +88,7 @@ def test_on_modified_schedules_and_calls_on_change_after_debounce(tmp_path):
     h.on_modified(_FakeEvent(str(src)))
     on_change.assert_not_called()  # not yet, the debounce hasn't expired
 
-    time.sleep(0.1)
+    _wait_until_called(on_change)
     on_change.assert_called_once_with(src)
 
 
@@ -91,7 +102,7 @@ def test_rapid_successive_events_debounced_into_one_call(tmp_path):
         h.on_modified(_FakeEvent(str(src)))
         time.sleep(0.01)
 
-    time.sleep(0.15)
+    _wait_until_called(on_change)
     on_change.assert_called_once_with(src)
 
 
@@ -102,7 +113,7 @@ def test_on_created_delegates_to_on_modified(tmp_path):
     src.write_text("x")
 
     h.on_created(_FakeEvent(str(src)))
-    time.sleep(0.1)
+    _wait_until_called(on_change)
     on_change.assert_called_once_with(src)
 
 
