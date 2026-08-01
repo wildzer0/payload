@@ -42,6 +42,18 @@ pld doctor
 pld build example_table.raw --to bin
 ```
 
+## Web UI (`pld serve`)
+
+`pld serve` starts a local web server with a graphical interface for
+the same operations available on the terminal (build, inspect,
+validate, browse the documentation). It requires the optional `serve`
+extra:
+
+```bash
+pip install ".[serve]"    # or "-e .[serve]" for a development install
+pld serve
+```
+
 ## License
 
 Proprietary, internal use — see [LICENSE](LICENSE).
