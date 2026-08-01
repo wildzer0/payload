@@ -4,6 +4,7 @@ from pathlib import Path
 from payload.core.errors import (
     AmbiguousReaderError,
     BatchBuildError,
+    BatchTableError,
     GoldenMismatchError,
     GoldenMissingError,
     InvalidCliOptionError,
@@ -11,6 +12,7 @@ from payload.core.errors import (
     NothingToCommitError,
     PayloadError,
     PluginApiVersionError,
+    ReaderBatchUnsupportedError,
     ReaderParseError,
     TableNotTrackedError,
 )
@@ -38,6 +40,20 @@ def test_batch_build_error_aggregates_failures():
     batch = BatchBuildError(failures)
     assert "2 tabelle" in batch.message
     assert len(batch.context["failures"]) == 2
+
+
+def test_reader_batch_unsupported_error_names_the_reader():
+    err = ReaderBatchUnsupportedError("simple_text_reader")
+    assert "simple_text_reader" in err.message
+    assert "parse_many" in err.message
+    assert err.exit_code == 1
+
+
+def test_batch_table_error_names_the_batch_and_reason():
+    err = BatchTableError("rows", "sources vuoto dopo l'espansione")
+    assert "rows" in err.message
+    assert "sources vuoto" in err.message
+    assert err.exit_code == 2
 
 
 def test_plugin_api_version_error_message():

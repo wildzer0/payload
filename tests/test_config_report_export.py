@@ -98,7 +98,7 @@ def test_export_project_include_history(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("x")
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [], "v1")
+    history.commit("t", [src], [], "v1")
 
     out_zip = tmp_path / "out.zip"
     export_project(tmp_path, [src], out_zip, include_history=True)

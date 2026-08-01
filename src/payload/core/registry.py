@@ -67,6 +67,17 @@ class PluginRegistry:
 
         raise NoReaderFoundError(path)
 
+    def is_builtin(self, name: str) -> bool:
+        """True per un plugin distribuito con payload stesso (i reader/
+        writer in payload.readers/payload.writers, registrati come
+        entry_points 'payload.*:...' — vedi pyproject.toml). False per
+        un plugin locale (local_plugins/, senza entry point) o per un
+        plugin di terze parti installato via pip: solo i primi contano
+        come 'built-in' agli occhi dell'utente ('plugins list' li mette
+        in secondo piano rispetto ai plugin scritti da lui)."""
+        origin = self._origin.get(name)
+        return origin is not None and origin.module.startswith("payload.")
+
 
 def load_plugins(project_root: Path | None = None, strict: bool = True) -> PluginRegistry:
     """Carica tutti i plugin: prima quelli installati via entry_points

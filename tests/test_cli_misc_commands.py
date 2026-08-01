@@ -155,6 +155,32 @@ def test_watch_on_change_rebuilds_and_prints(tmp_path, monkeypatch, capsys):
     assert "example_table.raw" in out
 
 
+def test_watch_on_change_skips_batch_table_member_file(tmp_path, monkeypatch, capsys):
+    """Regressione: un file che fa parte di una [[batch_table]] non
+    deve essere ricostruito come tabella a sé quando cambia — vedi
+    src/payload/docs/BATCH.md, sezione limiti del watch live-reload."""
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "ROW1.txt").write_text("0x01\n")
+    (proj / "ROW2.txt").write_text("0x02\n")
+    (proj / "table-tool.toml").write_text(
+        (proj / "table-tool.toml").read_text()
+        + '\n[[batch_table]]\nname = "rows"\nsources = ["ROW*.txt"]\n'
+    )
+    captured = {}
+
+    def fake_watch_loop(root, known_ext, out, on_change):
+        captured["on_change"] = on_change
+
+    monkeypatch.setattr("payload.cli.watch_loop", fake_watch_loop)
+    result = runner.invoke(app, ["watch", "."])
+    assert result.exit_code == 0
+
+    captured["on_change"](proj / "ROW1.txt")
+    out = capsys.readouterr().out
+    assert "fa parte di una tabella batch" in out
+    assert not (proj / "build" / "ROW1.bin").exists()
+
+
 # --- pipeline show: rami rimanenti -----------------------------------------
 
 def test_pipeline_show_explicit_exec_stage_and_checkpoint_states(tmp_path, monkeypatch):

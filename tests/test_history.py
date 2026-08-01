@@ -19,7 +19,7 @@ def test_never_committed_table_is_dirty(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("x")
     history = HistoryStore(tmp_path)
-    assert history.is_dirty("t", src) is True
+    assert history.is_dirty("t", [src]) is True
     assert history.last_snapshot("t") is None
 
 
@@ -27,17 +27,17 @@ def test_commit_then_not_dirty(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("x")
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [], "primo")
-    assert history.is_dirty("t", src) is False
+    history.commit("t", [src], [], "primo")
+    assert history.is_dirty("t", [src]) is False
 
 
 def test_modify_after_commit_is_dirty_again(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("x")
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [], "primo")
+    history.commit("t", [src], [], "primo")
     src.write_text("y")
-    assert history.is_dirty("t", src) is True
+    assert history.is_dirty("t", [src]) is True
 
 
 def test_dirty_when_output_changed_but_source_did_not(tmp_path):
@@ -54,9 +54,9 @@ def test_dirty_when_output_changed_but_source_did_not(tmp_path):
     out_bin.write_bytes(b"output bin")
 
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [out_bin], "v1 con writer bin")
+    history.commit("t", [src], [out_bin], "v1 con writer bin")
 
-    assert history.is_dirty("t", src, [out_bin]) is False
+    assert history.is_dirty("t", [src], [out_bin]) is False
 
     # stesso sorgente, writer diverso: file di output diverso (nome ed
     # estensione compresi), 't.bin' precedente resta o meno non conta,
@@ -64,7 +64,7 @@ def test_dirty_when_output_changed_but_source_did_not(tmp_path):
     out_hex = out_dir / "t.hex"
     out_hex.write_bytes(b"output hex, diverso")
 
-    assert history.is_dirty("t", src, [out_hex]) is True
+    assert history.is_dirty("t", [src], [out_hex]) is True
 
 
 def test_dirty_when_output_content_changed_same_filename(tmp_path):
@@ -76,20 +76,20 @@ def test_dirty_when_output_content_changed_same_filename(tmp_path):
     out.write_bytes(b"prima")
 
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [out], "v1")
-    assert history.is_dirty("t", src, [out]) is False
+    history.commit("t", [src], [out], "v1")
+    assert history.is_dirty("t", [src], [out]) is False
 
     out.write_bytes(b"dopo, contenuto diverso")
-    assert history.is_dirty("t", src, [out]) is True
+    assert history.is_dirty("t", [src], [out]) is True
 
 
 def test_commit_ids_increment(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("x")
     history = HistoryStore(tmp_path)
-    s1 = history.commit("t", src, [], "v1")
+    s1 = history.commit("t", [src], [], "v1")
     src.write_text("y")
-    s2 = history.commit("t", src, [], "v2")
+    s2 = history.commit("t", [src], [], "v2")
     assert s1.id == 1
     assert s2.id == 2
 
@@ -150,7 +150,7 @@ def test_head_map_corrupted_falls_back_to_tip(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("v1")
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [], "v1")
+    history.commit("t", [src], [], "v1")
     history._head_path.write_text("{not json")
 
     assert history.head_snapshot_id("t") == 1
@@ -166,16 +166,16 @@ def test_commit_after_restore_clears_head_override(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("v1")
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [], "v1")
+    history.commit("t", [src], [], "v1")
 
     src.write_text("v2")
-    history.commit("t", src, [], "v2")
+    history.commit("t", [src], [], "v2")
 
-    history.restore("t", 1, src, tmp_path / "build")
+    history.restore("t", 1, [src], tmp_path / "build")
     assert history.head_snapshot_id("t") == 1
 
     src.write_text("v3")
-    snap = history.commit("t", src, [], "v3")
+    snap = history.commit("t", [src], [], "v3")
 
     assert snap.id == 3
     assert history.head_snapshot_id("t") == 3
@@ -190,12 +190,12 @@ def test_restore_does_not_create_new_snapshot(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("v1")
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [], "v1")
+    history.commit("t", [src], [], "v1")
     src.write_text("v2")
-    history.commit("t", src, [], "v2")
+    history.commit("t", [src], [], "v2")
 
-    history.restore("t", 1, src, tmp_path / "build")
-    history.restore("t", 2, src, tmp_path / "build")
+    history.restore("t", 1, [src], tmp_path / "build")
+    history.restore("t", 2, [src], tmp_path / "build")
 
     assert len(history.log("t")) == 2
     assert history.head_snapshot_id("t") == 2
@@ -205,7 +205,7 @@ def test_commit_records_reader_and_writers(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("v1")
     history = HistoryStore(tmp_path)
-    snap = history.commit("t", src, [], "v1", reader="raw_text", writers=["bin", "header"])
+    snap = history.commit("t", [src], [], "v1", reader="raw_text", writers=["bin", "header"])
 
     assert snap.reader == "raw_text"
     assert snap.writers == ["bin", "header"]
@@ -230,13 +230,50 @@ def test_old_manifest_without_reader_writer_fields_still_loads(tmp_path):
     assert snap.writers == []
 
 
+def test_old_manifest_is_dirty_still_works_by_value_not_filename(tmp_path):
+    """Regressione: uno snapshot scritto prima delle tabelle batch non
+    conosce il filename reale (solo l'hash, sotto una chiave
+    placeholder) — is_dirty non deve confrontare le CHIAVI in questo
+    caso (fallirebbe sempre, 'placeholder' != 't.raw'), solo il valore."""
+    src = tmp_path / "t.raw"
+    src.write_bytes(b"contenuto invariato")
+    history = HistoryStore(tmp_path)
+    history._ensure_dirs()
+    history._manifest_path("t").write_text(json.dumps([{
+        "id": 1, "timestamp": "2020-01-01T00:00:00", "message": "vecchio",
+        "source_blob": history._write_blob(b"contenuto invariato"), "output_blobs": {},
+    }]))
+
+    assert history.is_dirty("t", [src]) is False
+
+    src.write_bytes(b"contenuto cambiato")
+    assert history.is_dirty("t", [src]) is True
+
+
+def test_old_manifest_restore_still_writes_the_source_by_value(tmp_path):
+    src = tmp_path / "t.raw"
+    history = HistoryStore(tmp_path)
+    history._ensure_dirs()
+    blob_hash = history._write_blob(b"contenuto originale")
+    history._manifest_path("t").write_text(json.dumps([{
+        "id": 1, "timestamp": "2020-01-01T00:00:00", "message": "vecchio",
+        "source_blob": blob_hash, "output_blobs": {},
+    }]))
+
+    src.write_bytes(b"modificato")
+    result = history.restore("t", 1, [src], tmp_path / "build")
+
+    assert src.read_bytes() == b"contenuto originale"
+    assert result.written == [src]
+
+
 def test_log_returns_snapshots_in_order(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("x")
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [], "v1")
+    history.commit("t", [src], [], "v1")
     src.write_text("y")
-    history.commit("t", src, [], "v2")
+    history.commit("t", [src], [], "v2")
 
     log = history.log("t")
     assert [s.message for s in log] == ["v1", "v2"]
@@ -251,12 +288,12 @@ def test_restore_brings_back_source_and_output(tmp_path):
     out.write_bytes(b"output originale")
 
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [out], "v1")
+    history.commit("t", [src], [out], "v1")
 
     src.write_text("modificato")
     out.write_bytes(b"output modificato")
 
-    result = history.restore("t", 1, src, out_dir)
+    result = history.restore("t", 1, [src], out_dir)
 
     assert src.read_text() == "originale"
     assert out.read_bytes() == b"output originale"
@@ -277,15 +314,15 @@ def test_restore_leaves_table_clean_not_dirty(tmp_path):
     out.write_bytes(b"out-v1")
 
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [out], "v1")
+    history.commit("t", [src], [out], "v1")
 
     src.write_text("v2")
     out.write_bytes(b"out-v2")
-    history.commit("t", src, [out], "v2")
+    history.commit("t", [src], [out], "v2")
 
-    history.restore("t", 1, src, out_dir)
+    history.restore("t", 1, [src], out_dir)
 
-    assert history.is_dirty("t", src) is False
+    assert history.is_dirty("t", [src]) is False
     log = history.log("t")
     # il restore NON crea un nuovo snapshot: sposta solo l'attuale
     # indietro, la cronologia resta additiva e invariata.
@@ -312,16 +349,16 @@ def test_restore_removes_orphaned_output_from_a_different_writer(tmp_path):
     out_bin.write_bytes(b"out-bin")
 
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [out_bin], "v1 con writer bin")
+    history.commit("t", [src], [out_bin], "v1 con writer bin")
 
     src.write_text("v2")
     out_header = out_dir / "t.h"
     out_header.write_bytes(b"out-header")
-    history.commit("t", src, [out_header], "v2 con writer header")
+    history.commit("t", [src], [out_header], "v2 con writer header")
 
     assert out_bin.exists() and out_header.exists()  # entrambi presenti prima del restore
 
-    result = history.restore("t", 1, src, out_dir)
+    result = history.restore("t", 1, [src], out_dir)
 
     assert src.read_text() == "v1"
     assert out_bin.exists()
@@ -329,17 +366,37 @@ def test_restore_removes_orphaned_output_from_a_different_writer(tmp_path):
     assert result.removed == [out_header]
 
     current_outputs = list(out_dir.glob("t.*"))
-    assert history.is_dirty("t", src, current_outputs) is False
+    assert history.is_dirty("t", [src], current_outputs) is False
+
+
+def test_restore_skips_filename_absent_from_the_snapshot(tmp_path):
+    """Una tabella batch a cui è stato AGGIUNTO un file membro dopo un
+    commit: quel file non ha un blob in quello snapshot (non esisteva
+    ancora) — restore lo salta con un warning invece di sollevare,
+    ripristinando comunque normalmente gli altri file del batch."""
+    row1 = tmp_path / "ROW1.txt"
+    row3 = tmp_path / "ROW3.txt"
+    row1.write_text("uno")
+    history = HistoryStore(tmp_path)
+    history.commit("rows", [row1], [], "v1, solo ROW1")
+
+    row1.write_text("modificato")
+    row3.write_text("nuovo file, non nello snapshot #1")
+    result = history.restore("rows", 1, [row1, row3], tmp_path / "build")
+
+    assert row1.read_text() == "uno"
+    assert row3.read_text() == "nuovo file, non nello snapshot #1"  # non toccato
+    assert result.written == [row1]
 
 
 def test_restore_unknown_snapshot_raises(tmp_path):
     src = tmp_path / "t.raw"
     src.write_text("x")
     history = HistoryStore(tmp_path)
-    history.commit("t", src, [], "v1")
+    history.commit("t", [src], [], "v1")
 
     with pytest.raises(SnapshotNotFoundError):
-        history.restore("t", 999, src, tmp_path / "build")
+        history.restore("t", 999, [src], tmp_path / "build")
 
 
 def test_identical_content_deduplicates_blobs(tmp_path):
@@ -347,13 +404,77 @@ def test_identical_content_deduplicates_blobs(tmp_path):
     src.write_text("stesso contenuto")
     history = HistoryStore(tmp_path)
 
-    s1 = history.commit("t", src, [], "v1")
-    s2 = history.commit("t", src, [], "v2 nessuna modifica reale")
+    s1 = history.commit("t", [src], [], "v1")
+    s2 = history.commit("t", [src], [], "v2 nessuna modifica reale")
 
-    assert s1.source_blob == s2.source_blob
+    assert s1.source_blobs == s2.source_blobs
     objects_dir = tmp_path / ".payload_history" / "objects"
     blob_files = [p for p in objects_dir.rglob("*") if p.is_file()]
     assert len(blob_files) == 1  # un solo blob su disco, non due
+
+
+# --- tabelle batch (source_paths con N > 1 elementi) ------------------------
+
+
+def test_batch_commit_stores_one_blob_per_source_filename(tmp_path):
+    row1 = tmp_path / "ROW1.txt"
+    row2 = tmp_path / "ROW2.txt"
+    row1.write_text("uno")
+    row2.write_text("due")
+    history = HistoryStore(tmp_path)
+
+    snap = history.commit("rows", [row1, row2], [], "v1")
+
+    assert snap.source_blobs.keys() == {"ROW1.txt", "ROW2.txt"}
+
+
+def test_batch_not_dirty_after_commit_dirty_after_any_member_changes(tmp_path):
+    row1 = tmp_path / "ROW1.txt"
+    row2 = tmp_path / "ROW2.txt"
+    row1.write_text("uno")
+    row2.write_text("due")
+    history = HistoryStore(tmp_path)
+    history.commit("rows", [row1, row2], [], "v1")
+
+    assert history.is_dirty("rows", [row1, row2]) is False
+
+    row2.write_text("due-modificato")
+    assert history.is_dirty("rows", [row1, row2]) is True
+
+
+def test_batch_dirty_when_a_member_file_is_added_or_removed(tmp_path):
+    """Bonus emergente del confronto dict-a-dict: un file aggiunto o
+    rimosso dal batch tra due commit è 'dirty' anche se il contenuto
+    degli altri file non è cambiato, perché le CHIAVI del dict differiscono."""
+    row1 = tmp_path / "ROW1.txt"
+    row2 = tmp_path / "ROW2.txt"
+    row3 = tmp_path / "ROW3.txt"
+    row1.write_text("uno")
+    row2.write_text("due")
+    row3.write_text("tre")
+    history = HistoryStore(tmp_path)
+    history.commit("rows", [row1, row2], [], "v1")
+
+    assert history.is_dirty("rows", [row1, row2, row3]) is True
+    assert history.is_dirty("rows", [row1]) is True
+
+
+def test_batch_restore_writes_back_every_member_file(tmp_path):
+    row1 = tmp_path / "ROW1.txt"
+    row2 = tmp_path / "ROW2.txt"
+    row1.write_text("uno")
+    row2.write_text("due")
+    history = HistoryStore(tmp_path)
+    history.commit("rows", [row1, row2], [], "v1")
+
+    row1.write_text("cambiato")
+    row2.write_text("anche questo")
+
+    result = history.restore("rows", 1, [row1, row2], tmp_path / "build")
+
+    assert row1.read_text() == "uno"
+    assert row2.read_text() == "due"
+    assert set(result.written) == {row1, row2}
 
 
 def test_all_tracked_tables_lists_committed_tables(tmp_path):
@@ -364,8 +485,8 @@ def test_all_tracked_tables_lists_committed_tables(tmp_path):
     src_a.write_text("a")
     src_b = tmp_path / "b.raw"
     src_b.write_text("b")
-    history.commit("a", src_a, [], "v1")
-    history.commit("b", src_b, [], "v1")
+    history.commit("a", [src_a], [], "v1")
+    history.commit("b", [src_b], [], "v1")
 
     assert history.all_tracked_tables() == ["a", "b"]
 

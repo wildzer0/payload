@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from payload.core.cache import BuildCache, compute_cache_key
+from payload.core.cache import BuildCache, compute_cache_key, compute_pipeline_cache_key_multi
 
 
 def test_cache_key_changes_with_reader_or_writer():
@@ -49,3 +49,34 @@ def test_corrupted_cache_file_does_not_crash(tmp_path):
 
     cache = BuildCache(cache_dir)  # non deve sollevare
     assert cache.is_fresh("anything", "anything") is False
+
+
+# --- compute_pipeline_cache_key_multi (tabelle batch) --------------------
+
+
+def test_multi_cache_key_changes_with_content():
+    k1 = compute_pipeline_cache_key_multi([("a.txt", b"1"), ("b.txt", b"2")], "sig", {})
+    k2 = compute_pipeline_cache_key_multi([("a.txt", b"1"), ("b.txt", b"X")], "sig", {})
+    assert k1 != k2
+
+
+def test_multi_cache_key_changes_with_file_order():
+    k1 = compute_pipeline_cache_key_multi([("a.txt", b"1"), ("b.txt", b"2")], "sig", {})
+    k2 = compute_pipeline_cache_key_multi([("b.txt", b"2"), ("a.txt", b"1")], "sig", {})
+    assert k1 != k2
+
+
+def test_multi_cache_key_no_boundary_collision():
+    """['AB','CD'] e ['A','BCD'] non devono produrre la stessa chiave
+    solo perché la concatenazione grezza dei bytes combacerebbe."""
+    k1 = compute_pipeline_cache_key_multi([("a", b"AB"), ("b", b"CD")], "sig", {})
+    k2 = compute_pipeline_cache_key_multi([("a", b"A"), ("b", b"BCD")], "sig", {})
+    assert k1 != k2
+
+
+def test_multi_cache_key_changes_with_stage_signature_and_config():
+    named = [("a.txt", b"1")]
+    k1 = compute_pipeline_cache_key_multi(named, "sig1", {})
+    k2 = compute_pipeline_cache_key_multi(named, "sig2", {})
+    k3 = compute_pipeline_cache_key_multi(named, "sig1", {"flag": 1})
+    assert len({k1, k2, k3}) == 3

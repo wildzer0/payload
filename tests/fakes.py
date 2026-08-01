@@ -43,6 +43,33 @@ class FakeWriter:
         return out_path
 
 
+class FakeBatchReader:
+    """Come FakeReader, ma supporta anche parse_many (batch table, vedi
+    src/payload/docs/BATCH.md): concatena il contenuto testuale di ogni
+    file NELL'ORDINE DATO, separato da '|' per rendere l'ordine
+    verificabile facilmente nei test."""
+
+    name = "fake_batch_reader"
+    extensions = [".fakebatch"]
+    api_version = PLUGIN_API_VERSION
+
+    def sniff(self, path: Path) -> bool:
+        return False
+
+    def parse(self, path: Path, config: dict) -> TableIR:
+        return TableIR(
+            name=path.stem, data=path.read_text().encode(),
+            source_path=path, source_format=self.name,
+        )
+
+    def parse_many(self, paths: list[Path], config: dict) -> TableIR:
+        content = "|".join(p.read_text() for p in paths)
+        return TableIR(
+            name=paths[0].stem, data=content.encode(),
+            source_path=paths[0], source_format=self.name,
+        )
+
+
 class BrokenReader:
     """Reader che fallisce sempre — usato per testare la propagazione errori."""
 

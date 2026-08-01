@@ -13,18 +13,26 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from payload.core.config import load_config
-from payload.core.discovery import discover_for_history
+from payload.core.discovery import discover_for_history, resolve_table_ref
 from payload.core.errors import TableNotFoundError
 from payload.core.registry import load_plugins
 from payload.testing import check_reader_behavior, check_reader_structure
 from payload.web.errors import InvalidRequestError
 
 
-def _find_source(sources: list[Path], table_name: str) -> Path:
-    src = next((s for s in sources if s.stem == table_name), None)
-    if src is None:
+def _find_source(sources: list[Path], batch_tables: list, table_name: str) -> Path:
+    """Le tabelle batch (N file) non hanno UN sorgente da mostrare in
+    un editor a singolo file — vedi src/payload/docs/BATCH.md, editing
+    del sorgente non supportato per queste tabelle in v1."""
+    ref = resolve_table_ref(sources, batch_tables, table_name)
+    if ref is None:
         raise TableNotFoundError(table_name)
-    return src
+    if ref.is_batch:
+        raise InvalidRequestError(
+            f"'{table_name}' è una tabella batch ({len(ref.source_paths)} file): "
+            "l'editor sorgente supporta solo tabelle a file singolo"
+        )
+    return ref.source_paths[0]
 
 
 async def source_get(request: Request) -> JSONResponse:
@@ -32,8 +40,8 @@ async def source_get(request: Request) -> JSONResponse:
     table = request.path_params["table_name"]
 
     def _run():
-        sources, _ = discover_for_history(root)
-        src = _find_source(sources, table)
+        sources, batch_tables, _ = discover_for_history(root)
+        src = _find_source(sources, batch_tables, table)
         raw_bytes = src.read_bytes()
         try:
             text = raw_bytes.decode("utf-8")
@@ -56,8 +64,8 @@ async def source_put(request: Request) -> JSONResponse:
     table = request.path_params["table_name"]
 
     def _run():
-        sources, _ = discover_for_history(root)
-        src = _find_source(sources, table)
+        sources, batch_tables, _ = discover_for_history(root)
+        src = _find_source(sources, batch_tables, table)
         src.write_text(content, encoding="utf-8")
         return {"table": table, "path": str(src), "saved": True, "size": src.stat().st_size}
 
@@ -78,8 +86,8 @@ async def source_validate(request: Request) -> JSONResponse:
     table = request.path_params["table_name"]
 
     def _run():
-        sources, _ = discover_for_history(root)
-        src = _find_source(sources, table)
+        sources, batch_tables, _ = discover_for_history(root)
+        src = _find_source(sources, batch_tables, table)
         table_config = load_config(root, source_path=src)
         registry = load_plugins(strict=False, project_root=root)
         reader = registry.find_reader(src, table_config.defaults.reader)

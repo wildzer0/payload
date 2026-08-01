@@ -260,6 +260,41 @@ class LocalPluginDepsCheck:
         return CheckResult(self.name, CheckStatus.OK, "nessuna dipendenza mancante nei plugin locali")
 
 
+class LocalPluginStubCheck:
+    """Segnala plugin locali che sono ancora scaffold incompleti — il
+    corpo di parse/emit/run è ancora 'raise NotImplementedError(...)',
+    quello che 'pld plugin new-local' genera prima di essere davvero
+    scritto. Non bloccante (WARN): il plugin semplicemente non
+    funziona ancora, non è un bug di payload — ma senza questo check
+    l'unico modo di scoprirlo era farlo esplodere durante una build
+    vera (vedi ReaderParseError/WriterEmitError in core/pipeline.py)."""
+
+    name = "local_plugin_stubs"
+    api_version = "1.0"
+
+    def run(self, config: dict) -> CheckResult:
+        from payload.core.local_plugins import discover_local_plugin_dirs, find_stub_methods
+
+        project_root = Path(config.get("_project_root", "."))
+        problems = []
+
+        for plugin_dir in discover_local_plugin_dirs(project_root):
+            for py_file in sorted(plugin_dir.glob("*.py")):
+                if py_file.name.startswith("_"):
+                    continue
+                stub_methods = find_stub_methods(py_file)
+                if stub_methods:
+                    problems.append(f"{py_file.name} ({', '.join(stub_methods)})")
+
+        if problems:
+            return CheckResult(
+                self.name, CheckStatus.WARN,
+                f"{len(problems)} plugin locali ancora da implementare: {', '.join(problems)}",
+                hint="Completa il/i metodo/i indicati, o elimina il file se non serve più — vedi PLUGINS.md, sezione DoctorCheck",
+            )
+        return CheckResult(self.name, CheckStatus.OK, "nessuno scaffold incompleto tra i plugin locali")
+
+
 class GitCheck:
     """Verifica se git è disponibile. Non bloccante: payload funziona
     anche senza (la history in .payload_history/ è indipendente da
@@ -341,6 +376,7 @@ def builtin_checks() -> list:
         ConfigValidityCheck(),
         TableNameUniquenessCheck(),
         LocalPluginDepsCheck(),
+        LocalPluginStubCheck(),
         GitCheck(),
         PipelineExecStagesCheck(),
         DirWritableCheck(),
@@ -352,4 +388,21 @@ def run_doctor(config: dict, registry: PluginRegistry | None = None) -> list[Che
     checks = builtin_checks()
     if registry is not None:
         checks.extend(registry.doctor_checks.values())
-    return [check.run(config) for check in checks]
+
+    results = []
+    for check in checks:
+        try:
+            results.append(check.run(config))
+        except Exception as e:
+            # Un check di terze parti (builtin_checks non solleva mai
+            # nulla di grezzo) può essere uno scaffold locale ancora in
+            # TODO — un check che esplode non deve far esplodere l'intero
+            # 'pld doctor'/'GET /api/doctor', altrimenti l'utente perde
+            # visibilità su TUTTI gli altri check solo per colpa di uno.
+            results.append(CheckResult(
+                getattr(check, "name", type(check).__name__),
+                CheckStatus.FAIL,
+                f"il check ha sollevato un errore inatteso ({type(e).__name__}): {e}",
+                hint="Se è un plugin locale appena creato, potrebbe essere ancora uno scaffold incompleto — vedi PLUGINS.md, sezione DoctorCheck",
+            ))
+    return results

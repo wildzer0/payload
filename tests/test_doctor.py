@@ -8,6 +8,7 @@ from payload.core.doctor import (
     DirWritableCheck,
     GitCheck,
     LocalPluginDepsCheck,
+    LocalPluginStubCheck,
     PipelineExecStagesCheck,
     PluginLoadCheck,
     TableNameUniquenessCheck,
@@ -230,6 +231,58 @@ def test_local_plugin_deps_check_ignores_files_without_requires(tmp_path):
     assert result.status == CheckStatus.OK
 
 
+# --- LocalPluginStubCheck ------------------------------------------------------
+
+def test_local_plugin_stub_check_ok_with_no_local_plugins(tmp_path):
+    result = LocalPluginStubCheck().run({"_project_root": str(tmp_path)})
+    assert result.status == CheckStatus.OK
+
+
+def test_local_plugin_stub_check_warns_on_scaffold(tmp_path):
+    from payload.plugin_scaffold import scaffold_local_plugin
+
+    scaffold_local_plugin("my_reader", "reader", tmp_path / "local_plugins")
+
+    result = LocalPluginStubCheck().run({"_project_root": str(tmp_path)})
+
+    assert result.status == CheckStatus.WARN
+    assert "my_reader.py" in result.message
+    assert "parse" in result.message
+
+
+def test_local_plugin_stub_check_ok_for_implemented_plugin(tmp_path):
+    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "upper.py").write_text(
+        "class X:\n"
+        "    name = 'x'\n"
+        "    extension = '.x'\n"
+        "    api_version = '1.0'\n"
+        "    def emit(self, ir, out_path, config):\n"
+        "        out_path.write_bytes(ir.data)\n"
+        "        return out_path\n"
+        "WRITER = X\n"
+    )
+
+    result = LocalPluginStubCheck().run({"_project_root": str(tmp_path)})
+
+    assert result.status == CheckStatus.OK
+
+
+def test_local_plugin_stub_check_ignores_underscore_prefixed_files(tmp_path):
+    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "_helper.py").write_text(
+        "class X:\n"
+        "    def run(self, config):\n"
+        "        raise NotImplementedError\n"
+    )
+
+    result = LocalPluginStubCheck().run({"_project_root": str(tmp_path)})
+
+    assert result.status == CheckStatus.OK
+
+
 # --- GitCheck (rami non coperti dai test con git reale) -----------------------
 
 def test_git_check_warns_when_git_missing(tmp_path):
@@ -292,7 +345,8 @@ def test_builtin_checks_returns_all_expected_checks():
     names = {c.name for c in checks}
     assert names == {
         "toolchain", "plugins", "config", "table_names",
-        "local_plugin_deps", "git", "pipeline_exec", "directories", "cache",
+        "local_plugin_deps", "local_plugin_stubs", "git", "pipeline_exec",
+        "directories", "cache",
     }
 
 
@@ -318,3 +372,29 @@ def test_run_doctor_includes_registry_doctor_checks(tmp_path, monkeypatch):
 
     assert len(results) == len(builtin_checks()) + 1
     assert any(r.name == "custom" for r in results)
+
+
+def test_run_doctor_converts_raw_exception_from_a_check_into_fail_result(tmp_path, monkeypatch):
+    """Regressione trovata dall'utente: un doctor check di terze parti
+    (es. uno scaffold locale con 'raise NotImplementedError' al posto
+    di un run() vero) non deve far esplodere 'pld doctor'/'GET
+    /api/doctor' — deve diventare un FAIL leggibile fra gli altri
+    risultati, lasciando visibili tutti gli altri check."""
+    class _CrashingCheck:
+        name = "crashing"
+        api_version = "1.0"
+
+        def run(self, config):
+            raise NotImplementedError("TODO: implementa il check")
+
+    monkeypatch.chdir(tmp_path)
+    registry = PluginRegistry()
+    registry.register_doctor_check(_CrashingCheck())
+
+    results = run_doctor({"_project_root": str(tmp_path)}, registry=registry)
+
+    assert len(results) == len(builtin_checks()) + 1
+    crashed = next(r for r in results if r.name == "crashing")
+    assert crashed.status == CheckStatus.FAIL
+    assert "NotImplementedError" in crashed.message
+    assert crashed.hint is not None

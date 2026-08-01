@@ -16,12 +16,14 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from payload.core.cache import BuildCache, compute_pipeline_cache_key
+from payload.core.cache import BuildCache, compute_pipeline_cache_key, compute_pipeline_cache_key_multi
 from payload.core.errors import (
     FanOutWriteError,
     InvalidPipelineError,
     NoWriterFoundError,
     PayloadError,
+    ReaderBatchUnsupportedError,
+    ReaderParseError,
     SourceNotFoundError,
     ToolchainExecutionError,
     WriterEmitError,
@@ -102,21 +104,25 @@ def validate_pipeline_against_registry(spec: PipelineSpec, registry: PluginRegis
 
 
 def final_output_paths(
-    spec: PipelineSpec, source_path: Path, out_dir: Path, registry: PluginRegistry
+    spec: PipelineSpec, table_stem: str, out_dir: Path, registry: PluginRegistry
 ) -> list[Path]:
     """Un path per ogni stage terminale della pipeline — normalmente
     uno solo, ma un fan-out (reader -> più writer consecutivi) ne
-    produce uno per writer, tutti dalla stessa IR."""
+    produce uno per writer, tutti dalla stessa IR. table_stem è il nome
+    logico della tabella (stem del sorgente per una tabella normale,
+    BatchTable.name per una tabella batch — vedi core/batch_tables.py):
+    questa funzione non ha bisogno di sapere quale dei due sia, solo il
+    nome che finisce nel filename di output."""
     last = spec.stages[-1]
     if isinstance(last, WriterStage):
         start = spec.terminal_writer_start()
         return [
-            out_dir / f"{source_path.stem}{registry.writers[s.name].extension}"
+            out_dir / f"{table_stem}{registry.writers[s.name].extension}"
             for s in spec.stages[start:]
         ]
     # ExecStage come ultimo stage: validate_alternation garantisce che
     # output_extension sia sempre presente a questo punto.
-    return [out_dir / f"{source_path.stem}{last.output_extension}"]
+    return [out_dir / f"{table_stem}{last.output_extension}"]
 
 
 def resolve_table_outputs(
@@ -141,7 +147,7 @@ def resolve_table_outputs(
         validate_pipeline_against_registry(spec, registry)
     except PayloadError:
         return [], None, []
-    out_paths = final_output_paths(spec, source_path, out_dir, registry)
+    out_paths = final_output_paths(spec, source_path.stem, out_dir, registry)
     reader = next((s.name for s in spec.stages if isinstance(s, ReaderStage)), None)
     writers = [s.name for s in spec.stages if isinstance(s, WriterStage)]
     return out_paths, reader, writers
@@ -175,7 +181,8 @@ def describe_pipeline(spec: PipelineSpec) -> str:
 
 
 def describe_table_build(
-    source_path: Path, registry: PluginRegistry, config: "PayloadConfig", output_paths: list[Path], out_dir: Path
+    source_paths: list[Path], registry: PluginRegistry, config: "PayloadConfig",
+    output_paths: list[Path], out_dir: Path, table_name: str | None = None,
 ) -> dict:
     """Descrive ESATTAMENTE come sono stati prodotti gli output che si
     stanno per committare — usato per annotare uno snapshot in modo
@@ -197,18 +204,23 @@ def describe_table_build(
     FanOutWriteError): se un writer del gruppo è fallito, il suo file
     semplicemente non esiste su disco e non finisce in output_paths,
     ma la pipeline configurata continua ad aspettarselo. Committare
-    comunque lo stato parziale non deve passare inosservato."""
+    comunque lo stato parziale non deve passare inosservato.
+
+    source_paths/table_name: come build() — table_name=None deduce lo
+    stem dal (singolo) source_paths[0], una tabella batch lo passa
+    sempre esplicito (il nome non è dedotto da nessun filename)."""
+    table_name = table_name or source_paths[0].stem
     pipeline_explicit = bool(config.pipeline_stages)
     reader = None
     pipeline_description = None
     missing_outputs: list[str] = []
     try:
-        spec = resolve_pipeline_spec(source_path, registry, config, None, None)
+        spec = resolve_pipeline_spec(source_paths[0], registry, config, None, None)
         validate_pipeline_against_registry(spec, registry)
         reader = next((s.name for s in spec.stages if isinstance(s, ReaderStage)), None)
         if pipeline_explicit:
             pipeline_description = describe_pipeline(spec)
-        expected = final_output_paths(spec, source_path, out_dir, registry)
+        expected = final_output_paths(spec, table_name, out_dir, registry)
         committed_names = {p.name for p in output_paths}
         missing_outputs = [p.name for p in expected if p.name not in committed_names]
     except PayloadError:
@@ -239,13 +251,12 @@ def _stage_artifact_dir(cache: BuildCache) -> Path:
     return d
 
 
-def _stage_checkpoint_key(table_key: str, stage_index: int) -> str:
-    return f"{table_key}::stage{stage_index}"
+def _stage_checkpoint_key(table_name: str, stage_index: int) -> str:
+    return f"{table_name}::stage{stage_index}"
 
 
 def _persist_stage_checkpoint(
     spec: PipelineSpec,
-    table_key: str,
     table_name: str,
     stage_index: int,
     emitted_path: Path,
@@ -264,12 +275,12 @@ def _persist_stage_checkpoint(
     checkpoint_key = compute_pipeline_cache_key(
         source_bytes, spec.signature_prefix(stage_index), config_dict
     )
-    cache.update(_stage_checkpoint_key(table_key, stage_index), checkpoint_key, persisted_path)
+    cache.update(_stage_checkpoint_key(table_name, stage_index), checkpoint_key, persisted_path)
     logger.debug("Checkpoint stage %d salvato: %s", stage_index, persisted_path)
 
 
 def _find_resumable_checkpoint(
-    spec: PipelineSpec, table_key: str, source_bytes: bytes, config_dict: dict, cache: BuildCache
+    spec: PipelineSpec, table_name: str, source_bytes: bytes, config_dict: dict, cache: BuildCache
 ) -> tuple[int, Path] | None:
     """Cerca il checkpoint valido più avanzato da cui riprendere,
     partendo dall'ultimo stage e scendendo — il primo che trova valido
@@ -283,7 +294,7 @@ def _find_resumable_checkpoint(
         checkpoint_key = compute_pipeline_cache_key(
             source_bytes, spec.signature_prefix(i), config_dict
         )
-        stage_table_key = _stage_checkpoint_key(table_key, i)
+        stage_table_key = _stage_checkpoint_key(table_name, i)
         if cache.is_fresh(stage_table_key, checkpoint_key):
             path = cache.get_output_path(stage_table_key)
             if path is not None and path.exists():
@@ -334,7 +345,8 @@ def _run_exec_stage(stage: ExecStage, input_path: Path, output_path: Path, table
 
 def _execute_stages(
     spec: PipelineSpec,
-    source_path: Path,
+    source_paths: list[Path],
+    table_name: str,
     registry: PluginRegistry,
     config_dict: dict,
     tmp_dir: Path,
@@ -343,17 +355,16 @@ def _execute_stages(
     source_bytes: bytes | None = None,
     force: bool = False,
 ) -> list[Path]:
-    table_name = source_path.stem
+    is_batch = len(source_paths) > 1
     n_stages = len(spec.stages)
-    table_key = str(source_path)
     terminal_start = spec.terminal_writer_start()
 
     start_index = 0
-    current_path: Path | None = source_path
+    current_path: Path | None = None if is_batch else source_paths[0]
     current_ir: TableIR | None = None
 
     if cache is not None and not force and source_bytes is not None:
-        resumable = _find_resumable_checkpoint(spec, table_key, source_bytes, config_dict, cache)
+        resumable = _find_resumable_checkpoint(spec, table_name, source_bytes, config_dict, cache)
         if resumable is not None:
             checkpoint_index, checkpoint_path = resumable
             logger.debug(
@@ -372,7 +383,24 @@ def _execute_stages(
             reader = registry.readers[stage.name]
             logger.debug("Stage %d/%d: reader '%s'", i + 1, n_stages, stage.name)
             t0 = time.perf_counter()
-            current_ir = reader.parse(current_path, config_dict)
+            try:
+                if is_batch:
+                    current_ir = reader.parse_many(source_paths, config_dict)
+                else:
+                    current_ir = reader.parse(current_path, config_dict)
+            except PayloadError:
+                raise
+            except Exception as e:
+                # Un plugin (spesso un local_plugin appena creato dallo
+                # scaffold, mai completato) può sollevare QUALSIASI
+                # eccezione — senza questo, un 'raise NotImplementedError'
+                # dimenticato in parse()/parse_many() finirebbe crudo
+                # davanti all'utente come se fosse un bug interno di payload.
+                raise ReaderParseError(
+                    current_path if current_path is not None else Path(f"<batch:{table_name}>"),
+                    f"il reader '{stage.name}' ha sollevato un errore inatteso ({type(e).__name__}): {e}",
+                    hint="Se è un plugin locale appena creato, potrebbe essere ancora uno scaffold incompleto",
+                ) from e
             logger.debug("Parse completato in %.3fs", time.perf_counter() - t0)
             current_path = None
             i += 1
@@ -407,10 +435,23 @@ def _execute_stages(
                 t0 = time.perf_counter()
                 try:
                     emitted = writer.emit(current_ir, stage_out, config_dict)
-                except Exception as e:
+                except PayloadError as e:
                     if not resilient:
                         raise
-                    fan_out_failures.append((writer_stage.name, getattr(e, "message", str(e))))
+                    fan_out_failures.append((writer_stage.name, e.message))
+                    i += 1
+                    continue
+                except Exception as e:
+                    # Stesso discorso del reader sopra: un plugin
+                    # incompleto/buggy non deve mai produrre un
+                    # traceback crudo, wrappiamo in un errore chiaro.
+                    if not resilient:
+                        raise WriterEmitError(
+                            writer_stage.name,
+                            f"errore inatteso ({type(e).__name__}): {e}",
+                            hint="Se è un plugin locale appena creato, potrebbe essere ancora uno scaffold incompleto",
+                        ) from e
+                    fan_out_failures.append((writer_stage.name, f"{type(e).__name__}: {e}"))
                     i += 1
                     continue
                 logger.debug("Emit completato in %.3fs", time.perf_counter() - t0)
@@ -426,7 +467,7 @@ def _execute_stages(
                     # solo se questo era l'ultimo stage, che qui non è.
                     if cache is not None:
                         _persist_stage_checkpoint(
-                            spec, table_key, table_name, i, emitted, config_dict, source_bytes, cache
+                            spec, table_name, i, emitted, config_dict, source_bytes, cache
                         )
                 i += 1
             if fan_out_failures:
@@ -442,7 +483,7 @@ def _execute_stages(
                 results.append(current_path)
             elif cache is not None:
                 _persist_stage_checkpoint(
-                    spec, table_key, table_name, i, current_path, config_dict, source_bytes, cache
+                    spec, table_name, i, current_path, config_dict, source_bytes, cache
                 )
             i += 1
 
@@ -450,7 +491,7 @@ def _execute_stages(
 
 
 def build(
-    source_path: Path,
+    source_paths: list[Path],
     registry: PluginRegistry,
     config: "PayloadConfig",
     out_dir: Path,
@@ -461,36 +502,58 @@ def build(
     dry_run: bool = False,
     cli_opts: dict | None = None,
     keep_intermediate: bool = False,
+    table_name: str | None = None,
 ) -> tuple[list[Path], bool]:
     """Ritorna (output_paths, was_built). was_built=False se servito da
     cache. output_paths ha un solo elemento nel caso comune, più di uno
     se la pipeline termina in un fan-out (reader -> più writer).
 
+    source_paths: normalmente un solo file (il caso comune, comportamento
+    identico in tutto e per tutto a prima); più di uno per una tabella
+    batch (vedi src/payload/docs/BATCH.md) — in quel caso il reader
+    risolto DEVE esporre parse_many(paths, config), altrimenti
+    ReaderBatchUnsupportedError. table_name: None deduce lo stem dal
+    (singolo) source_paths[0], come sempre; una tabella batch lo passa
+    sempre esplicito, dato che non c'è nessuno stem da cui dedurlo.
+
     cli_opts: override una tantum da --opt chiave=valore, validi solo
     per questa invocazione. keep_intermediate: non ripulisce tmp/ dopo
     la build, utile per ispezionare i file intermedi di una pipeline
     multi-stage in fase di debug."""
-    if not source_path.exists():
-        raise SourceNotFoundError(source_path)
+    is_batch = len(source_paths) > 1
+    missing = next((p for p in source_paths if not p.exists()), None)
+    if missing is not None:
+        raise SourceNotFoundError(missing)
 
-    token = current_table.set(source_path.stem)
+    table_name = table_name or source_paths[0].stem
+    token = current_table.set(table_name)
     try:
-        spec = resolve_pipeline_spec(source_path, registry, config, reader_name, writer_name)
+        spec = resolve_pipeline_spec(source_paths[0], registry, config, reader_name, writer_name)
         validate_pipeline_against_registry(spec, registry)
 
-        source_bytes = source_path.read_bytes()
+        if is_batch:
+            reader_stage_name = spec.stages[0].name
+            if getattr(registry.readers[reader_stage_name], "parse_many", None) is None:
+                raise ReaderBatchUnsupportedError(reader_stage_name)
+
         config_dict = config.model_dump()
         if cli_opts:
             config_dict["cli_opts"] = cli_opts
 
-        cache_key = compute_pipeline_cache_key(source_bytes, spec.cache_signature(), config_dict)
-        table_key = str(source_path)
-        out_paths = final_output_paths(spec, source_path, out_dir, registry)
+        if is_batch:
+            source_bytes = None
+            named_sources = sorted((p.name, p.read_bytes()) for p in source_paths)
+            cache_key = compute_pipeline_cache_key_multi(named_sources, spec.cache_signature(), config_dict)
+        else:
+            source_bytes = source_paths[0].read_bytes()
+            cache_key = compute_pipeline_cache_key(source_bytes, spec.cache_signature(), config_dict)
+
+        out_paths = final_output_paths(spec, table_name, out_dir, registry)
 
         if not dry_run:
-            _clean_stale_outputs(out_dir, source_path.stem, {p.name for p in out_paths})
+            _clean_stale_outputs(out_dir, table_name, {p.name for p in out_paths})
 
-        if cache is not None and not force and cache.is_fresh(table_key, cache_key):
+        if cache is not None and not force and cache.is_fresh(table_name, cache_key):
             logger.info("Cache hit, skip build")
             return out_paths, False
 
@@ -499,12 +562,12 @@ def build(
             return out_paths, True
 
         out_dir.mkdir(parents=True, exist_ok=True)
-        tmp_dir = source_path.parent / "tmp"
+        tmp_dir = out_dir / f".tmp_{table_name}" if is_batch else source_paths[0].parent / "tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
 
         try:
             result_paths = _execute_stages(
-                spec, source_path, registry, config_dict, tmp_dir, out_paths,
+                spec, source_paths, table_name, registry, config_dict, tmp_dir, out_paths,
                 cache=cache, source_bytes=source_bytes, force=force,
             )
         finally:
@@ -512,9 +575,9 @@ def build(
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
         if cache is not None:
-            cache.update(table_key, cache_key, result_paths)
+            cache.update(table_name, cache_key, result_paths)
 
-        logger.info("Build completata: %s -> %s", source_path.name, result_paths)
+        logger.info("Build completata: %s -> %s", table_name, result_paths)
         return result_paths, True
     finally:
         current_table.reset(token)

@@ -89,7 +89,7 @@ def test_uses_reader_default_writer_when_nothing_else_specified(tmp_path, regist
     src = tmp_path / "t.wd"
     src.write_text("x")
 
-    out_paths, built = build(src, registry, _FakeConfig(), tmp_path / "out")
+    out_paths, built = build([src], registry, _FakeConfig(), tmp_path / "out")
 
     assert out_paths[0].suffix == ".out"
 
@@ -98,7 +98,7 @@ def test_explicit_to_wins_over_reader_default(tmp_path, registry):
     src = tmp_path / "t.wd"
     src.write_text("x")
 
-    out_paths, built = build(src, registry, _FakeConfig(), tmp_path / "out", writer_name="picky")
+    out_paths, built = build([src], registry, _FakeConfig(), tmp_path / "out", writer_name="picky")
 
     assert out_paths[0].suffix == ".picky"
 
@@ -107,7 +107,7 @@ def test_config_writer_wins_over_reader_default(tmp_path, registry):
     src = tmp_path / "t.wd"
     src.write_text("x")
 
-    out_paths, built = build(src, registry, _FakeConfig(writer="picky"), tmp_path / "out")
+    out_paths, built = build([src], registry, _FakeConfig(writer="picky"), tmp_path / "out")
 
     assert out_paths[0].suffix == ".picky"
 
@@ -117,7 +117,7 @@ def test_no_writer_resolvable_raises_clear_error(tmp_path, registry):
     src.write_text("x")
 
     with pytest.raises(WriterNotSpecifiedError):
-        build(src, registry, _FakeConfig(), tmp_path / "out")
+        build([src], registry, _FakeConfig(), tmp_path / "out")
 
 
 def test_incompatible_writer_rejected_before_parsing(tmp_path, registry):
@@ -126,7 +126,7 @@ def test_incompatible_writer_rejected_before_parsing(tmp_path, registry):
     picky = registry.writers["picky"]
 
     with pytest.raises(WriterEmitError):
-        build(src, registry, _FakeConfig(), tmp_path / "out", writer_name="picky")
+        build([src], registry, _FakeConfig(), tmp_path / "out", writer_name="picky")
 
     assert picky.called is False  # emit() non deve mai essere invocato
 
@@ -135,7 +135,7 @@ def test_compatible_writer_accepted(tmp_path, registry):
     src = tmp_path / "t.wd"  # reader_with_default, COMPATIBILE con 'picky'
     src.write_text("x")
 
-    out_paths, built = build(src, registry, _FakeConfig(), tmp_path / "out", writer_name="picky")
+    out_paths, built = build([src], registry, _FakeConfig(), tmp_path / "out", writer_name="picky")
 
     assert out_paths[0].suffix == ".picky"
 
@@ -165,7 +165,7 @@ def test_ambiguous_extension_raises_without_reader_default(tmp_path):
     src.write_text("x")
 
     with pytest.raises(AmbiguousReaderError):
-        build(src, r, _FakeConfig(), tmp_path / "out")
+        build([src], r, _FakeConfig(), tmp_path / "out")
 
 
 def test_config_defaults_reader_resolves_ambiguous_extension(tmp_path):
@@ -176,7 +176,7 @@ def test_config_defaults_reader_resolves_ambiguous_extension(tmp_path):
     src = tmp_path / "t.wd"
     src.write_text("x")
 
-    out_paths, built = build(src, r, _FakeConfig(reader="reader_alt"), tmp_path / "out")
+    out_paths, built = build([src], r, _FakeConfig(reader="reader_alt"), tmp_path / "out")
 
     assert out_paths[0].read_bytes() == b"alt"
 
@@ -189,6 +189,6 @@ def test_explicit_from_wins_over_config_defaults_reader(tmp_path):
     src = tmp_path / "t.wd"
     src.write_text("x")
 
-    out_paths, built = build(src, r, _FakeConfig(reader="reader_alt"), tmp_path / "out", reader_name="reader_with_default")
+    out_paths, built = build([src], r, _FakeConfig(reader="reader_alt"), tmp_path / "out", reader_name="reader_with_default")
 
     assert out_paths[0].read_bytes() == b"x"

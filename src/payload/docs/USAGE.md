@@ -97,12 +97,22 @@ combinato con `--wizard` salta tutte le domande e usa i default —
 utile per script/automazione che vogliono comunque lo scaffold "completo"
 del wizard senza interazione.
 
-### `pld build <sorgente> [opzioni]`
+### `pld build <sorgente|nome-tabella-batch> [opzioni]`
 
 Compila una singola tabella. Internamente esegue sempre una
 **pipeline** — implicita a 2 stage (`--from`/`--to`, il caso comune) o
 esplicita se la tabella ha una sezione `[pipeline]` in config, vedi
 [PIPELINE.md](PIPELINE.md).
+
+Il primo argomento è di solito un percorso file. Se non esiste come
+file, viene cercato per nome tra le tabelle batch dichiarate in
+`[[batch_table]]` (vedi [BATCH.md](BATCH.md)) — una tabella logica
+costruita da più file sorgente invece di uno solo:
+
+```bash
+pld build sensori/rows.txt --to bin   # file singolo
+pld build rows --to bin               # nome di una [[batch_table]]
+```
 
 | Opzione | Default | Significato |
 |---|---|---|
@@ -473,6 +483,11 @@ specifiche di un plugin (non validata dal core) — vedi
 Una quarta, `[pipeline]`, dichiara una pipeline esplicita per la
 tabella (invece della coppia implicita reader/writer da `--from`/`--to`)
 — vedi [PIPELINE.md](PIPELINE.md) per il design completo, con esempi.
+
+Una quinta, `[[batch_table]]` (solo nel `table-tool.toml` globale, mai
+in un sidecar), dichiara una tabella logica costruita da **più file
+sorgente** invece di uno solo — vedi [BATCH.md](BATCH.md) per il design
+completo, con esempi.
 
 ---
 

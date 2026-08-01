@@ -203,6 +203,26 @@ def test_doctor_missing_toolchain_exits_cleanly_no_traceback(tmp_path, monkeypat
     assert "Traceback" not in result.stdout
 
 
+def test_doctor_survives_unimplemented_local_doctor_check(tmp_path, monkeypatch):
+    """Regressione trovata dall'utente: 'pld doctor' con un plugin
+    DOCTOR_CHECK locale creato ma non implementato (scaffold con 'raise
+    NotImplementedError') doveva uscire pulito, non con un traceback."""
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init", "proj"])
+    proj = tmp_path / "proj"
+    from payload.plugin_scaffold import scaffold_local_plugin
+
+    scaffold_local_plugin("new_check", "doctor-check", proj / "local_plugins")
+    monkeypatch.chdir(proj)
+
+    result = runner.invoke(app, ["doctor"])
+
+    combined = result.stdout + result.stderr
+    assert "Traceback" not in combined
+    assert "new_check" in result.stdout
+    assert "NotImplementedError" in result.stdout
+
+
 def test_plugin_new_creates_scaffold(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["plugin", "new", "payload-writer-testx", "--kind", "writer"])

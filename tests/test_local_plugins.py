@@ -7,6 +7,7 @@ from payload.core.errors import PluginLoadError
 from payload.core.local_plugins import (
     discover_local_plugin_dirs,
     extract_plugin_classes,
+    find_stub_methods,
     list_local_plugin_files,
     load_local_plugins,
     load_module_from_file,
@@ -242,3 +243,109 @@ def test_list_local_plugin_files_excludes_underscore_prefixed(tmp_path):
     files = list_local_plugin_files(tmp_path)
 
     assert [f.name for f in files] == ["upper.py"]
+
+
+# --- find_stub_methods (scaffold non implementato) ---------------------------
+
+
+def test_find_stub_methods_detects_scaffolded_reader(tmp_path):
+    from payload.plugin_scaffold import scaffold_local_plugin
+
+    path = scaffold_local_plugin("my_reader", "reader", tmp_path)
+    assert find_stub_methods(path) == ["parse"]
+
+
+def test_find_stub_methods_detects_scaffolded_writer(tmp_path):
+    from payload.plugin_scaffold import scaffold_local_plugin
+
+    path = scaffold_local_plugin("my_writer", "writer", tmp_path)
+    assert find_stub_methods(path) == ["emit"]
+
+
+def test_find_stub_methods_detects_scaffolded_doctor_check(tmp_path):
+    from payload.plugin_scaffold import scaffold_local_plugin
+
+    path = scaffold_local_plugin("my_check", "doctor-check", tmp_path)
+    assert find_stub_methods(path) == ["run"]
+
+
+def test_find_stub_methods_empty_for_implemented_plugin(tmp_path):
+    path = tmp_path / "upper.py"
+    path.write_text(WRITER_SOURCE)
+    assert find_stub_methods(path) == []
+
+
+def test_find_stub_methods_ignores_unrelated_method_names(tmp_path):
+    """Solo parse/emit/run contano — un metodo helper qualsiasi che
+    solleva NotImplementedError non è un plugin non implementato."""
+    path = tmp_path / "plugin.py"
+    path.write_text(
+        "class X:\n"
+        "    def sniff(self, path):\n"
+        "        raise NotImplementedError\n"
+        "    def emit(self, ir, out_path, config):\n"
+        "        out_path.write_bytes(ir.data)\n"
+        "        return out_path\n"
+    )
+    assert find_stub_methods(path) == []
+
+
+def test_find_stub_methods_detects_bare_raise_without_call(tmp_path):
+    """'raise NotImplementedError' (senza parentesi/messaggio) è
+    equivalente a scopo di rilevamento — non solo la forma con Call
+    generata dallo scaffold."""
+    path = tmp_path / "plugin.py"
+    path.write_text(
+        "class X:\n"
+        "    def run(self, config):\n"
+        "        raise NotImplementedError\n"
+    )
+    assert find_stub_methods(path) == ["run"]
+
+
+def test_find_stub_methods_ignores_multi_statement_body(tmp_path):
+    """Un metodo con logica reale prima di un eventuale raise non è
+    uno stub, anche se finisce comunque per sollevare qualcosa."""
+    path = tmp_path / "plugin.py"
+    path.write_text(
+        "class X:\n"
+        "    def run(self, config):\n"
+        "        x = 1\n"
+        "        raise NotImplementedError('mai completato')\n"
+    )
+    assert find_stub_methods(path) == []
+
+
+def test_find_stub_methods_returns_empty_on_syntax_error(tmp_path):
+    path = tmp_path / "broken.py"
+    path.write_text("questo non e' python valido [[[")
+    assert find_stub_methods(path) == []
+
+
+def test_find_stub_methods_skips_leading_docstring_before_raise(tmp_path):
+    """Lo scaffold non ha una docstring dentro il metodo, ma un utente
+    che parte da zero potrebbe aggiungerne una prima del raise — non
+    deve impedire il rilevamento dello stub."""
+    path = tmp_path / "plugin.py"
+    path.write_text(
+        "class X:\n"
+        "    def run(self, config):\n"
+        "        '''TODO: descrivi cosa fa questo check.'''\n"
+        "        raise NotImplementedError('TODO')\n"
+    )
+    assert find_stub_methods(path) == ["run"]
+
+
+def test_find_stub_methods_ignores_raise_of_non_name_expression(tmp_path):
+    """Un raise la cui espressione non è né un Name né una Call(Name)
+    (es. un attributo tipo 'module.SomeError(...)') non viene
+    riconosciuto come NotImplementedError — comportamento conservativo,
+    nessun falso positivo."""
+    path = tmp_path / "plugin.py"
+    path.write_text(
+        "import errors\n"
+        "class X:\n"
+        "    def run(self, config):\n"
+        "        raise errors.SomeError('boom')\n"
+    )
+    assert find_stub_methods(path) == []

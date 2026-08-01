@@ -10,12 +10,11 @@ Starlette risolve per MRO, quindi registrare PayloadError cattura
 automaticamente ogni sottoclasse, esattamente come il singolo
 'except PayloadError' di run_command oggi.
 
-NOTA: questo meccanismo protegge solo le route JSON normali. Le route
-SSE (build-all/watch) hanno già inviato gli header/status quando il
-generatore comincia a produrre — un'eccezione a metà stream non può
-più diventare uno status HTTP diverso, gestiscono quindi i propri
-errori internamente con un frame 'event: error' (vedi routes/build.py
-e watch_session.py)."""
+NOTA: questo meccanismo protegge solo le route JSON normali. La route
+SSE di build-all ha già inviato gli header/status quando il generatore
+comincia a produrre — un'eccezione a metà stream non può più diventare
+uno status HTTP diverso, gestisce quindi i propri errori internamente
+con un frame 'event: error' (vedi routes/build.py)."""
 from __future__ import annotations
 
 import logging

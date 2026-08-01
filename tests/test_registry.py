@@ -134,3 +134,29 @@ def test_load_plugins_non_strict_tracks_broken_entry_point(tmp_path):
     assert "broken_reader" not in registry.readers
     assert len(registry.load_failures) == 1
     assert registry.load_failures[0][0] == "broken_reader"
+
+
+def test_is_builtin_true_for_payload_own_entry_points(tmp_path):
+    registry = load_plugins(project_root=tmp_path, strict=False)
+    assert registry.is_builtin("raw_text") is True
+    assert registry.is_builtin("bin") is True
+
+
+def test_is_builtin_false_for_plugin_without_entry_point():
+    registry = PluginRegistry()
+    registry.register_reader(FakeReader())
+    assert registry.is_builtin(FakeReader.name) is False
+
+
+def test_is_builtin_false_for_third_party_entry_point():
+    registry = PluginRegistry()
+    ep = MagicMock()
+    ep.module = "some_third_party_pkg.reader"
+    registry.register_reader(FakeReader())
+    registry._origin[FakeReader.name] = ep
+    assert registry.is_builtin(FakeReader.name) is False
+
+
+def test_is_builtin_false_for_unknown_name():
+    registry = PluginRegistry()
+    assert registry.is_builtin("does_not_exist") is False

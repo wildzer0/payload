@@ -1,11 +1,9 @@
 """
 Factory dell'app Starlette per 'pld serve'. create_app(root) collega:
 gestione errori centralizzata (vedi errors.py), file statici del
-frontend, tutte le route API, e lo shutdown pulito di un eventuale
-WatchSession attivo (vedi watch_session.py)."""
+frontend e tutte le route API."""
 from __future__ import annotations
 
-import contextlib
 import importlib.resources
 from pathlib import Path
 
@@ -34,17 +32,6 @@ def create_app(root: Path) -> Starlette:
     async def health(request):
         return JSONResponse({"status": "ok", "root": str(request.app.state.root)})
 
-    @contextlib.asynccontextmanager
-    async def lifespan(app: Starlette):
-        yield
-        # Nessun watch attivo sopravvive allo shutdown del server —
-        # stesso 'finally: observer.stop()/.join()' già presente nel
-        # watch() bloccante della CLI (payload/watch.py), qui applicato
-        # a un WatchSession invece che a un Observer diretto.
-        session = app.state.watch_session
-        if session is not None and session.is_running():
-            session.stop()
-
     app = Starlette(
         routes=[
             Route("/", index),
@@ -53,8 +40,6 @@ def create_app(root: Path) -> Starlette:
             Mount("/static", StaticFiles(directory=str(static_dir)), name="static"),
         ],
         exception_handlers=EXCEPTION_HANDLERS,
-        lifespan=lifespan,
     )
     app.state.root = root
-    app.state.watch_session = None
     return app

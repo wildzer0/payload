@@ -129,6 +129,33 @@ def test_list_still_shows_broken_file_with_empty_kinds(tmp_path):
     assert files[0]["kinds"] == []
 
 
+def test_list_reports_empty_stub_methods_for_implemented_plugin(tmp_path):
+    root = _init_project(tmp_path)
+    _write_local_plugin(root, "reader.py", READER_SOURCE)
+    client = _client(root)
+
+    r = client.get("/api/local-plugins")
+
+    assert r.json()["files"][0]["stub_methods"] == []
+
+
+def test_list_flags_scaffold_stub_methods(tmp_path):
+    """Regressione: un file appena creato da 'pld plugin new-local'
+    (scaffold non ancora implementato) deve essere segnalabile SENZA
+    doverlo eseguire — vedi core/local_plugins.py, find_stub_methods."""
+    root = _init_project(tmp_path)
+    from payload.plugin_scaffold import scaffold_local_plugin
+
+    scaffold_local_plugin("scaffolded_reader", "reader", root / "local_plugins")
+    client = _client(root)
+
+    r = client.get("/api/local-plugins")
+
+    files = r.json()["files"]
+    assert files[0]["filename"] == "scaffolded_reader.py"
+    assert files[0]["stub_methods"] == ["parse"]
+
+
 def test_list_excludes_underscore_prefixed(tmp_path):
     root = _init_project(tmp_path)
     _write_local_plugin(root, "reader.py", READER_SOURCE)

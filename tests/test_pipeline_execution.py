@@ -76,7 +76,7 @@ def test_explicit_pipeline_warns_when_reader_or_writer_name_also_given(tmp_path,
         {"type": "writer", "name": "fake_writer"},
     ]
     with caplog.at_level(logging.WARNING):
-        build(source, registry, _FakeConfig(stages), tmp_path / "out", writer_name="fake_writer")
+        build([source], registry, _FakeConfig(stages), tmp_path / "out", writer_name="fake_writer")
 
     assert any("ignorati" in r.message for r in caplog.records)
 
@@ -84,7 +84,7 @@ def test_explicit_pipeline_warns_when_reader_or_writer_name_also_given(tmp_path,
 # --- retrocompatibilità: pipeline implicita a 2 stage --------------------
 
 def test_implicit_pipeline_matches_old_behavior(tmp_path, source, registry):
-    out_paths, built = build(source, registry, _FakeConfig(), tmp_path / "out")
+    out_paths, built = build([source], registry, _FakeConfig(), tmp_path / "out")
     assert built is True
     assert out_paths[0].read_bytes() == b"ciao"
 
@@ -93,8 +93,8 @@ def test_implicit_pipeline_cache_works(tmp_path, source, registry):
     from payload.core.cache import BuildCache
 
     cache = BuildCache(tmp_path / "cache")
-    _, built1 = build(source, registry, _FakeConfig(), tmp_path / "out", cache=cache)
-    _, built2 = build(source, registry, _FakeConfig(), tmp_path / "out", cache=cache)
+    _, built1 = build([source], registry, _FakeConfig(), tmp_path / "out", cache=cache)
+    _, built2 = build([source], registry, _FakeConfig(), tmp_path / "out", cache=cache)
     assert built1 is True
     assert built2 is False
 
@@ -110,7 +110,7 @@ def test_explicit_three_stage_pipeline_with_exec(tmp_path, registry):
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": 'tr "[:upper:]" "[:lower:]" < {input} > {output}', "output_extension": ".lower"},
     ]
-    out_paths, built = build(source, registry, _FakeConfig(stages), tmp_path / "out")
+    out_paths, built = build([source], registry, _FakeConfig(stages), tmp_path / "out")
 
     assert out_paths[0].name == "t.lower"
     assert out_paths[0].read_text() == "ciao mondo"
@@ -127,7 +127,7 @@ def test_explicit_five_stage_pipeline(tmp_path, registry):
         {"type": "reader", "name": "fake_reader"},
         {"type": "writer", "name": "fake_writer"},
     ]
-    out_paths, built = build(source, registry, _FakeConfig(stages), tmp_path / "out")
+    out_paths, built = build([source], registry, _FakeConfig(stages), tmp_path / "out")
 
     content = out_paths[0].read_text()
     assert "dato originale" in content
@@ -143,7 +143,7 @@ def test_exec_on_error_fail_raises(tmp_path, source, registry):
         {"type": "exec", "command": "exit 1", "output_extension": ".x"},
     ]
     with pytest.raises(ToolchainExecutionError):
-        build(source, registry, _FakeConfig(stages), tmp_path / "out")
+        build([source], registry, _FakeConfig(stages), tmp_path / "out")
 
 
 def test_exec_on_error_warn_produces_final_file_outside_tmp(tmp_path, source, registry):
@@ -155,7 +155,7 @@ def test_exec_on_error_warn_produces_final_file_outside_tmp(tmp_path, source, re
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "exit 1", "output_extension": ".x", "on_error": "warn"},
     ]
-    out_paths, built = build(source, registry, _FakeConfig(stages), tmp_path / "out")
+    out_paths, built = build([source], registry, _FakeConfig(stages), tmp_path / "out")
 
     assert out_paths[0].exists()
     assert out_paths[0].read_bytes() == b"ciao"
@@ -168,7 +168,7 @@ def test_exec_unknown_placeholder_raises(tmp_path, source, registry):
         {"type": "exec", "command": "cp {input} {placeholder_inesistente}", "output_extension": ".x"},
     ]
     with pytest.raises(ToolchainExecutionError):
-        build(source, registry, _FakeConfig(stages), tmp_path / "out")
+        build([source], registry, _FakeConfig(stages), tmp_path / "out")
 
 
 def test_exec_missing_output_file_raises(tmp_path, source, registry):
@@ -179,7 +179,7 @@ def test_exec_missing_output_file_raises(tmp_path, source, registry):
         {"type": "exec", "command": "true", "output_extension": ".x"},  # non tocca {output}
     ]
     with pytest.raises(ToolchainExecutionError):
-        build(source, registry, _FakeConfig(stages), tmp_path / "out")
+        build([source], registry, _FakeConfig(stages), tmp_path / "out")
 
 
 # --- cache sull'intera pipeline ------------------------------------------
@@ -193,8 +193,8 @@ def test_cache_invalidated_by_changing_pipeline(tmp_path, source, registry):
         {"type": "reader", "name": "fake_reader"}, {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "cp {input} {output}", "output_extension": ".x"},
     ]
-    _, built_a = build(source, registry, _FakeConfig(p1), tmp_path / "out", cache=cache)
-    _, built_b = build(source, registry, _FakeConfig(p2), tmp_path / "out", cache=cache)
+    _, built_a = build([source], registry, _FakeConfig(p1), tmp_path / "out", cache=cache)
+    _, built_b = build([source], registry, _FakeConfig(p2), tmp_path / "out", cache=cache)
 
     assert built_a is True
     assert built_b is True  # pipeline diversa, non deve essere un cache hit
@@ -216,7 +216,7 @@ def test_non_last_exec_stage_persists_checkpoint_when_cache_given(tmp_path, sour
         {"type": "reader", "name": "fake_reader"},
         {"type": "writer", "name": "fake_writer"},
     ]
-    out_paths, built = build(source, registry, _FakeConfig(stages), tmp_path / "out", cache=cache)
+    out_paths, built = build([source], registry, _FakeConfig(stages), tmp_path / "out", cache=cache)
 
     assert built is True
     assert "TRASFORMATO" in out_paths[0].read_text()
@@ -233,7 +233,7 @@ def test_dry_run_does_not_execute_exec_stage(tmp_path, source, registry):
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": f"touch {marker}", "output_extension": ".x"},
     ]
-    build(source, registry, _FakeConfig(stages), tmp_path / "out", dry_run=True)
+    build([source], registry, _FakeConfig(stages), tmp_path / "out", dry_run=True)
 
     assert not marker.exists()
 
@@ -245,7 +245,7 @@ def test_keep_intermediate_leaves_tmp_dir(tmp_path, source, registry):
         {"type": "reader", "name": "fake_reader"}, {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "cp {input} {output}", "output_extension": ".x"},
     ]
-    build(source, registry, _FakeConfig(stages), tmp_path / "out", keep_intermediate=True)
+    build([source], registry, _FakeConfig(stages), tmp_path / "out", keep_intermediate=True)
 
     assert (source.parent / "tmp").exists()
 
@@ -255,7 +255,7 @@ def test_without_keep_intermediate_tmp_dir_is_cleaned(tmp_path, source, registry
         {"type": "reader", "name": "fake_reader"}, {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "cp {input} {output}", "output_extension": ".x"},
     ]
-    build(source, registry, _FakeConfig(stages), tmp_path / "out", keep_intermediate=False)
+    build([source], registry, _FakeConfig(stages), tmp_path / "out", keep_intermediate=False)
 
     assert not (source.parent / "tmp").exists()
 
@@ -268,7 +268,7 @@ def test_unknown_reader_name_in_pipeline_raises(tmp_path, source, registry):
         {"type": "writer", "name": "fake_writer"},
     ]
     with pytest.raises(InvalidPipelineError):
-        build(source, registry, _FakeConfig(stages), tmp_path / "out")
+        build([source], registry, _FakeConfig(stages), tmp_path / "out")
 
 
 def test_unknown_writer_name_in_pipeline_raises(tmp_path, source, registry):
@@ -277,7 +277,7 @@ def test_unknown_writer_name_in_pipeline_raises(tmp_path, source, registry):
         {"type": "writer", "name": "writer_inesistente"},
     ]
     with pytest.raises(InvalidPipelineError):
-        build(source, registry, _FakeConfig(stages), tmp_path / "out")
+        build([source], registry, _FakeConfig(stages), tmp_path / "out")
 
 
 def test_compatibility_checked_on_second_pair_not_just_first(tmp_path, registry):
@@ -321,4 +321,4 @@ def test_compatibility_checked_on_second_pair_not_just_first(tmp_path, registry)
         {"type": "writer", "name": "picky"},  # NON compatibile con reader_b
     ]
     with pytest.raises(WriterEmitError):
-        build(src, registry, _FakeConfig(stages), tmp / "out")
+        build([src], registry, _FakeConfig(stages), tmp / "out")

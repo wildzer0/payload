@@ -19,8 +19,10 @@ sorgente (.c | .raw | ...) → [Reader plugin] → TableIR → [Writer plugin] �
   validare un plugin. Parti da qui se vuoi *estendere* il tool.
 - **[src/payload/docs/PIPELINE.md](src/payload/docs/PIPELINE.md)** — pipeline configurabile
   (stage reader/writer/exec): come funziona, sintassi, esempi.
+- **[src/payload/docs/BATCH.md](src/payload/docs/BATCH.md)** — tabelle batch: una tabella
+  costruita da più file sorgente invece di uno solo (`[[batch_table]]`).
 
-Le stesse tre guide sono incluse nel pacchetto installato e consultabili
+Le stesse guide sono incluse nel pacchetto installato e consultabili
 anche senza repository locale, dalla sezione "Documentazione" di `pld serve`.
 
 ## Installazione (sviluppo)

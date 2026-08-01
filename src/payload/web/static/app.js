@@ -1,7 +1,7 @@
 /* payload web UI — vanilla JS, nessuna dipendenza esterna. Router
  * minimale su location.hash, un helper fetch() con gestione errori
  * uniforme (lo stesso shape JSON per ogni errore, vedi web/errors.py),
- * ed EventSource per le due view live (build-all, watch). */
+ * ed EventSource per la view live di build-all. */
 "use strict";
 
 const COMMIT_MESSAGE_MAX_LENGTH = 1024;
@@ -372,7 +372,6 @@ const ROUTES = [
   [/^\/$/, viewDashboard],
   [/^\/table\/([^/]+)$/, viewTable],
   [/^\/build-all$/, viewBuildAll],
-  [/^\/watch$/, viewWatch],
   [/^\/plugins$/, viewPlugins],
   [/^\/plugin\/([^/]+)$/, viewPluginDetail],
   [/^\/local-plugin\/([^/]+)$/, viewLocalPluginEditor],
@@ -443,7 +442,7 @@ function _defaultSelectHtml(kind, tableName, options, currentValue, resolvedValu
 }
 
 /* Evidenzia lo snapshot "attuale" (accent, stesso trattamento della
- * pagina tabella) e, se la punta della cronologia è più avanti (la
+ * pagina tabella) e, se la HEAD della cronologia è più avanti (la
  * tabella è ferma a un restore precedente), lo segnala con un chip
  * secondario — altrimenti sparirebbe l'informazione che esistono
  * snapshot più recenti mai "riattivati". */
@@ -452,7 +451,7 @@ function _snapshotChipHtml(t) {
   const current = `<span class="pill pill-current">#${t.last_snapshot.id}</span>`;
   const behindTip = t.tip_snapshot_id && t.tip_snapshot_id !== t.last_snapshot.id;
   const tipNote = behindTip
-    ? `<span class="pill pill-dim" title="La cronologia arriva fino allo snapshot #${t.tip_snapshot_id}">punta #${t.tip_snapshot_id}</span>`
+    ? `<span class="pill pill-dim" title="La cronologia arriva fino allo snapshot #${t.tip_snapshot_id}">HEAD at #${t.tip_snapshot_id}</span>`
     : "";
   return current + tipNote;
 }
@@ -643,7 +642,10 @@ async function viewTable(name) {
     };
     try {
       const r = await api("/api/build", { body });
-      toast(`Build ok: ${r.outputs.join(", ")} (${r.was_built ? "ricostruito" : "da cache"})`, "ok");
+      const status = r.dry_run
+        ? (r.was_built ? "dry-run: verrebbe ricostruita, nessun file scritto" : "dry-run: userebbe la cache, nessun file scritto")
+        : (r.was_built ? "ricostruito" : "da cache");
+      toast(`Build ok: ${r.outputs.join(", ")} (${status})`, "ok");
       loadPipelineBuilder(name);
     } catch (e) {
       toastError(e);
@@ -714,6 +716,15 @@ let _pluginsCache = null;
 async function getPlugins() {
   if (!_pluginsCache) _pluginsCache = await api("/api/plugins");
   return _pluginsCache;
+}
+
+/* Da invalidare ogni volta che un plugin locale viene creato, salvato
+ * o eliminato: senza questo, un plugin appena aggiunto resterebbe
+ * invisibile (dashboard, select reader/writer, ecc.) finché non si
+ * ricarica manualmente la pagina — il router rifà comunque il fetch a
+ * ogni navigazione, basta smettere di servire dati vecchi da qui. */
+function invalidatePluginsCache() {
+  _pluginsCache = null;
 }
 
 async function hexDumpHtml(name) {
@@ -1152,7 +1163,8 @@ async function loadHistory(name) {
       if (restoreBtn) {
         const snapshotId = Number(restoreBtn.getAttribute("data-restore"));
         const preview = await api("/api/restore", { body: { table_name: name, snapshot_id: snapshotId } });
-        const ok = await confirmDialog(`Sovrascrivere ${preview.source} con lo stato dello snapshot #${snapshotId}?`, { danger: true, confirmLabel: "Sovrascrivi" });
+        const previewLabel = preview.source || preview.sources.join(", ");
+        const ok = await confirmDialog(`Sovrascrivere ${previewLabel} con lo stato dello snapshot #${snapshotId}?`, { danger: true, confirmLabel: "Sovrascrivi" });
         if (!ok) return;
         const r = await api("/api/restore", { body: { table_name: name, snapshot_id: snapshotId, confirm: true } });
         const removedNote = r.removed.length ? ` — rimossi (non facevano parte dello snapshot): ${r.removed.join(", ")}` : "";
@@ -1284,69 +1296,67 @@ function viewBuildAll() {
   };
 }
 
-/* ---------- watch (SSE) ---------- */
+/* ---------- plugin ---------- */
 
-function viewWatch() {
-  document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Watch", "Osserva i sorgenti e ricompila automaticamente ad ogni salvataggio."))}
-    <div class="card">
-      <div class="toolbar">
-        <button class="primary" id="w-start">${icon("play")}Avvia</button>
-        <button id="w-stop">Ferma</button>
-        <span class="pill pill-dim" id="w-state">fermo</span>
-      </div>
-      <h2>Log</h2>
-      <div class="log" id="w-log"><span class="log-empty">Non attivo</span></div>
-    </div>
-  `;
+const PLUGIN_KIND_META = {
+  reader: { title: "Reader", icon: "book" },
+  writer: { title: "Writer", icon: "save" },
+  doctor_check: { title: "Doctor check", icon: "check" },
+};
 
-  let es = null;
-  const log = document.getElementById("w-log");
-  const appendLine = (text) => {
-    const line = document.createElement("div");
-    line.className = "log-line";
-    line.textContent = text;
-    log.appendChild(line);
-    log.scrollTop = log.scrollHeight;
-  };
-
-  document.getElementById("w-start").onclick = async () => {
-    const r = await api("/api/watch/start", { body: {} });
-    document.getElementById("w-state").outerHTML = '<span class="pill pill-ok" id="w-state">attivo</span>';
-    if (r.status === "already_running" && es) return;
-    log.innerHTML = "";
-    es = new EventSource("/api/watch/stream");
-    es.addEventListener("change", (ev) => {
-      const d = JSON.parse(ev.data);
-      appendLine(`${d.status === "ok" ? "✓" : "✗"} ${d.source}${d.status === "ok" ? " → " + d.outputs.join(", ") : " — " + d.message}`);
-    });
-    es.addEventListener("stopped", () => {
-      appendLine("— watch fermato");
-      document.getElementById("w-state").outerHTML = '<span class="pill pill-dim" id="w-state">fermo</span>';
-      if (es) { es.close(); es = null; }
-    });
-  };
-
-  document.getElementById("w-stop").onclick = async () => {
-    await api("/api/watch/stop", { body: {} });
-  };
+function _pluginCardHtml(p) {
+  const extPills = p.extensions.map((e) => `<span class="pill pill-dim mono">${escapeHtml(e)}</span>`).join("");
+  return `
+    <a class="plugin-card${p.builtin ? " plugin-card-builtin" : ""}" href="#/plugin/${encodeURIComponent(p.name)}">
+      <div class="plugin-card-name">${escapeHtml(p.name)}</div>
+      <div class="plugin-card-meta">${extPills}<span class="pill pill-dim">v${escapeHtml(p.api_version)}</span></div>
+    </a>`;
 }
 
-/* ---------- plugin ---------- */
+// I plugin built-in di payload (raw_text, bin, hex, ...) restano
+// sempre in secondo piano rispetto a quelli scritti dall'utente — anche
+// quando l'utente non ne ha ancora scritto nessuno — dentro un <details>
+// chiuso di default, invece di stare alla pari nella stessa lista.
+function _pluginColumnHtml(kind, plugins) {
+  const meta = PLUGIN_KIND_META[kind];
+  const items = plugins.filter((p) => p.kind === kind);
+  const custom = items.filter((p) => !p.builtin);
+  const builtin = items.filter((p) => p.builtin);
+
+  // Se non hai ancora plugin tuoi in questa categoria ma esistono dei
+  // built-in, non mostrare nessun messaggio "vuoto": l'accordion dei
+  // built-in qui sotto è già di per sé il contenuto della colonna,
+  // niente scritta di scuse che occupa spazio senza motivo.
+  let customList = "";
+  if (items.length === 0) {
+    customList = '<div class="plugin-column-list"><p class="plugin-column-empty">Nessuno registrato.</p></div>';
+  } else if (custom.length > 0) {
+    customList = `<div class="plugin-column-list">${custom.map(_pluginCardHtml).join("")}</div>`;
+  }
+
+  const builtinBody = builtin.length ? `
+    <details class="plugin-builtin-group">
+      <summary>Built-in di payload (${builtin.length})</summary>
+      <div class="plugin-column-list-builtin">${builtin.map(_pluginCardHtml).join("")}</div>
+    </details>` : "";
+
+  return `
+    <div class="plugin-column">
+      <div class="plugin-column-header">${iconSpan(meta.icon)}<h2>${meta.title}</h2><span class="pill pill-dim">${items.length}</span></div>
+      ${customList}
+      ${builtinBody}
+    </div>`;
+}
 
 async function viewPlugins() {
   const [r, local] = await Promise.all([api("/api/plugins"), api("/api/local-plugins")]);
-  const rows = r.plugins.map((p) => render`
-    <tr>
-      <td>${p.kind}</td>
-      <td><a class="link" href="#/plugin/${p.name}">${p.name}</a></td>
-      <td class="mono">${p.extensions.join(", ")}</td>
-      <td>v${p.api_version}</td>
-    </tr>`);
+  const columns = raw(
+    ["reader", "writer", "doctor_check"].map((kind) => _pluginColumnHtml(kind, r.plugins)).join("")
+  );
   const localRows = local.files.map((f) => render`
     <div class="local-plugin-row">
       <span class="mono">${f.filename}</span>
-      <span>${raw(f.kinds.length ? f.kinds.map((k) => `<span class="pill pill-dim">${escapeHtml(k)}</span>`).join("") : '<span class="pill pill-fail">non caricabile</span>')}</span>
+      <span>${raw(f.kinds.length ? f.kinds.map((k) => `<span class="pill pill-dim">${escapeHtml(k)}</span>`).join("") : '<span class="pill pill-fail">non caricabile</span>')}${raw(f.stub_methods.length ? `<span class="pill pill-warn" title="${escapeHtml(`Ancora da implementare: ${f.stub_methods.join(", ")}`)}">non implementato</span>` : "")}</span>
       <div class="local-plugin-row-actions">
         <a class="btn" href="#/local-plugin/${encodeURIComponent(f.filename)}">${icon("book")}Apri nell'editor</a>
         <button class="danger icon-only" data-del-local-plugin="${f.filename}" title="Elimina plugin locale">${icon("trash")}</button>
@@ -1355,11 +1365,7 @@ async function viewPlugins() {
   `);
   document.getElementById("content").innerHTML = render`
     ${raw(pageHeader("Plugin"))}
-    <div class="card">
-      <div class="table-scroll">
-        <table><thead><tr><th>Tipo</th><th>Nome</th><th>Estensioni</th><th>API</th></tr></thead><tbody>${rows}</tbody></table>
-      </div>
-    </div>
+    <div class="plugin-columns">${columns}</div>
     ${raw(detailsCard(
       "Plugin locali (local_plugins/)",
       `<div class="local-plugin-list">${localRows.join("") || '<p class="empty-state">Nessun plugin locale in questo progetto.</p>'}</div>`,
@@ -1380,6 +1386,7 @@ async function viewPlugins() {
     try {
       const r2 = await api("/api/plugin/new-local", { body: { name: val("pn-name"), kind: document.getElementById("pn-kind").value } });
       const createdFilename = r2.created.split(/[\\/]/).pop();
+      invalidatePluginsCache();
       toast(`Creato ${r2.created}`, "ok");
       location.hash = "#/local-plugin/" + encodeURIComponent(createdFilename);
     } catch (e) {
@@ -1397,6 +1404,7 @@ async function deleteLocalPlugin(filename, onDeleted) {
   if (!ok) return;
   try {
     await api("/api/local-plugins/" + encodeURIComponent(filename), { method: "DELETE" });
+    invalidatePluginsCache();
     toast(`'${filename}' eliminato`, "ok");
     onDeleted();
   } catch (e) {
@@ -1416,7 +1424,7 @@ async function viewPluginDetail(name) {
 
   document.getElementById("content").innerHTML = render`
     <div class="breadcrumb"><a class="link" href="#/plugins">← Plugin</a></div>
-    ${raw(pageHeader(p.name, `${p.kind} · API v${p.api_version}`))}
+    ${raw(pageHeader(p.name, `${p.kind} · API v${p.api_version}${p.builtin ? " · built-in di payload" : ""}`))}
     <div class="card">
       ${raw(chips ? `<div class="plugin-meta-row">${chips}</div>` : "")}
       <div class="plugin-description">${raw(formatDescription(p.docstring))}</div>
@@ -1557,6 +1565,7 @@ async function viewLocalPluginEditor(rawFilename) {
   document.getElementById("lpe-save").onclick = async () => {
     try {
       await api("/api/local-plugins/" + encodeURIComponent(filename), { method: "PUT", body: { content: cm.getValue() } });
+      invalidatePluginsCache();
       toast("Salvato", "ok");
     } catch (e) {
       toastError(e);
@@ -1567,6 +1576,7 @@ async function viewLocalPluginEditor(rawFilename) {
     const resultEl = document.getElementById("lpe-result");
     try {
       await api("/api/local-plugins/" + encodeURIComponent(filename), { method: "PUT", body: { content: cm.getValue() } });
+      invalidatePluginsCache();
       const sample = val("lpe-sample");
       const r = await api("/api/local-plugins/" + encodeURIComponent(filename) + "/test", { body: { sample: sample || undefined } });
       resultEl.innerHTML = _renderPluginTestResults(r);
@@ -1591,7 +1601,7 @@ async function viewDoctor() {
     <div class="doctor-item doctor-item-${c.status}">
       <div class="doctor-item-icon">${raw(ICONS[DOCTOR_STATUS_ICON[c.status]] || ICONS.dash)}</div>
       <div class="doctor-item-body">
-        <div class="doctor-item-name">${c.name}</div>
+        <div class="doctor-item-name">${c.name.toUpperCase()}</div>
         <div class="doctor-item-message">${c.message}</div>
         ${raw(c.hint ? render`<div class="doctor-item-hint">${c.hint}</div>` : "")}
       </div>
@@ -1599,7 +1609,7 @@ async function viewDoctor() {
   `);
 
   document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Doctor", "Verifica pre-volo di toolchain, plugin, config e directory."))}
+    ${raw(pageHeader("Doctor", "Verifica stato del sistema (toolchain, plugin, config e directory)."))}
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">Check totali</div><div class="stat-value">${r.checks.length}</div></div>
       <div class="stat-card"><div class="stat-label">OK</div><div class="stat-value">${counts.ok}</div></div>
@@ -1614,17 +1624,90 @@ async function viewDoctor() {
 
 function _cfgFieldId(section, key) { return `cfg-${section}-${key}`; }
 
-function _cfgFieldMarkup(section, f, currentByKey) {
-  const value = currentByKey[`${section}.${f.key}`];
+// Etichette/descrizioni scritte a mano lato client: lo schema che arriva
+// da /api/config porta solo chiave e tipo (vedi config_schema() in
+// core/config.py), non un testo d'aiuto — il backend non deve conoscere
+// come la webapp preferisce spiegare ogni campo.
+const CONFIG_FIELD_META = {
+  "defaults.reader": {
+    label: "Reader di default",
+    desc: "Usato quando --from non è specificato e non si riesce a dedurlo dall'estensione del file. Vuoto = auto-risoluzione da estensione/sniff.",
+  },
+  "defaults.writer": {
+    label: "Writer di default",
+    desc: "Usato quando --to non è specificato. Vuoto = nessuna preferenza esplicita, il reader può suggerirne uno.",
+  },
+  "defaults.output_dir": {
+    label: "Cartella di output",
+    desc: "Dove finiscono i file compilati, relativa alla root del progetto.",
+  },
+  "defaults.cache_dir": {
+    label: "Cartella cache",
+    desc: "Dove payload tiene i checkpoint di build — evita ricompilazioni quando sorgente e config non sono cambiati.",
+  },
+  "defaults.byte_order": {
+    label: "Byte order",
+    desc: "Endianness di default per reader/writer che gestiscono valori multi-byte.",
+  },
+  "toolchain.compiler": {
+    label: "Compilatore",
+    desc: "Eseguibile usato dal reader 'c_source' per compilare i file .c prima di estrarne i bytes.",
+  },
+  "toolchain.compiler_flags": {
+    label: "Flag del compilatore",
+    desc: "Flag extra passati al compilatore, separati da virgola — es. -O2, -Wall.",
+  },
+  "toolchain.objcopy": {
+    label: "objcopy",
+    desc: "Eseguibile usato per estrarre la sezione dati binaria dopo la compilazione.",
+  },
+  "toolchain.objcopy_target": {
+    label: "objcopy target",
+    desc: "Richiesto solo dal writer 'obj' — formato di output objcopy, es. elf32-littlearm.",
+  },
+  "toolchain.objcopy_arch": {
+    label: "objcopy arch",
+    desc: "Richiesto solo dal writer 'obj' — architettura target, es. arm.",
+  },
+};
+
+function _cfgFieldMarkup(section, f, currentByKey, originByKey) {
+  const key = `${section}.${f.key}`;
+  const value = currentByKey[key];
   const id = _cfgFieldId(section, f.key);
+  const meta = CONFIG_FIELD_META[key] || { label: f.key, desc: "" };
+  const origin = originByKey[key] || "default";
+  // "default" = mai personalizzato, sta usando il valore di fabbrica del
+  // tool. "personalizzato" = presente in table-tool.toml — NON ha nulla
+  // a che fare con eventuali modifiche non ancora salvate nel form
+  // (quello è "settings-row-dirty-note" qui sotto, tenuto volutamente
+  // separato: sono due informazioni diverse, "cosa c'è salvato" contro
+  // "cosa stai scrivendo ora").
+  const originPill = origin === "default"
+    ? raw('<span class="pill pill-dim">default</span>')
+    : raw('<span class="pill pill-current">personalizzato</span>');
+
+  let control;
   if (f.type === "list") {
-    return render`<div class="field"><label>${f.key}</label><input type="text" id="${id}" value="${(value || []).join(", ")}" placeholder="separati da virgola"></div>`;
+    control = render`<input type="text" id="${id}" data-cfg-field="${key}" value="${(value || []).join(", ")}" placeholder="separati da virgola">`;
+  } else if (f.key === "byte_order") {
+    control = `<select id="${id}" data-cfg-field="${key}"><option value="little" ${value !== "big" ? "selected" : ""}>little</option><option value="big" ${value === "big" ? "selected" : ""}>big</option></select>`;
+  } else {
+    const shown = value === undefined || value === null ? "" : value;
+    control = render`<input type="text" id="${id}" data-cfg-field="${key}" value="${shown}" placeholder="${f.key === "writer" || f.key === "reader" ? "nessuna preferenza" : "(default)"}">`;
   }
-  if (f.key === "byte_order") {
-    return render`<div class="field"><label>${f.key}</label><select id="${id}"><option value="little" ${value !== "big" ? "selected" : ""}>little</option><option value="big" ${value === "big" ? "selected" : ""}>big</option></select></div>`;
-  }
-  const shown = value === undefined || value === null ? "" : value;
-  return render`<div class="field"><label>${f.key}</label><input type="text" id="${id}" value="${shown}" placeholder="${f.key === "writer" ? "nessuna preferenza" : "(default)"}"></div>`;
+
+  return render`
+    <div class="settings-row" data-row-key="${key}">
+      <div class="settings-row-info">
+        <div class="settings-row-label">${meta.label}${originPill}</div>
+        ${raw(meta.desc ? render`<div class="settings-row-desc">${meta.desc}</div>` : "")}
+      </div>
+      <div class="settings-row-control">
+        ${raw(control)}
+        <span class="settings-row-dirty-note" hidden>● modifica non salvata</span>
+      </div>
+    </div>`;
 }
 
 function _cfgReadFormValues(schema) {
@@ -1640,13 +1723,31 @@ function _cfgReadFormValues(schema) {
   return { defaults, toolchain };
 }
 
+// Anteprima leggera del TOML che verrebbe scritto — non un serializzatore
+// TOML completo (non serve: solo defaults/toolchain, valori sempre
+// stringa/lista/null), solo abbastanza per far vedere all'utente cosa
+// sta per salvare prima di premere "Salva".
+function _cfgTomlPreview(values) {
+  const fmtVal = (v) => {
+    if (Array.isArray(v)) return v.length ? `[${v.map((x) => JSON.stringify(x)).join(", ")}]` : null;
+    if (v === null || v === undefined || v === "") return null;
+    return JSON.stringify(String(v));
+  };
+  const section = (name, obj) => {
+    const lines = Object.entries(obj).map(([k, v]) => [k, fmtVal(v)]).filter(([, v]) => v !== null).map(([k, v]) => `${k} = ${v}`);
+    return `[${name}]` + (lines.length ? `\n${lines.join("\n")}` : "\n# (nessun override, tutti i default)");
+  };
+  return `${section("defaults", values.defaults)}\n\n${section("toolchain", values.toolchain)}`;
+}
+
 async function viewConfig() {
   const r = await api("/api/config");
   const schema = r.schema;
   const currentByKey = Object.fromEntries(r.fields.map((f) => [f.key, f.value]));
+  const originByKey = Object.fromEntries(r.fields.map((f) => [f.key, f.origin]));
 
-  const defaultsFields = schema.defaults.map((f) => _cfgFieldMarkup("defaults", f, currentByKey));
-  const toolchainFields = schema.toolchain.map((f) => _cfgFieldMarkup("toolchain", f, currentByKey));
+  const defaultsRows = schema.defaults.map((f) => _cfgFieldMarkup("defaults", f, currentByKey, originByKey));
+  const toolchainRows = schema.toolchain.map((f) => _cfgFieldMarkup("toolchain", f, currentByKey, originByKey));
 
   const rows = r.fields.map((f) => render`
     <tr><td class="mono">${f.key}</td><td class="mono">${JSON.stringify(f.value)}</td><td>${statusPill(f.origin === "default" ? "never_saved" : f.origin.startsWith("sidecar") ? "warn" : "ok")} ${f.origin}</td></tr>
@@ -1654,13 +1755,25 @@ async function viewConfig() {
 
   document.getElementById("content").innerHTML = render`
     ${raw(pageHeader("Configurazione", "Configurazione globale del progetto (table-tool.toml) — vale per ogni tabella che non ha un sidecar proprio."))}
-    <div class="card">
-      <h2>Defaults</h2>
-      <div class="field-row">${defaultsFields}</div>
-      <h2>Toolchain</h2>
-      <div class="field-row">${toolchainFields}</div>
-      <button class="primary" id="cfg-save">${icon("save")}Salva</button>
+    <div class="card settings-section">
+      <h2 class="settings-section-title">Percorsi e formati di default</h2>
+      <p class="settings-section-desc">Usati per ogni tabella che non ha una preferenza esplicita da riga di comando.</p>
+      ${defaultsRows}
     </div>
+    <div class="card settings-section">
+      <h2 class="settings-section-title">Toolchain di compilazione</h2>
+      <p class="settings-section-desc">Usati dal reader 'c_source' e dal writer 'obj' — ignorali se non li usi.</p>
+      ${toolchainRows}
+      <div class="settings-toolbar">
+        <span class="settings-toolbar-status" id="cfg-dirty-status">Nessuna modifica</span>
+        <button type="button" id="cfg-reset">${icon("refresh")}Ripristina</button>
+        <button class="primary" id="cfg-save" disabled>${icon("save")}Salva</button>
+      </div>
+    </div>
+    <details class="section-collapse">
+      <summary>Anteprima TOML</summary>
+      <div class="card" style="margin-top:10px"><pre class="settings-preview" id="cfg-preview"></pre></div>
+    </details>
     <details class="section-collapse">
       <summary>Risoluzione dettagliata (default → globale → sidecar)</summary>
       <div class="card" style="margin-top:10px">
@@ -1670,6 +1783,37 @@ async function viewConfig() {
       </div>
     </details>
   `;
+
+  const originalValues = _cfgReadFormValues(schema);
+  const preview = document.getElementById("cfg-preview");
+  const dirtyStatus = document.getElementById("cfg-dirty-status");
+  const saveBtn = document.getElementById("cfg-save");
+
+  const fieldOriginal = (section, key) => (section === "defaults" ? originalValues.defaults[key] : originalValues.toolchain[key]);
+
+  const refresh = () => {
+    const values = _cfgReadFormValues(schema);
+    preview.textContent = _cfgTomlPreview(values);
+
+    let changedCount = 0;
+    document.querySelectorAll(".settings-row").forEach((row) => {
+      const [section, ...rest] = row.dataset.rowKey.split(".");
+      const fieldKey = rest.join(".");
+      const current = section === "defaults" ? values.defaults[fieldKey] : values.toolchain[fieldKey];
+      const changed = JSON.stringify(current) !== JSON.stringify(fieldOriginal(section, fieldKey));
+      row.querySelector(".settings-row-dirty-note").hidden = !changed;
+      if (changed) changedCount += 1;
+    });
+
+    dirtyStatus.textContent = changedCount ? `${changedCount} modifiche non salvate` : "Nessuna modifica";
+    dirtyStatus.className = "settings-toolbar-status" + (changedCount ? " settings-toolbar-status-dirty" : "");
+    saveBtn.disabled = changedCount === 0;
+  };
+
+  document.querySelectorAll("[data-cfg-field]").forEach((el) => el.addEventListener("input", refresh));
+  refresh();
+
+  document.getElementById("cfg-reset").onclick = () => viewConfig();
 
   document.getElementById("cfg-save").onclick = async () => {
     try {

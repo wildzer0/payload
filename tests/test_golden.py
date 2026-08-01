@@ -8,7 +8,7 @@ from payload.core.history import HistoryStore
 def _commit(history, table, src, out, src_content, out_content):
     src.write_bytes(src_content)
     out.write_bytes(out_content)
-    return history.commit(table, src, [out], f"snapshot con out={out_content!r}")
+    return history.commit(table, [src], [out], f"snapshot con out={out_content!r}")
 
 
 def test_check_golden_missing_when_never_set(tmp_path):
@@ -17,7 +17,7 @@ def test_check_golden_missing_when_never_set(tmp_path):
     out = tmp_path / "t.bin"
     _commit(history, "t", src, out, b"src1", b"out1")
 
-    status = check_golden(history, "t", src, [out])
+    status = check_golden(history, "t", [src], [out])
 
     assert status.status == "missing"
     assert status.golden_snapshot_id is None
@@ -30,7 +30,7 @@ def test_check_golden_match(tmp_path):
     snap = _commit(history, "t", src, out, b"src1", b"out1")
     set_golden(history, "t", snap.id)
 
-    status = check_golden(history, "t", src, [out])
+    status = check_golden(history, "t", [src], [out])
 
     assert status.status == "match"
     assert status.golden_snapshot_id == snap.id
@@ -45,7 +45,7 @@ def test_check_golden_mismatch_source_unchanged_output_different(tmp_path):
 
     out.write_bytes(b"out-diverso")  # sorgente invariato, solo l'output cambia
 
-    status = check_golden(history, "t", src, [out])
+    status = check_golden(history, "t", [src], [out])
 
     assert status.status == "mismatch"
 
@@ -59,7 +59,7 @@ def test_check_golden_stale_when_source_changed(tmp_path):
 
     src.write_bytes(b"src-diverso")  # il sorgente stesso è cambiato
 
-    status = check_golden(history, "t", src, [out])
+    status = check_golden(history, "t", [src], [out])
 
     assert status.status == "stale"
 
@@ -179,3 +179,44 @@ def test_golden_diff_new_output_file_not_in_golden_snapshot(tmp_path):
 
     assert "t.hex" in diff
     assert "t.bin" not in diff
+
+
+def test_check_golden_old_manifest_matches_by_value_not_filename(tmp_path):
+    """Stessa regressione di history.py: uno snapshot golden scritto
+    prima delle tabelle batch non conosce il filename reale — il
+    confronto di staleness deve funzionare comunque per valore."""
+    history = HistoryStore(tmp_path)
+    src = tmp_path / "t.raw"
+    out = tmp_path / "t.bin"
+    src.write_bytes(b"src invariato")
+    out.write_bytes(b"out1")
+    history._ensure_dirs()
+    blob_hash = history._write_blob(b"src invariato")
+    out_hash = history._write_blob(b"out1")
+    history._manifest_path("t").write_text(
+        '[{"id": 1, "timestamp": "2020-01-01T00:00:00", "message": "vecchio", '
+        f'"source_blob": "{blob_hash}", "output_blobs": {{"t.bin": "{out_hash}"}}}}]'
+    )
+    set_golden(history, "t", 1)
+
+    assert check_golden(history, "t", [src], [out]).status == "match"
+
+    src.write_bytes(b"src cambiato")
+    assert check_golden(history, "t", [src], [out]).status == "stale"
+
+
+def test_check_golden_batch_stale_when_any_member_source_changes(tmp_path):
+    row1 = tmp_path / "ROW1.txt"
+    row2 = tmp_path / "ROW2.txt"
+    out = tmp_path / "rows.bin"
+    row1.write_bytes(b"uno")
+    row2.write_bytes(b"due")
+    out.write_bytes(b"out1")
+    history = HistoryStore(tmp_path)
+    snap = history.commit("rows", [row1, row2], [out], "v1")
+    set_golden(history, "rows", snap.id)
+
+    assert check_golden(history, "rows", [row1, row2], [out]).status == "match"
+
+    row2.write_bytes(b"due-modificato")
+    assert check_golden(history, "rows", [row1, row2], [out]).status == "stale"

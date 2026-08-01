@@ -24,6 +24,7 @@ from payload.core.ir import TableIR
 from payload.core.local_plugins import (
     LOCAL_PLUGINS_DIRNAME,
     extract_plugin_classes,
+    find_stub_methods,
     load_module_from_file,
     missing_requirements,
     read_requires_static,
@@ -66,7 +67,10 @@ async def local_plugins_list(request: Request) -> JSONResponse:
                 kinds = sorted({kind for kind, _ in extract_plugin_classes(module)})
             except Exception:
                 pass  # un file non ancora valido resta comunque elencabile/apribile nell'editor
-            items.append({"filename": f.name, "size": f.stat().st_size, "kinds": kinds})
+            items.append({
+                "filename": f.name, "size": f.stat().st_size, "kinds": kinds,
+                "stub_methods": find_stub_methods(f),
+            })
         return {"files": items}
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))

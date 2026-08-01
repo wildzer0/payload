@@ -31,6 +31,34 @@ def test_plugins_list(tmp_path):
     assert {"raw_text", "csv", "bin", "hex", "header"}.issubset(names)
 
 
+def test_plugins_list_marks_payload_own_plugins_as_builtin(tmp_path):
+    """raw_text/bin/... vengono con payload stesso — la webapp li mette
+    in secondo piano rispetto ai plugin scritti dall'utente, vedi
+    'builtin' nella risposta e _pluginColumnHtml() in app.js."""
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.get("/api/plugins")
+
+    by_name = {p["name"]: p for p in r.json()["plugins"]}
+    assert by_name["raw_text"]["builtin"] is True
+    assert by_name["bin"]["builtin"] is True
+
+
+def test_plugins_list_marks_local_plugin_as_not_builtin(tmp_path):
+    root = _init_project(tmp_path)
+    result = runner.invoke(
+        cli_app, ["plugin", "new-local", "my_reader", "--kind", "reader", "--dest", str(root / "local_plugins")],
+    )
+    assert result.exit_code == 0, result.stdout
+    client = _client(root)
+
+    r = client.get("/api/plugins")
+
+    by_name = {p["name"]: p for p in r.json()["plugins"]}
+    assert by_name["my_reader"]["builtin"] is False
+
+
 def test_plugin_info_reader(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
@@ -41,6 +69,7 @@ def test_plugin_info_reader(tmp_path):
     body = r.json()
     assert body["kind"] == "reader"
     assert body["default_writer"] == "bin"
+    assert body["builtin"] is True
 
 
 def test_plugin_info_docstring_preserves_example_indentation(tmp_path):

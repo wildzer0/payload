@@ -85,6 +85,47 @@ def read_requires_static(path: Path) -> list[str]:
     return []
 
 
+_STUB_METHOD_NAMES = {"parse", "emit", "run"}
+
+
+def find_stub_methods(path: Path) -> list[str]:
+    """Trova i metodi 'parse'/'emit'/'run' il cui intero corpo è ancora
+    un singolo 'raise NotImplementedError(...)' — esattamente quello che
+    lascia lo scaffold generato da 'pld plugin new-local' (vedi
+    plugin_scaffold.py) prima di essere completato. Analisi statica
+    (AST), come read_requires_static: funziona anche se il modulo non
+    è (ancora) importabile."""
+    try:
+        tree = ast.parse(path.read_text())
+    except (SyntaxError, OSError):
+        return []
+
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in _STUB_METHOD_NAMES:
+            continue
+        body = node.body
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            body = body[1:]  # salta la docstring, se presente
+        if len(body) != 1 or not isinstance(body[0], ast.Raise):
+            continue
+        exc = body[0].exc
+        if isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name):
+            exc_name = exc.func.id
+        elif isinstance(exc, ast.Name):
+            exc_name = exc.id
+        else:
+            exc_name = None
+        if exc_name == "NotImplementedError":
+            found.append(node.name)
+    return found
+
+
 def missing_requirements(requires: list[str]) -> list[str]:
     """Controllo best-effort: estrae il nome pacchetto da ogni stringa
     di requisito (ignora version specifier) e verifica che sia

@@ -107,6 +107,22 @@ class BatchBuildError(BuildError):
         )
 
 
+class ReaderBatchUnsupportedError(BuildError):
+    """Una [[batch_table]] richiede un reader che sappia leggere N file
+    in un'unica TableIR (Reader.parse_many) — un reader che espone solo
+    parse() (singolo file) non è utilizzabile qui: niente fallback che
+    concatena bytes alla cieca, sbagliato per formati non riga-per-riga."""
+
+    def __init__(self, reader_name: str, **kw):
+        super().__init__(
+            f"Il reader '{reader_name}' non supporta build multi-file (manca parse_many)",
+            hint="Vedi src/payload/docs/BATCH.md — il reader deve implementare "
+                 "parse_many(paths, config) per essere usato in una [[batch_table]]",
+            reader_name=reader_name,
+            **kw,
+        )
+
+
 # --- Exit code 2: config / plugin ---------------------------------------
 
 class ConfigError(PayloadError):
@@ -210,6 +226,21 @@ class InvalidCliOptionError(ConfigError):
         )
 
 
+class BatchTableError(ConfigError):
+    """Una [[batch_table]] non si risolve in un insieme di file valido:
+    'sources' vuoto dopo l'espansione dei glob, un path letterale
+    mancante su disco, o due file risolti con lo stesso filename
+    (collisione silenziosa in source_blobs, keyed per nome file)."""
+
+    def __init__(self, batch_name: str, reason: str, **kw):
+        super().__init__(
+            f"Tabella batch '{batch_name}' non valida: {reason}",
+            hint="Vedi src/payload/docs/BATCH.md per lo schema di [[batch_table]]",
+            batch_name=batch_name,
+            **kw,
+        )
+
+
 class DuplicateTableNameError(ConfigError):
     """Due o più sorgenti condividono lo stesso nome tabella (filename
     stem): build output, golden e history sono tutti indicizzati per
@@ -289,6 +320,21 @@ class NotFoundError(PayloadError):
 class SourceNotFoundError(NotFoundError):
     def __init__(self, path: Path, **kw):
         super().__init__(f"File sorgente non trovato: '{path}'", path=str(path), **kw)
+
+
+class ProjectNotInitializedError(NotFoundError):
+    """Sollevato da ogni comando che opera su un progetto (build, status,
+    commit, ecc.) quando 'root' non contiene un table-tool.toml — stesso
+    spirito di 'git' fuori da un repository: fallire subito con un
+    messaggio chiaro invece di proseguire silenziosamente sui default."""
+
+    def __init__(self, root: Path, **kw):
+        super().__init__(
+            f"'{root}' non è un progetto payload inizializzato",
+            hint="Esegui 'pld init' in questa cartella, o 'pld init <nome>' per crearne una nuova",
+            path=str(root),
+            **kw,
+        )
 
 
 class NoReaderFoundError(NotFoundError):

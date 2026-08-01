@@ -120,6 +120,35 @@ Guarda il file completo in `src/payload/readers/csv_reader.py` — gestisce
 anche una colonna `offset` opzionale per dati non contigui, ed è un buon
 punto di partenza da copiare per un reader nuovo.
 
+### Estensione opzionale: `parse_many` (tabelle batch)
+
+Un reader può *in più* implementare `parse_many(self, paths: list[Path], config: dict) -> TableIR`
+per essere utilizzabile in una **tabella batch** — una tabella logica
+costruita da più file sorgente invece di uno solo (vedi
+[BATCH.md](BATCH.md) per il design completo). `parse()` resta
+obbligatorio e invariato; `parse_many` è rilevato via duck-typing
+(`getattr(reader, "parse_many", None)`), quindi un reader che non lo
+implementa continua a funzionare esattamente come oggi — semplicemente
+non è utilizzabile in `[[batch_table]]`.
+
+```python
+def parse_many(self, paths: list[Path], config: dict) -> TableIR:
+    """paths è già nell'ordine di concatenazione corretto (deciso dal
+    chiamante, non dal reader) — di solito basta riusare la stessa
+    logica di parse() per singolo file, iterando su paths."""
+    ...
+```
+
+**Non fornire un fallback automatico che concatena `path.read_bytes()`
+alla cieca per i reader che non implementano `parse_many`**: è corretto
+solo per formati puramente riga-per-riga/byte-per-byte (es. `raw_text`,
+che infatti implementa `parse_many`), sbagliato per qualunque formato
+con un header o struttura non ripetibile (es. binari con lunghezza in
+testa) — un reader che non sa gestire il caso multi-file deve dirlo
+chiaramente (`ReaderBatchUnsupportedError`, sollevato automaticamente
+da `core/pipeline.py::build()`), non produrre un output silenziosamente
+sbagliato.
+
 ---
 
 ## Cosa deve fare un Writer
@@ -180,6 +209,110 @@ Punto chiave da notare: **questo writer non ha idea se `ir` è arrivata da
 un CSV, da `raw_text`, o da un futuro reader `.c`** — riceve solo bytes.
 È esattamente questo disaccoppiamento che rende N reader × M writer
 implementabili con N+M plugin, non N×M.
+
+---
+
+## Cosa deve fare un Doctor Check
+
+Un doctor check **verifica una precondizione dell'ambiente/progetto e
+ritorna un giudizio**, non partecipa alla pipeline build reader→writer.
+È il terzo tipo di plugin (oltre a reader/writer) ed è quello che
+alimenta `pld doctor` / `GET /api/doctor` — pensato per cose come "il
+compilatore è nel PATH?", "la config è valida?", "i nomi tabella sono
+univoci?" (i check builtin in `payload/core/doctor.py` sono un buon
+riferimento concreto).
+
+Interfaccia richiesta (da `payload/core/plugin_base.py`):
+
+```python
+class DoctorCheck(Protocol):
+    name: str          # identificatore univoco, mostrato accanto al risultato
+    api_version: str
+
+    def run(self, config: dict) -> CheckResult:
+        """Esegue la verifica, ritorna SEMPRE un CheckResult — mai
+        un'eccezione per un esito negativo, quella è riservata a un
+        errore inatteso del check stesso (vedi sotto)."""
+        ...
+```
+
+`CheckResult` (da `payload.core.plugin_base`):
+
+```python
+CheckResult(name: str, status: str, message: str, hint: str | None = None)
+```
+
+`status` è una delle tre costanti di `CheckStatus`:
+
+| Status | Significato | Effetto su `pld doctor` |
+|---|---|---|
+| `CheckStatus.OK` | tutto a posto | nessuno |
+| `CheckStatus.WARN` | problema non bloccante, l'utente dovrebbe saperlo | non fa fallire il comando (exit code resta 0) |
+| `CheckStatus.FAIL` | problema che probabilmente rompe una build | fa fallire il comando (exit code 1) |
+
+`hint` è facoltativo, mostrato solo se lo status non è `OK` — usalo per
+dire **come risolvere**, non solo cosa è andato storto (es. "installa X"
+invece di solo "X non trovato").
+
+### Esempio reale: `ToolchainCheck`
+
+```python
+class ToolchainCheck:
+    name = "toolchain"
+    api_version = "1.0"
+
+    def run(self, config: dict) -> CheckResult:
+        cmd = config.get("toolchain", {}).get("compiler")
+        if not cmd:
+            return CheckResult(self.name, CheckStatus.WARN, "'compiler' non configurato")
+        if not shutil.which(cmd):
+            return CheckResult(
+                self.name, CheckStatus.FAIL, f"'{cmd}' non trovato nel PATH",
+                hint=f"Installa {cmd} o aggiorna 'compiler' in table-tool.toml",
+            )
+        return CheckResult(self.name, CheckStatus.OK, f"{cmd} trovato")
+```
+
+### Cosa riceve `config`
+
+Lo stesso dict "risolto" (defaults + toolchain già mergiati secondo la
+priorità CLI > sidecar > config globale > default) che riceverebbero
+`parse()`/`emit()`, con in più una chiave che i doctor check usano
+spesso e reader/writer no: **`config["_project_root"]`** (stringa) —
+la cartella del progetto, **da usare sempre al posto della cwd del
+processo** per risolvere path relativi. `pld serve` può girare da una
+cartella diversa dal progetto che sta servendo: un check che scrive/
+legge rispetto alla cwd invece che a `_project_root` inquina la
+cartella sbagliata (vedi `DirWritableCheck`/`CacheIntegrityCheck` per
+l'idioma corretto: `Path(config.get("_project_root", "."))`).
+
+### Un check non deve mai far esplodere `pld doctor`
+
+`run()` gira insieme a tutti gli altri check, builtin e di terze parti:
+se il TUO check solleva un'eccezione grezza (non un `CheckResult` con
+status `FAIL`), il core la intercetta e la converte automaticamente in
+un `CheckResult` di tipo `FAIL` con il messaggio dell'eccezione — non
+crasha più l'intero comando/pagina Doctor, ma **è comunque un
+comportamento degradato**: il messaggio che l'utente vede ("il check ha
+sollevato un errore inatteso...") è molto meno chiaro di un `FAIL`
+scritto apposta da te. Quindi: per un esito negativo *previsto*
+(binario mancante, file malformato, ecc.) ritorna sempre un
+`CheckResult(..., CheckStatus.FAIL, "spiegazione chiara", hint="...")`
+esplicito — riserva le eccezioni ai bug veri nel tuo check.
+
+Questo è anche il motivo per cui lo scaffold generato da
+`pld plugin new-local <nome> --kind doctor-check` (un file con
+`raise NotImplementedError("TODO: implementa il check")` al posto di un
+`run()` vero) **non rompe più `pld doctor`** se lo apri prima di
+finirlo: il check semplicemente compare come `FAIL` con quel messaggio,
+invece di far fallire l'intero comando con un traceback. `pld doctor`
+include anche un check dedicato (`local_plugin_stubs`, non bloccante)
+che scansiona tutti i plugin locali del progetto (reader/writer/doctor
+check, non solo doctor check) e segnala quelli il cui `parse`/`emit`/
+`run` è ancora uno scaffold non implementato, così non serve eseguirli
+per scoprirlo — e la stessa informazione compare come badge "non
+implementato" nella pagina "Plugin" della web UI, accanto a ogni file
+in `local_plugins/`.
 
 ---
 

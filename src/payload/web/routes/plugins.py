@@ -42,6 +42,7 @@ async def plugins_list(request: Request) -> JSONResponse:
                     "kind": kind, "name": name,
                     "extensions": [e for e in ext if e],
                     "api_version": getattr(plugin, "api_version", "?"),
+                    "builtin": registry.is_builtin(name),
                 })
         return {"plugins": items}
 
@@ -69,6 +70,7 @@ async def plugin_info(request: Request) -> JSONResponse:
             "default_writer": getattr(plugin, "default_writer", None),
             "compatible_readers": getattr(plugin, "compatible_readers", None),
             "docstring": doc or None,
+            "builtin": registry.is_builtin(name),
         }
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))

@@ -1,7 +1,8 @@
 """
-Motore di batch-build: dati N sorgenti, le costruisce in un thread pool
-e aggrega i risultati — condiviso tra 'pld build-all' e la build
-iniziale di 'pld watch', così la logica vive in un solo posto.
+Motore di batch-build: date N tabelle (file singoli o tabelle batch,
+vedi core/discovery.py::TableRef), le costruisce in un thread pool e
+aggrega i risultati — condiviso tra 'pld build-all' e la build iniziale
+di 'pld watch', così la logica vive in un solo posto.
 
 Nessuna dipendenza da Rich qui: la UI (progress bar) resta nel comando
 CLI, agganciata tramite 'on_table_result'. Questo modulo non solleva
@@ -15,8 +16,9 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
+from payload.core.batch_tables import effective_config
 from payload.core.cache import BuildCache
 from payload.core.config import load_config
 from payload.core.errors import PayloadError
@@ -25,7 +27,10 @@ from payload.core.history import HistoryStore
 from payload.core.pipeline import build
 from payload.core.registry import PluginRegistry
 
-OnTableResult = Callable[[Path, str], None]
+if TYPE_CHECKING:
+    from payload.core.discovery import TableRef
+
+OnTableResult = Callable[["TableRef", str], None]
 
 
 @dataclass
@@ -38,7 +43,7 @@ class BatchBuildSummary:
 
 
 def run_batch_build(
-    sources: list[Path],
+    tables: list["TableRef"],
     root: Path,
     registry: PluginRegistry,
     cache: BuildCache,
@@ -53,43 +58,46 @@ def run_batch_build(
     keep_intermediate: bool = False,
     on_table_result: OnTableResult | None = None,
 ) -> BatchBuildSummary:
-    """Builda ogni sorgente in 'sources' (jobs=1 sequenziale, jobs>1 su
+    """Builda ogni tabella in 'tables' (jobs=1 sequenziale, jobs>1 su
     thread pool — le tabelle sono indipendenti tra loro), aggrega i
     risultati e salva la cache una volta sola alla fine.
 
-    on_table_result(src, status), se dato, è invocato dopo ogni build
+    on_table_result(ref, status), se dato, è invocato dopo ogni build
     con status in "ok"/"error" — usato dal chiamante per aggiornare una
     progress bar, opzionale altrimenti."""
     summary = BatchBuildSummary()
     lock = threading.Lock()
     history = HistoryStore(root)  # sola lettura qui (check_golden), sicuro condiviso tra i thread
 
-    def _build_one(src: Path):
+    def _build_one(ref: "TableRef"):
         """Eseguita in un thread del pool. Ritorna sempre, non solleva:
         gli errori sono catturati qui per non far crashare l'executor e
         per accumulare tutti i fallimenti, non solo il primo."""
         try:
-            per_table_config = load_config(root, source_path=src)
+            if ref.is_batch:
+                per_table_config = effective_config(load_config(root), ref.batch)
+            else:
+                per_table_config = load_config(root, source_path=ref.source_paths[0])
             out_paths, was_built = build(
-                src, registry, per_table_config, out_dir, cache=cache,
+                ref.source_paths, registry, per_table_config, out_dir, cache=cache,
                 writer_name=writer_name, force=force, dry_run=dry_run,
-                cli_opts=cli_opts, keep_intermediate=keep_intermediate,
+                cli_opts=cli_opts, keep_intermediate=keep_intermediate, table_name=ref.name,
             )
             mismatch = False
             if check_golden_flag and not dry_run:
                 # 'stale' conta come mismatch qui: il sorgente è cambiato dopo
                 # il golden, quindi anche un output che sembra combaciare non è
                 # una verifica affidabile — batch-build vuole un segnale netto.
-                status = check_golden(history, src.stem, src, out_paths).status
+                status = check_golden(history, ref.name, ref.source_paths, out_paths).status
                 mismatch = status in ("mismatch", "stale")
-            return ("ok", src, was_built, mismatch, None)
+            return ("ok", ref, was_built, mismatch, None)
         except PayloadError as e:
-            return ("error", src, False, False, e)
+            return ("error", ref, False, False, e)
 
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as executor:
-        futures = {executor.submit(_build_one, src): src for src in sources}
+        futures = {executor.submit(_build_one, ref): ref for ref in tables}
         for future in as_completed(futures):
-            status, src, was_built, mismatch, error = future.result()
+            status, ref, was_built, mismatch, error = future.result()
             with lock:
                 if status == "ok":
                     if was_built:
@@ -102,7 +110,7 @@ def run_batch_build(
                     summary.errors += 1
                     summary.failures.append(error)
             if on_table_result:
-                on_table_result(src, status)
+                on_table_result(ref, status)
 
     cache.save()
     return summary

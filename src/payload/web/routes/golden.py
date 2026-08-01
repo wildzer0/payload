@@ -13,25 +13,26 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from payload.core.batch_tables import effective_config
 from payload.core.config import load_config
-from payload.core.discovery import discover_for_history
+from payload.core.discovery import discover_for_history, resolve_table_ref
 from payload.core.errors import TableNotFoundError
 from payload.core.golden import check_golden, clear_golden, golden_diff, set_golden
 from payload.core.history import HistoryStore
 from payload.web.paths import resolve
 
 
-def _find_source(sources: list[Path], table_name: str) -> Path:
-    src = next((s for s in sources if s.stem == table_name), None)
-    if src is None:
+def _find_ref(sources: list[Path], batch_tables: list, table_name: str):
+    ref = resolve_table_ref(sources, batch_tables, table_name)
+    if ref is None:
         raise TableNotFoundError(table_name)
-    return src
+    return ref
 
 
-def _output_paths(root: Path, table_name: str, src: Path) -> list[Path]:
-    table_config = load_config(root, source_path=src)
+def _output_paths(root: Path, base_config, ref) -> list[Path]:
+    table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
     out_dir = resolve(root, table_config.defaults.output_dir)
-    return list(out_dir.glob(f"{table_name}.*")) if out_dir.exists() else []
+    return list(out_dir.glob(f"{ref.name}.*")) if out_dir.exists() else []
 
 
 async def golden_get_route(request: Request) -> JSONResponse:
@@ -39,11 +40,11 @@ async def golden_get_route(request: Request) -> JSONResponse:
     table = request.path_params["table_name"]
 
     def _run():
-        sources, _ = discover_for_history(root)
-        src = _find_source(sources, table)
+        sources, batch_tables, config = discover_for_history(root)
+        ref = _find_ref(sources, batch_tables, table)
         history = HistoryStore(root)
-        output_paths = _output_paths(root, table, src)
-        result = check_golden(history, table, src, output_paths)
+        output_paths = _output_paths(root, config, ref)
+        result = check_golden(history, table, ref.source_paths, output_paths)
         return {
             "table": table, "status": result.status,
             "golden_snapshot_id": result.golden_snapshot_id,
@@ -60,8 +61,8 @@ async def golden_set_route(request: Request) -> JSONResponse:
     table = request.path_params["table_name"]
 
     def _run():
-        sources, _ = discover_for_history(root)
-        _find_source(sources, table)  # valida che la tabella esista
+        sources, batch_tables, _ = discover_for_history(root)
+        _find_ref(sources, batch_tables, table)  # valida che la tabella esista
         history = HistoryStore(root)
         golden_id = set_golden(history, table, snapshot_id)
         return {"table": table, "golden_snapshot_id": golden_id}
@@ -86,10 +87,10 @@ async def golden_diff_route(request: Request) -> JSONResponse:
     table = request.path_params["table_name"]
 
     def _run():
-        sources, _ = discover_for_history(root)
-        src = _find_source(sources, table)
+        sources, batch_tables, config = discover_for_history(root)
+        ref = _find_ref(sources, batch_tables, table)
         history = HistoryStore(root)
-        output_paths = _output_paths(root, table, src)
+        output_paths = _output_paths(root, config, ref)
         diffs = golden_diff(history, table, output_paths)
         return {"table": table, "diffs": diffs}
 

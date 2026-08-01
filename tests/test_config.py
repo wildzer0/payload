@@ -26,6 +26,7 @@ def test_model_dump_returns_plain_dict():
         },
         "plugin": {},
         "pipeline_stages": [],
+        "batch_tables": [],
     }
 
 
@@ -111,5 +112,85 @@ def test_pipeline_stages_not_a_list_raises(tmp_path):
 
 def test_invalid_byte_order_raises(tmp_path):
     (tmp_path / "table-tool.toml").write_text('[defaults]\nbyte_order = "middle"\n')
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+# --- [[batch_table]] -----------------------------------------------------
+
+
+def test_batch_table_parsed_into_config(tmp_path):
+    (tmp_path / "table-tool.toml").write_text(
+        '[[batch_table]]\nname = "rows"\nsources = ["ROW*.txt"]\n'
+    )
+    config = load_config(tmp_path)
+    assert config.batch_tables == [{"name": "rows", "sources": ["ROW*.txt"]}]
+
+
+def test_batch_table_with_overrides_and_stages(tmp_path):
+    (tmp_path / "table-tool.toml").write_text(
+        '[[batch_table]]\n'
+        'name = "rows"\n'
+        'sources = ["ROW1.txt", "ROW2.txt"]\n'
+        'reader = "raw_text"\n'
+        'writer = "bin"\n'
+        'byte_order = "big"\n'
+        'stages = [{ type = "reader", name = "raw_text" }, { type = "writer", name = "bin" }]\n'
+    )
+    config = load_config(tmp_path)
+    assert config.batch_tables[0]["reader"] == "raw_text"
+    assert config.batch_tables[0]["byte_order"] == "big"
+    assert len(config.batch_tables[0]["stages"]) == 2
+
+
+def test_batch_table_not_a_list_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('batch_table = "non una lista"\n')
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_batch_table_missing_name_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('[[batch_table]]\nsources = ["ROW*.txt"]\n')
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_batch_table_missing_sources_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('[[batch_table]]\nname = "rows"\n')
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_batch_table_unknown_field_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text(
+        '[[batch_table]]\nname = "rows"\nsources = ["ROW*.txt"]\nbogus = "x"\n'
+    )
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_batch_table_stages_not_a_list_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text(
+        '[[batch_table]]\nname = "rows"\nsources = ["ROW*.txt"]\nstages = "non una lista"\n'
+    )
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_batch_table_sources_not_a_list_of_strings_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text(
+        '[[batch_table]]\nname = "rows"\nsources = [1, 2]\n'
+    )
+    with pytest.raises(InvalidConfigError):
+        load_config(tmp_path)
+
+
+def test_no_batch_table_defaults_to_empty_list(tmp_path):
+    config = load_config(tmp_path)
+    assert config.batch_tables == []
+
+
+def test_batch_table_entry_not_a_table_raises(tmp_path):
+    (tmp_path / "table-tool.toml").write_text('batch_table = ["non una tabella"]\n')
     with pytest.raises(InvalidConfigError):
         load_config(tmp_path)

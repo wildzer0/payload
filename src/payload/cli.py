@@ -6,7 +6,6 @@ payload.core.errors.
 """
 from __future__ import annotations
 
-import logging
 import random
 import shutil
 import subprocess
@@ -22,9 +21,19 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeEl
 from rich.table import Table
 
 from payload.core.batch import run_batch_build
+from payload.core.batch_tables import effective_config, resolve_batch_tables
 from payload.core.cache import BuildCache
-from payload.core.config import load_config, resolve_config_with_provenance
-from payload.core.discovery import discover_for_history, discover_table_sources, find_duplicate_stems
+from payload.core.config import GLOBAL_CONFIG_FILENAME, load_config, resolve_config_with_provenance
+from payload.core.discovery import (
+    TableRef,
+    all_table_refs,
+    check_no_batch_name_collisions,
+    discover_for_history,
+    discover_table_sources,
+    exclude_batch_members,
+    find_duplicate_stems,
+    resolve_table_ref,
+)
 from payload.core.doctor import run_doctor
 from payload.core.errors import (
     BatchBuildError,
@@ -34,9 +43,11 @@ from payload.core.errors import (
     InvalidCliOptionError,
     NothingToCommitError,
     PayloadError,
+    ProjectNotInitializedError,
+    SourceNotFoundError,
 )
 from payload.core.golden import check_golden, clear_golden, golden_diff, set_golden
-from payload.core.history import HistoryStore
+from payload.core.history import HistoryStore, legacy_compatible_source_blobs
 from payload.core.logging_setup import setup_logging
 from payload.core.pipeline import build, describe_table_build
 from payload.core.plugin_base import CheckStatus
@@ -112,7 +123,16 @@ def run_command(fn, verbosity: int):
     ogni PayloadError. Bug interni (eccezioni non previste) restano
     distinti e mostrano sempre traceback pieno.
 
-    NOTA: typer.Exit va ri-sollevato SENZA passare per il ramo
+    NOTA: err_console.print è l'UNICO canale di visualizzazione per un
+    PayloadError — niente logging parallelo via il logger 'payload'
+    (che ha un RichHandler attaccato alla stessa console, vedi
+    logging_setup.py): ci passava anche un logger.log(e.log_level, ...)
+    qui, che duplicava a schermo lo stesso messaggio già stampato sotto
+    (una volta come riga 'ERROR ...' dal RichHandler, una volta come
+    '✗ ...' da qui), un bug rimasto invisibile finché i test non lo
+    hanno esercitato solo con CliRunner/capsys.
+
+    NOTA 2: typer.Exit va ri-sollevato SENZA passare per il ramo
     'Exception' generico. È l'eccezione con cui typer implementa
     un'uscita pulita (usata da diversi comandi con
     'raise typer.Exit(code=...)' dopo aver già stampato un messaggio
@@ -120,11 +140,9 @@ def run_command(fn, verbosity: int):
     'except Exception', un'uscita controllata (es. 'doctor' con check
     falliti) viene scambiata per un crash del tool, con tanto di
     traceback fuorviante mostrato all'utente."""
-    logger = logging.getLogger("payload.cli")
     try:
         return fn()
     except PayloadError as e:
-        logger.log(e.log_level, e.message, extra=e.context, exc_info=verbosity >= 2)
         err_console.print(f"[red]✗[/] {e.message}")
         if e.hint:
             err_console.print(f"    → {e.hint}", style="dim")
@@ -144,6 +162,16 @@ def run_command(fn, verbosity: int):
         err_console.print(f"[red]✗ Errore interno inatteso:[/] {e}")
         err_console.print_exception()
         raise typer.Exit(code=1)
+
+
+def require_project_root(root: Path) -> None:
+    """Come 'git' fuori da un repository: i comandi che operano su un
+    progetto (build, status, commit, golden, ecc.) richiedono che 'root'
+    sia già stato inizializzato con 'pld init'. Comandi che non dipendono
+    da un progetto specifico (init, view, plugin validate/new/new-local,
+    plugins/plugin info) non chiamano questa funzione."""
+    if not (root / GLOBAL_CONFIG_FILENAME).is_file():
+        raise ProjectNotInitializedError(root)
 
 
 # --------------------------------------------------------------------------
@@ -169,7 +197,7 @@ def _parse_opts(raw_opts: Optional[list[str]]) -> dict:
 @app.command(name="build")
 def build_cmd(
     ctx: typer.Context,
-    source: Path = typer.Argument(..., help="File sorgente della tabella"),
+    source: str = typer.Argument(..., help="File sorgente della tabella, o nome di una [[batch_table]]"),
     from_: Optional[str] = typer.Option(None, "--from", help="Reader esplicito"),
     to: Optional[str] = typer.Option(None, "--to", help="Writer da usare"),
     out: Path = typer.Option(Path("build"), "--out", help="Directory di output"),
@@ -185,33 +213,51 @@ def build_cmd(
         False, "--keep-intermediate", help="Non ripulisce tmp/ dopo la build (debug pipeline multi-stage)"
     ),
 ):
-    """Compila una singola tabella."""
+    """Compila una singola tabella — un file sorgente, oppure il nome
+    di una tabella batch dichiarata in [[batch_table]] (vedi
+    src/payload/docs/BATCH.md), che non ha un file unico da passare."""
 
     def _run():
+        root = Path.cwd()
+        require_project_root(root)
         registry = load_plugins()
-        config = load_config(Path.cwd(), source_path=source)
+        source_path = Path(source)
+
+        if source_path.is_file():
+            source_paths = [source_path]
+            config = load_config(root, source_path=source_path)
+            table_name = source_path.stem
+        else:
+            base_config = load_config(root)
+            batch = next((b for b in resolve_batch_tables(root, base_config) if b.name == source), None)
+            if batch is None:
+                raise SourceNotFoundError(source_path)
+            source_paths = batch.source_paths
+            config = effective_config(base_config, batch)
+            table_name = batch.name
+
         cache = BuildCache(Path(config.defaults.cache_dir))
         cli_opts = _parse_opts(opt)
 
         with console.status(f"[cyan]{random_loading_phrase()}[/]", spinner="dots"):
             out_paths, was_built = build(
-                source, registry, config, out, cache=cache,
+                source_paths, registry, config, out, cache=cache,
                 reader_name=from_, writer_name=to, force=force, dry_run=dry_run,
-                cli_opts=cli_opts, keep_intermediate=keep_intermediate,
+                cli_opts=cli_opts, keep_intermediate=keep_intermediate, table_name=table_name,
             )
             cache.save()
 
             if check_golden_flag and not dry_run:
                 history = HistoryStore(Path.cwd())
-                result = check_golden(history, source.stem, source, out_paths)
+                result = check_golden(history, table_name, source_paths, out_paths)
                 if result.status == "mismatch":
-                    raise GoldenMismatchError(source.stem)
+                    raise GoldenMismatchError(table_name)
                 if result.status == "stale":
-                    raise GoldenStaleError(source.stem)
+                    raise GoldenStaleError(table_name)
 
         status = "costruito" if was_built else "da cache"
         destinations = ", ".join(str(p) for p in out_paths)
-        console.print(f"[green]✓[/] {source.name} → {destinations} ({status})")
+        console.print(f"[green]✓[/] {table_name} → {destinations} ({status})")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -237,6 +283,7 @@ def build_all_cmd(
     """Batch build ricorsivo su tutte le tabelle trovate sotto root."""
 
     def _run():
+        require_project_root(root)
         registry = load_plugins(project_root=root)
         base_config = load_config(root)
         cache = BuildCache(Path(base_config.defaults.cache_dir))
@@ -251,22 +298,30 @@ def build_all_cmd(
         if duplicates:
             raise DuplicateTableNameError(duplicates)
 
+        # le tabelle batch non sono filtrate da --filter (filtra file su
+        # disco per path, le batch table sono dichiarate per nome in
+        # config) — sempre incluse tutte per intero.
+        batch_tables = resolve_batch_tables(root, base_config)
+        sources = exclude_batch_members(sources, batch_tables)
+        check_no_batch_name_collisions(sources, batch_tables)
+        tables = all_table_refs(sources, batch_tables)
+
         with Progress(
             SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
             BarColumn(), TextColumn("{task.completed}/{task.total}"), TimeElapsedColumn(),
             console=console,
         ) as progress:
-            task = progress.add_task(random_loading_phrase(), total=len(sources))
+            task = progress.add_task(random_loading_phrase(), total=len(tables))
 
-            def _on_result(src: Path, status: str) -> None:
-                progress.update(task, description=f"[cyan]{src.name}[/]")
+            def _on_result(ref: TableRef, status: str) -> None:
+                progress.update(task, description=f"[cyan]{ref.name}[/]")
                 progress.advance(task)
 
             # jobs=1 -> stesso comportamento sequenziale di prima, nessun
             # overhead di thread pool. jobs>1 -> parallelizza, dato che le
             # tabelle sono indipendenti tra loro (nessuna reference incrociata).
             summary = run_batch_build(
-                sources, root, registry, cache, out, jobs=jobs, writer_name=to,
+                tables, root, registry, cache, out, jobs=jobs, writer_name=to,
                 force=force, dry_run=dry_run, check_golden_flag=check_golden_flag,
                 cli_opts=cli_opts, keep_intermediate=keep_intermediate,
                 on_table_result=_on_result,
@@ -279,7 +334,7 @@ def build_all_cmd(
                 f"[cyan]{summary.cached}[/] da cache   "
                 f"[yellow]{summary.golden_mismatch}[/] golden mismatch   "
                 f"[red]{summary.errors}[/] errori",
-                title=f"{len(sources)} tabelle processate",
+                title=f"{len(tables)} tabelle processate",
                 border_style=summary_style,
             )
         )
@@ -312,6 +367,7 @@ def watch(
 
     def _run():
         project_root = Path.cwd()
+        require_project_root(project_root)
         registry = load_plugins(project_root=project_root)
         config = load_config(project_root)
         cache = BuildCache(Path(config.defaults.cache_dir))
@@ -321,29 +377,47 @@ def watch(
         # La build iniziale non deve mai impedire l'avvio del watch —
         # stessa filosofia di payload/watch.py, che non muore mai per un
         # errore di build durante l'osservazione live.
+        batch_member_paths: set[Path] = set()
         try:
             sources = discover_table_sources(root, known_ext, Path(config.defaults.output_dir), filter_glob)
             duplicates = find_duplicate_stems(sources)
             if duplicates:
                 raise DuplicateTableNameError(duplicates)
-            summary = run_batch_build(sources, root, registry, cache, out, jobs=jobs, writer_name=to)
+            batch_tables = resolve_batch_tables(root, config)
+            batch_member_paths = {p.resolve() for bt in batch_tables for p in bt.source_paths}
+            sources = exclude_batch_members(sources, batch_tables)
+            check_no_batch_name_collisions(sources, batch_tables)
+            tables = all_table_refs(sources, batch_tables)
+
+            summary = run_batch_build(tables, root, registry, cache, out, jobs=jobs, writer_name=to)
             if summary.failures:
                 console.print(
-                    f"[yellow]![/] build iniziale: {len(summary.failures)}/{len(sources)} "
+                    f"[yellow]![/] build iniziale: {len(summary.failures)}/{len(tables)} "
                     "tabelle fallite — procedo comunque con il watch"
                 )
             else:
                 console.print(
                     f"[green]✓[/] build iniziale: {summary.built} costruite, "
-                    f"{summary.cached} da cache ({len(sources)} tabelle)"
+                    f"{summary.cached} da cache ({len(tables)} tabelle)"
                 )
         except PayloadError as e:
             console.print(f"[yellow]![/] build iniziale fallita ({e.message}) — procedo comunque con il watch")
 
         def on_change(src: Path):
+            if src.resolve() in batch_member_paths:
+                # fa parte di una [[batch_table]]: ricostruirlo come se
+                # fosse una tabella a sé (single-file) produrrebbe un
+                # output sbagliato/duplicato — il live-reload per le
+                # tabelle batch non è supportato (vedi BATCH.md),
+                # 'pld build <nome_batch>' resta il modo di aggiornarla.
+                console.print(
+                    f"[dim]— {src.name} fa parte di una tabella batch: rebuild automatico "
+                    "non supportato in watch, usa 'pld build <nome_batch>'[/]"
+                )
+                return
             per_table_config = load_config(project_root, source_path=src)
             out_paths, was_built = build(
-                src, registry, per_table_config, out, cache=cache, writer_name=to,
+                [src], registry, per_table_config, out, cache=cache, writer_name=to,
             )
             cache.save()
             status = "ricostruito" if was_built else "invariato (cache)"
@@ -398,32 +472,34 @@ def status(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
     """Mostra quali tabelle sono cambiate rispetto all'ultimo snapshot."""
 
     def _run():
-        sources, config = discover_for_history(root)
+        require_project_root(root)
+        sources, batch_tables, config = discover_for_history(root)
         history = HistoryStore(root)
         output_dir = Path(config.defaults.output_dir)
+        tables = all_table_refs(sources, batch_tables)
 
         table = Table(title="Stato tabelle")
         table.add_column("Tabella")
         table.add_column("Stato")
 
         any_change = False
-        for src in sources:
-            name = src.stem
-            output_paths = list(output_dir.glob(f"{name}.*")) if output_dir.exists() else []
-            last = history.last_snapshot(name)
+        for ref in tables:
+            display = f"{ref.name} [dim](batch, {len(ref.source_paths)} file)[/]" if ref.is_batch else ref.name
+            output_paths = list(output_dir.glob(f"{ref.name}.*")) if output_dir.exists() else []
+            last = history.last_snapshot(ref.name)
             if last is None:
-                table.add_row(src.name, "[yellow]mai salvata[/]")
+                table.add_row(display, "[yellow]mai salvata[/]")
                 any_change = True
-            elif history.is_dirty(name, src, output_paths):
-                table.add_row(src.name, "[red]modificata[/]")
+            elif history.is_dirty(ref.name, ref.source_paths, output_paths):
+                table.add_row(display, "[red]modificata[/]")
                 any_change = True
             else:
-                table.add_row(src.name, "[green]invariata[/]")
+                table.add_row(display, "[green]invariata[/]")
 
         console.print(table)
-        if sources and not any_change:
+        if tables and not any_change:
             console.print("[dim]Nessuna modifica da salvare.[/]")
-        elif not sources:
+        elif not tables:
             console.print("[dim]Nessuna tabella trovata sotto questa cartella.[/]")
 
     run_command(_run, ctx.obj["verbosity"])
@@ -445,32 +521,36 @@ def commit(
     modificata (o solo per quelle indicate con --only)."""
 
     def _run():
-        sources, config = discover_for_history(root)
+        require_project_root(root)
+        sources, batch_tables, config = discover_for_history(root)
         history = HistoryStore(root)
         registry = load_plugins(project_root=root)
         output_dir = Path(config.defaults.output_dir)
+        tables = all_table_refs(sources, batch_tables)
 
         if only:
-            sources = [s for s in sources if s.stem in only]
+            tables = [t for t in tables if t.name in only]
 
         dirty = []
-        for s in sources:
-            output_paths = list(output_dir.glob(f"{s.stem}.*"))
-            if history.is_dirty(s.stem, s, output_paths):
-                table_config = load_config(root, source_path=s)
-                build_info = describe_table_build(s, registry, table_config, output_paths, output_dir)
-                dirty.append((s, output_paths, build_info))
+        for ref in tables:
+            output_paths = list(output_dir.glob(f"{ref.name}.*"))
+            if history.is_dirty(ref.name, ref.source_paths, output_paths):
+                table_config = effective_config(config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+                build_info = describe_table_build(
+                    ref.source_paths, registry, table_config, output_paths, output_dir, table_name=ref.name,
+                )
+                dirty.append((ref, output_paths, build_info))
         if not dirty:
             raise NothingToCommitError()
 
-        for src, output_paths, build_info in dirty:
-            snap = history.commit(src.stem, src, output_paths, message, **build_info)
+        for ref, output_paths, build_info in dirty:
+            snap = history.commit(ref.name, ref.source_paths, output_paths, message, **build_info)
             n_out = len(snap.output_blobs)
             suffix = ""
             if golden:
-                history.set_golden(src.stem, snap.id)
+                history.set_golden(ref.name, snap.id)
                 suffix = " [gold1]★ golden[/]"
-            console.print(f"[green]✓[/] {src.stem} → snapshot #{snap.id} ({n_out} output allegati){suffix}")
+            console.print(f"[green]✓[/] {ref.name} → snapshot #{snap.id} ({n_out} output allegati){suffix}")
             if snap.missing_outputs:
                 console.print(
                     f"    [yellow]![/] pipeline incompleta: manca {', '.join(snap.missing_outputs)} "
@@ -489,6 +569,7 @@ def log_cmd(
     """Storico degli snapshot, come 'git log'."""
 
     def _run():
+        require_project_root(root)
         history = HistoryStore(root)
         names = [table_name] if table_name else history.all_tracked_tables()
 
@@ -530,6 +611,7 @@ def diff_cmd(
     """Confronta il sorgente attuale con uno snapshot salvato."""
 
     def _run():
+        require_project_root(root)
         history = HistoryStore(root)
         snap_id = snapshot
         if snap_id is None:
@@ -541,29 +623,35 @@ def diff_cmd(
 
         snap = history.get_snapshot(table_name, snap_id)
 
-        sources, _ = discover_for_history(root)
-        src = next((s for s in sources if s.stem == table_name), None)
-        if src is None:
+        sources, batch_tables, _ = discover_for_history(root)
+        ref = resolve_table_ref(sources, batch_tables, table_name)
+        if ref is None:
             console.print(f"[red]✗[/] sorgente per '{table_name}' non trovato")
             raise typer.Exit(code=4)
 
-        current = src.read_bytes()
-        expected = history.read_blob(snap.source_blob)
+        comparable_blobs = legacy_compatible_source_blobs(ref.source_paths, snap.source_blobs)
+        any_diff = False
+        for src in ref.source_paths:
+            current = src.read_bytes()
+            blob_hash = comparable_blobs.get(src.name)
+            expected = history.read_blob(blob_hash) if blob_hash else b""
+            if current == expected:
+                continue
+            any_diff = True
 
-        if current == expected:
+            console.print(f"[bold]Diff {src.name} vs snapshot #{snap_id}[/]")
+            max_len = max(len(current), len(expected))
+            for i in range(0, max_len, 8):
+                c_chunk = current[i:i + 8]
+                e_chunk = expected[i:i + 8]
+                if c_chunk != e_chunk:
+                    console.print(
+                        f"0x{i:04X}  attuale: {c_chunk.hex(' ')}  |  snapshot: {e_chunk.hex(' ')}",
+                        style="red",
+                    )
+
+        if not any_diff:
             console.print(f"Nessuna differenza rispetto allo snapshot #{snap_id}")
-            return
-
-        console.print(f"[bold]Diff {src.name} vs snapshot #{snap_id}[/]")
-        max_len = max(len(current), len(expected))
-        for i in range(0, max_len, 8):
-            c_chunk = current[i:i + 8]
-            e_chunk = expected[i:i + 8]
-            if c_chunk != e_chunk:
-                console.print(
-                    f"0x{i:04X}  attuale: {c_chunk.hex(' ')}  |  snapshot: {e_chunk.hex(' ')}",
-                    style="red",
-                )
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -579,18 +667,20 @@ def restore_cmd(
     """Riporta sorgente E output generato allo stato di uno snapshot precedente."""
 
     def _run():
+        require_project_root(root)
         history = HistoryStore(root)
         history.get_snapshot(table_name, snapshot_id)  # valida che esista, solleva se manca
 
-        sources, config = discover_for_history(root)
-        src = next((s for s in sources if s.stem == table_name), None)
-        if src is None:
+        sources, batch_tables, config = discover_for_history(root)
+        ref = resolve_table_ref(sources, batch_tables, table_name)
+        if ref is None:
             console.print(f"[red]✗[/] sorgente per '{table_name}' non trovato")
             raise typer.Exit(code=4)
 
         if not yes:
+            names = ", ".join(p.name for p in ref.source_paths)
             console.print(
-                f"Verranno sovrascritti {src.name} e i relativi output "
+                f"Verranno sovrascritti {names} e i relativi output "
                 f"con lo stato dello snapshot #{snapshot_id}. "
                 "Nessun nuovo snapshot viene creato: solo l'attuale si sposta indietro, "
                 "la cronologia resta intatta."
@@ -599,7 +689,7 @@ def restore_cmd(
                 console.print("Annullato.")
                 return
 
-        result = history.restore(table_name, snapshot_id, src, Path(config.defaults.output_dir))
+        result = history.restore(table_name, snapshot_id, ref.source_paths, Path(config.defaults.output_dir))
         for w in result.written:
             console.print(f"[green]✓[/] ripristinato {w}")
         for r in result.removed:
@@ -623,14 +713,20 @@ def config_show(
     livello dei 3 sta vincendo per una tabella specifica."""
 
     def _run():
+        require_project_root(root)
         source_path = None
         if table:
-            sources, _ = discover_for_history(root)
-            src = next((s for s in sources if s.stem == table), None)
-            if src is None:
+            sources, batch_tables, _ = discover_for_history(root)
+            ref = resolve_table_ref(sources, batch_tables, table)
+            if ref is None:
                 console.print(f"[red]✗[/] tabella '{table}' non trovata")
                 raise typer.Exit(code=4)
-            source_path = src
+            # una tabella batch non ha un source_path da cui risolvere
+            # un sidecar (i suoi override vivono inline in [[batch_table]],
+            # non in un file <nome>.config.toml) — mostra solo la config
+            # globale in quel caso, nessun sidecar da layerare.
+            if not ref.is_batch:
+                source_path = ref.source_paths[0]
 
         config, provenance = resolve_config_with_provenance(root, source_path=source_path)
 
@@ -675,7 +771,7 @@ def pipeline_show(
     farà. Mostra anche quali stage hanno un checkpoint di cache valido."""
 
     def _run():
-        from payload.core.cache import compute_pipeline_cache_key
+        from payload.core.cache import compute_pipeline_cache_key, compute_pipeline_cache_key_multi
         from payload.core.pipeline import (
             final_output_paths,
             resolve_pipeline_spec,
@@ -683,21 +779,25 @@ def pipeline_show(
         )
         from payload.core.pipeline_spec import ExecStage, ReaderStage, WriterStage
 
-        sources, _ = discover_for_history(root)
-        src = next((s for s in sources if s.stem == table), None)
-        if src is None:
+        require_project_root(root)
+        sources, batch_tables, base_config = discover_for_history(root)
+        ref = resolve_table_ref(sources, batch_tables, table)
+        if ref is None:
             console.print(f"[red]✗[/] tabella '{table}' non trovata")
             raise typer.Exit(code=4)
 
         registry = load_plugins(project_root=root)
-        config = load_config(root, source_path=src)
+        config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
 
-        spec = resolve_pipeline_spec(src, registry, config, None, None)
+        spec = resolve_pipeline_spec(ref.source_paths[0], registry, config, None, None)
         validate_pipeline_against_registry(spec, registry)
 
         cache = BuildCache(Path(config.defaults.cache_dir))
-        source_bytes = src.read_bytes()
         config_dict = config.model_dump()
+        if ref.is_batch:
+            named_sources = sorted((p.name, p.read_bytes()) for p in ref.source_paths)
+        else:
+            source_bytes = ref.source_paths[0].read_bytes()
 
         t = Table(title=f"Pipeline per {table}")
         t.add_column("#")
@@ -719,10 +819,15 @@ def pipeline_show(
 
             checkpoint_note = ""
             if isinstance(stage, (WriterStage, ExecStage)):
-                checkpoint_key = compute_pipeline_cache_key(
-                    source_bytes, spec.signature_prefix(i), config_dict
-                )
-                stage_table_key = f"{src}::stage{i}"
+                if ref.is_batch:
+                    checkpoint_key = compute_pipeline_cache_key_multi(
+                        named_sources, spec.signature_prefix(i), config_dict
+                    )
+                else:
+                    checkpoint_key = compute_pipeline_cache_key(
+                        source_bytes, spec.signature_prefix(i), config_dict
+                    )
+                stage_table_key = f"{table}::stage{i}"
                 in_terminal_group = i >= terminal_start
                 if in_terminal_group:
                     checkpoint_note = "[dim](finale, vedi cache tabella)[/]"
@@ -734,7 +839,7 @@ def pipeline_show(
             t.add_row(str(i), stage.kind, detail, checkpoint_note)
 
         console.print(t)
-        out_paths = final_output_paths(spec, src, Path(config.defaults.output_dir), registry)
+        out_paths = final_output_paths(spec, table, Path(config.defaults.output_dir), registry)
         destinations = ", ".join(str(p) for p in out_paths)
         console.print(f"Output finale: [bold]{destinations}[/]")
 
@@ -747,10 +852,12 @@ def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
     byte_order, stato golden e ultimo snapshot history."""
 
     def _run():
-        sources, _ = discover_for_history(root)
+        require_project_root(root)
+        sources, batch_tables, base_config = discover_for_history(root)
         history = HistoryStore(root)
+        tables = all_table_refs(sources, batch_tables)
 
-        t = Table(title=f"Report progetto ({len(sources)} tabelle)")
+        t = Table(title=f"Report progetto ({len(tables)} tabelle)")
         t.add_column("Tabella")
         t.add_column("Sorgente")
         t.add_column("Output")
@@ -758,19 +865,20 @@ def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
         t.add_column("Golden")
         t.add_column("Ultimo snapshot")
 
-        for src in sources:
-            name = src.stem
-            table_config = load_config(root, source_path=src)
+        for ref in tables:
+            name = ref.name
+            display = f"{name} [dim](batch, {len(ref.source_paths)} file)[/]" if ref.is_batch else name
+            table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
             out_dir = Path(table_config.defaults.output_dir)
 
-            src_size = f"{src.stat().st_size} B"
+            src_size = f"{sum(p.stat().st_size for p in ref.source_paths)} B"
 
             output_files = list(out_dir.glob(f"{name}.*")) if out_dir.exists() else []
             if output_files:
                 out_size = f"{output_files[0].stat().st_size} B"
             else:
                 out_size = "[dim]mai buildata[/]"
-            golden_result = check_golden(history, name, src, output_files)
+            golden_result = check_golden(history, name, ref.source_paths, output_files)
             golden_str = {
                 "match": "[green]match[/]",
                 "mismatch": "[red]mismatch[/]",
@@ -781,7 +889,7 @@ def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
             last = history.last_snapshot(name)
             snap_str = f"#{last.id} ({last.timestamp[:10]})" if last else "[dim]mai salvata[/]"
 
-            t.add_row(name, src_size, out_size, table_config.defaults.byte_order, golden_str, snap_str)
+            t.add_row(display, src_size, out_size, table_config.defaults.byte_order, golden_str, snap_str)
 
         console.print(t)
 
@@ -802,9 +910,16 @@ def export(
     def _run():
         from payload.export import export_project
 
-        sources, config = discover_for_history(root)
-        export_project(root, sources, output, include_history=include_history)
-        console.print(f"[green]✓[/] {len(sources)} tabelle archiviate in {output}")
+        require_project_root(root)
+        sources, batch_tables, config = discover_for_history(root)
+        tables = all_table_refs(sources, batch_tables)
+        # table-tool.toml (già incluso da export_project) porta con sé le
+        # dichiarazioni [[batch_table]] — i file MEMBRO vanno comunque
+        # elencati esplicitamente qui, altrimenti il progetto esportato
+        # non sarebbe ribuildabile (mancherebbero i sorgenti del batch).
+        all_paths = [p for ref in tables for p in ref.source_paths]
+        export_project(root, all_paths, output, include_history=include_history)
+        console.print(f"[green]✓[/] {len(tables)} tabelle archiviate in {output}")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -813,18 +928,18 @@ def export(
 # golden
 # --------------------------------------------------------------------------
 
-def _table_source(root: Path, sources: list[Path], table_name: str) -> Path:
-    src = next((s for s in sources if s.stem == table_name), None)
-    if src is None:
+def _resolve_ref_or_exit(sources: list[Path], batch_tables: list, table_name: str) -> TableRef:
+    ref = resolve_table_ref(sources, batch_tables, table_name)
+    if ref is None:
         console.print(f"[red]✗[/] sorgente per '{table_name}' non trovato")
         raise typer.Exit(code=4)
-    return src
+    return ref
 
 
-def _current_output_paths(root: Path, table_name: str, src: Path) -> list[Path]:
-    table_config = load_config(root, source_path=src)
+def _current_output_paths(root: Path, base_config, ref: TableRef) -> list[Path]:
+    table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
     out_dir = Path(table_config.defaults.output_dir)
-    return list(out_dir.glob(f"{table_name}.*")) if out_dir.exists() else []
+    return list(out_dir.glob(f"{ref.name}.*")) if out_dir.exists() else []
 
 
 @golden_app.command("set")
@@ -839,6 +954,7 @@ def golden_set_cmd(
     snapshot esistente ('pld log <tabella>' per vedere quali ci sono)."""
 
     def _run():
+        require_project_root(root)
         history = HistoryStore(root)
         golden_id = set_golden(history, table_name, snapshot)
         console.print(f"[gold1]★[/] golden per '{table_name}' impostato allo snapshot #{golden_id}")
@@ -856,6 +972,7 @@ def golden_clear_cmd(
     restano, solo il puntatore golden viene tolto)."""
 
     def _run():
+        require_project_root(root)
         history = HistoryStore(root)
         if clear_golden(history, table_name):
             console.print(f"[green]✓[/] golden per '{table_name}' rimosso")
@@ -884,13 +1001,14 @@ def golden_check_cmd(
     combacia o è stale)."""
 
     def _run():
-        sources, _ = discover_for_history(root)
+        require_project_root(root)
+        sources, batch_tables, config = discover_for_history(root)
         history = HistoryStore(root)
 
         if table_name is not None:
-            src = _table_source(root, sources, table_name)
-            output_paths = _current_output_paths(root, table_name, src)
-            result = check_golden(history, table_name, src, output_paths)
+            ref = _resolve_ref_or_exit(sources, batch_tables, table_name)
+            output_paths = _current_output_paths(root, config, ref)
+            result = check_golden(history, table_name, ref.source_paths, output_paths)
             if result.status == "match":
                 console.print(f"[green]✓[/] {table_name}: match")
             elif result.status == "missing":
@@ -902,11 +1020,10 @@ def golden_check_cmd(
             return
 
         any_bad = False
-        for src in sources:
-            name = src.stem
-            output_paths = _current_output_paths(root, name, src)
-            result = check_golden(history, name, src, output_paths)
-            console.print(f"{name}: {_GOLDEN_STATUS_STYLE[result.status]}")
+        for ref in all_table_refs(sources, batch_tables):
+            output_paths = _current_output_paths(root, config, ref)
+            result = check_golden(history, ref.name, ref.source_paths, output_paths)
+            console.print(f"{ref.name}: {_GOLDEN_STATUS_STYLE[result.status]}")
             if result.status in ("mismatch", "stale"):
                 any_bad = True
         if any_bad:
@@ -924,10 +1041,11 @@ def golden_diff_cmd(
     """Differenze byte per byte tra l'output attuale e lo snapshot golden di una tabella."""
 
     def _run():
-        sources, _ = discover_for_history(root)
-        src = _table_source(root, sources, table_name)
+        require_project_root(root)
+        sources, batch_tables, config = discover_for_history(root)
+        ref = _resolve_ref_or_exit(sources, batch_tables, table_name)
         history = HistoryStore(root)
-        output_paths = _current_output_paths(root, table_name, src)
+        output_paths = _current_output_paths(root, config, ref)
 
         diffs = golden_diff(history, table_name, output_paths)
         if not diffs:
@@ -1169,6 +1287,7 @@ def clean(
     golden di tutte le tabelle, gli snapshot restano intatti."""
 
     def _run():
+        require_project_root(Path.cwd())
         config = load_config(Path.cwd())
         if target not in ("cache", "build", "golden", "all"):
             console.print(f"[red]✗[/] target sconosciuto: '{target}' (cache|build|golden|all)")
@@ -1226,6 +1345,7 @@ def serve(
     'payload[serve]')."""
 
     def _run():
+        require_project_root(root.resolve())
         try:
             import uvicorn
 
@@ -1261,6 +1381,7 @@ def doctor(ctx: typer.Context):
     """Verifica toolchain, plugin, config e directory prima di un batch build."""
 
     def _run():
+        require_project_root(Path.cwd())
         registry = load_plugins(strict=False)
         config = load_config(Path.cwd())
         config_dict = config.model_dump()

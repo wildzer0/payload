@@ -5,11 +5,10 @@ from __future__ import annotations
 
 from starlette.routing import BaseRoute
 
-from payload.web.routes import build, config, docs, golden, history, local_plugin_editor, misc, plugins, source_editor, watch
+from payload.web.routes import build, config, docs, golden, history, local_plugin_editor, misc, plugins, source_editor
 
 ROUTES: list[BaseRoute] = [
     *build.ROUTES,
-    *watch.ROUTES,
     *history.ROUTES,
     *config.ROUTES,
     *golden.ROUTES,

@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse
 from starlette.routing import Route
 
+from payload.core.batch_tables import effective_config
 from payload.core.config import load_config
 from payload.core.doctor import run_doctor
 from payload.core.golden import check_golden
@@ -53,53 +54,60 @@ async def report(request: Request) -> JSONResponse:
         import time
 
         from payload.core.config import read_raw_sidecar
-        from payload.core.discovery import discover_for_history
+        from payload.core.discovery import all_table_refs, discover_for_history
         from payload.core.pipeline import resolve_table_outputs
 
-        sources, _ = discover_for_history(root)
+        sources, batch_tables, base_config = discover_for_history(root)
         history = HistoryStore(root)
         registry = load_plugins(strict=False, project_root=root)
         rows = []
-        for src in sources:
-            name = src.stem
-            table_config = load_config(root, source_path=src)
+        for ref in all_table_refs(sources, batch_tables):
+            name = ref.name
+            table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
             out_dir = resolve(root, table_config.defaults.output_dir)
-
-            # resolve_table_outputs qui serve SOLO per il reader/writer
-            # risolti da mostrare in dashboard — quali file sono
-            # effettivamente su disco resta un fatto puramente fisico
-            # (glob), indipendente da cosa la config risolverebbe ORA:
-            # un writer ad-hoc (--to) passato a una singola build non è
-            # mai nella config, ma il suo output esiste comunque.
-            _, resolved_reader_name, resolved_writer_names = resolve_table_outputs(
-                src, registry, table_config, out_dir
-            )
-            output_files = list(out_dir.glob(f"{name}.*")) if out_dir.exists() else []
-            out_size = output_files[0].stat().st_size if output_files else None
-            golden_result = check_golden(history, name, src, output_files)
 
             pipeline_explicit = bool(table_config.pipeline_stages)
             resolved_reader = resolved_writer = None
-            if not pipeline_explicit:
-                # Una pipeline esplicita ha già uno shape suo (possibilmente
+            if not pipeline_explicit and not ref.is_batch:
+                # resolve_table_outputs qui serve SOLO per il reader/writer
+                # risolti da mostrare in dashboard — quali file sono
+                # effettivamente su disco resta un fatto puramente fisico
+                # (glob), indipendente da cosa la config risolverebbe ORA:
+                # un writer ad-hoc (--to) passato a una singola build non è
+                # mai nella config, ma il suo output esiste comunque. Non
+                # generalizzata a più sorgenti: resta solo per il caso
+                # single-file, come già prima delle tabelle batch. Una
+                # pipeline esplicita ha già uno shape suo (possibilmente
                 # multi-stage/fan-out): mostrare "il reader/writer risolto"
                 # come se fosse un caso semplice sarebbe fuorviante, per
                 # quello questi due campi restano vuoti in quel caso.
+                _, resolved_reader_name, resolved_writer_names = resolve_table_outputs(
+                    ref.source_paths[0], registry, table_config, out_dir
+                )
                 resolved_reader = resolved_reader_name
                 resolved_writer = resolved_writer_names[0] if resolved_writer_names else None
 
+            output_files = list(out_dir.glob(f"{name}.*")) if out_dir.exists() else []
+            out_size = output_files[0].stat().st_size if output_files else None
+            golden_result = check_golden(history, name, ref.source_paths, output_files)
+
             last = history.last_snapshot(name)
+            has_sidecar = False if ref.is_batch else bool(read_raw_sidecar(ref.source_paths[0]))
             rows.append({
                 "name": name,
-                "source_size": src.stat().st_size,
+                "is_batch": ref.is_batch,
+                "source_count": len(ref.source_paths),
+                "source_size": sum(p.stat().st_size for p in ref.source_paths),
                 "output_size": out_size,
                 "byte_order": table_config.defaults.byte_order,
                 "golden_status": golden_result.status,
                 "golden_snapshot_id": golden_result.golden_snapshot_id,
                 "last_snapshot": {"id": last.id, "timestamp": last.timestamp} if last else None,
                 "tip_snapshot_id": history.tip_snapshot_id(name),
-                "source_mtime": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(src.stat().st_mtime)),
-                "has_sidecar": bool(read_raw_sidecar(src)),
+                "source_mtime": time.strftime(
+                    "%Y-%m-%dT%H:%M:%S", time.localtime(max(p.stat().st_mtime for p in ref.source_paths))
+                ),
+                "has_sidecar": has_sidecar,
                 "pipeline_explicit": pipeline_explicit,
                 "reader_override": table_config.defaults.reader,
                 "writer_override": table_config.defaults.writer,
@@ -135,13 +143,14 @@ async def export_route(request: Request):
     include_history = request.query_params.get("include_history") == "true"
 
     def _run():
-        from payload.core.discovery import discover_for_history
+        from payload.core.discovery import all_table_refs, discover_for_history
         from payload.export import export_project
 
-        sources, _ = discover_for_history(root)
+        sources, batch_tables, _ = discover_for_history(root)
+        all_paths = [p for ref in all_table_refs(sources, batch_tables) for p in ref.source_paths]
         tmp_dir = Path(tempfile.mkdtemp(prefix="payload_export_"))
         out_zip = tmp_dir / "export.zip"
-        export_project(root, sources, out_zip, include_history=include_history)
+        export_project(root, all_paths, out_zip, include_history=include_history)
         return out_zip
 
     zip_path = await anyio.to_thread.run_sync(_run)

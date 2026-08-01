@@ -73,6 +73,14 @@ class PayloadConfig:
     # alternanza reader/writer/exec). Vuota = nessuna pipeline esplicita,
     # si usa la risoluzione implicita da --from/--to (vedi core/pipeline.py).
     pipeline_stages: list = field(default_factory=list)
+    # [[batch_table]] — lista grezza di dict (array of tables TOML), una
+    # tabella logica costruita da PIÙ file sorgente invece di uno solo
+    # (vedi src/payload/docs/BATCH.md). Validata solo strutturalmente
+    # qui (nomi campo noti, tipi base); espansione dei glob 'sources' e
+    # validazione profonda (nomi duplicati, path mancanti) è territorio
+    # di core/batch_tables.py, non del core config — stesso confine già
+    # tracciato per pipeline_stages/pipeline_spec.py.
+    batch_tables: list = field(default_factory=list)
 
     def model_dump(self) -> dict:
         """Nome del metodo mantenuto uguale a pydantic v2 apposta: nessun
@@ -85,6 +93,8 @@ _DEFAULTS_STR_FIELDS = ("writer", "reader", "output_dir", "cache_dir", "byte_ord
 _TOOLCHAIN_STR_FIELDS = ("compiler", "objcopy", "objcopy_target", "objcopy_arch")
 _TOOLCHAIN_LIST_STR_FIELDS = ("compiler_flags",)
 _VALID_BYTE_ORDERS = ("little", "big")
+_BATCH_TABLE_STR_FIELDS = ("name", "reader", "writer", "byte_order")
+_BATCH_TABLE_LIST_STR_FIELDS = ("sources",)
 
 
 def _load_toml(path: Path) -> dict:
@@ -122,11 +132,29 @@ def _validate_section(
                 raise InvalidConfigError(path, field=field_path, reason="deve essere una lista di stringhe")
 
 
+def _validate_batch_table_entry(entry: dict, index: int, path: Path) -> None:
+    field_prefix = f"batch_table[{index}]"
+    if not isinstance(entry, dict):
+        raise InvalidConfigError(path, field=field_prefix, reason="deve essere una tabella TOML, es. [[batch_table]]")
+    if not entry.get("name"):
+        raise InvalidConfigError(path, field=f"{field_prefix}.name", reason="obbligatorio, non può essere vuoto")
+    if not entry.get("sources"):
+        raise InvalidConfigError(path, field=f"{field_prefix}.sources", reason="obbligatorio, non può essere vuoto")
+    _validate_section(
+        {k: v for k, v in entry.items() if k != "stages"},
+        field_prefix, _BATCH_TABLE_STR_FIELDS, _BATCH_TABLE_LIST_STR_FIELDS, path,
+    )
+    stages = entry.get("stages", [])
+    if not isinstance(stages, list):
+        raise InvalidConfigError(path, field=f"{field_prefix}.stages", reason="deve essere una lista di stage")
+
+
 def _build_config(merged: dict, path: Path) -> PayloadConfig:
     defaults_dict = merged.get("defaults", {})
     toolchain_dict = merged.get("toolchain", {})
     plugin_dict = merged.get("plugin", {})
     pipeline_dict = merged.get("pipeline", {})
+    batch_table_list = merged.get("batch_table", [])
 
     if not isinstance(defaults_dict, dict):
         raise InvalidConfigError(path, field="defaults", reason="deve essere una tabella TOML, es. [defaults]")
@@ -136,12 +164,14 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
         raise InvalidConfigError(path, field="plugin", reason="deve essere una tabella TOML, es. [plugin.nome_plugin]")
     if not isinstance(pipeline_dict, dict):
         raise InvalidConfigError(path, field="pipeline", reason="deve essere una tabella TOML, es. [pipeline]")
+    if not isinstance(batch_table_list, list):
+        raise InvalidConfigError(path, field="batch_table", reason="deve essere una lista di tabelle [[batch_table]]")
 
     pipeline_stages = pipeline_dict.get("stages", [])
     if not isinstance(pipeline_stages, list):
         raise InvalidConfigError(path, field="pipeline.stages", reason="deve essere una lista di stage")
 
-    unknown_top = set(merged.keys()) - {"defaults", "toolchain", "plugin", "pipeline"}
+    unknown_top = set(merged.keys()) - {"defaults", "toolchain", "plugin", "pipeline", "batch_table"}
     if unknown_top:
         raise InvalidConfigError(path, field=next(iter(unknown_top)), reason="sezione sconosciuta")
 
@@ -151,7 +181,11 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
     # plugin, il core non ha modo di sapere quali chiavi siano legittime.
     # [pipeline.stages] è deliberatamente validato solo strutturalmente
     # (lista sì/no): le regole di alternanza reader/writer/exec sono
-    # territorio di core/pipeline_spec.py, non del core config.
+    # territorio di core/pipeline_spec.py, non del core config. Stesso
+    # confine per [[batch_table]]: qui solo struttura/campi noti, non
+    # l'espansione dei glob 'sources' (core/batch_tables.py).
+    for i, entry in enumerate(batch_table_list):
+        _validate_batch_table_entry(entry, i, path)
 
     byte_order = defaults_dict.get("byte_order", "little")
     if byte_order not in _VALID_BYTE_ORDERS:
@@ -165,6 +199,7 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
         toolchain=ToolchainConfig(**toolchain_dict),
         plugin=plugin_dict,
         pipeline_stages=pipeline_stages,
+        batch_tables=batch_table_list,
     )
 
 

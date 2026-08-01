@@ -11,43 +11,49 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from payload.core.batch_tables import effective_config
 from payload.core.config import load_config
-from payload.core.discovery import discover_for_history
+from payload.core.discovery import all_table_refs, discover_for_history, resolve_table_ref
 from payload.core.errors import NothingToCommitError, SnapshotNotFoundError, TableNotFoundError
-from payload.core.history import HistoryStore
+from payload.core.history import HistoryStore, legacy_compatible_source_blobs
 from payload.core.pipeline import describe_table_build
 from payload.core.registry import load_plugins
 from payload.web.errors import InvalidRequestError
 from payload.web.paths import resolve
 
 
-def _find_source(sources: list[Path], table_name: str) -> Path:
-    src = next((s for s in sources if s.stem == table_name), None)
-    if src is None:
+def _find_ref(sources: list[Path], batch_tables: list, table_name: str):
+    ref = resolve_table_ref(sources, batch_tables, table_name)
+    if ref is None:
         raise TableNotFoundError(table_name)
-    return src
+    return ref
 
 
 async def status(request: Request) -> JSONResponse:
     root = request.app.state.root
 
     def _run():
-        sources, _ = discover_for_history(root)
+        sources, batch_tables, base_config = discover_for_history(root)
         history = HistoryStore(root)
         tables = []
-        for src in sources:
-            name = src.stem
-            table_config = load_config(root, source_path=src)
+        for ref in all_table_refs(sources, batch_tables):
+            table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
             out_dir = resolve(root, table_config.defaults.output_dir)
-            output_paths = list(out_dir.glob(f"{name}.*")) if out_dir.exists() else []
-            last = history.last_snapshot(name)
+            output_paths = list(out_dir.glob(f"{ref.name}.*")) if out_dir.exists() else []
+            last = history.last_snapshot(ref.name)
             if last is None:
                 state = "never_saved"
-            elif history.is_dirty(name, src, output_paths):
+            elif history.is_dirty(ref.name, ref.source_paths, output_paths):
                 state = "dirty"
             else:
                 state = "clean"
-            tables.append({"name": name, "path": str(src), "state": state})
+            tables.append({
+                "name": ref.name,
+                "path": str(ref.source_paths[0]) if not ref.is_batch else None,
+                "is_batch": ref.is_batch,
+                "source_count": len(ref.source_paths),
+                "state": state,
+            })
         return {"tables": tables}
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
@@ -62,30 +68,32 @@ async def commit(request: Request) -> JSONResponse:
     root = request.app.state.root
 
     def _run():
-        sources, config = discover_for_history(root)
+        sources, batch_tables, base_config = discover_for_history(root)
         history = HistoryStore(root)
         registry = load_plugins(project_root=root)
-        output_dir = resolve(root, config.defaults.output_dir)
+        output_dir = resolve(root, base_config.defaults.output_dir)
 
-        target_sources = sources
+        target_tables = all_table_refs(sources, batch_tables)
         if only:
-            target_sources = [s for s in sources if s.stem in only]
+            target_tables = [t for t in target_tables if t.name in only]
 
         dirty = []
-        for s in target_sources:
-            output_paths = list(output_dir.glob(f"{s.stem}.*"))
-            if history.is_dirty(s.stem, s, output_paths):
-                table_config = load_config(root, source_path=s)
-                build_info = describe_table_build(s, registry, table_config, output_paths, output_dir)
-                dirty.append((s, output_paths, build_info))
+        for ref in target_tables:
+            output_paths = list(output_dir.glob(f"{ref.name}.*"))
+            if history.is_dirty(ref.name, ref.source_paths, output_paths):
+                table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+                build_info = describe_table_build(
+                    ref.source_paths, registry, table_config, output_paths, output_dir, table_name=ref.name,
+                )
+                dirty.append((ref, output_paths, build_info))
         if not dirty:
             raise NothingToCommitError()
 
         committed = []
-        for src, output_paths, build_info in dirty:
-            snap = history.commit(src.stem, src, output_paths, message, **build_info)
+        for ref, output_paths, build_info in dirty:
+            snap = history.commit(ref.name, ref.source_paths, output_paths, message, **build_info)
             committed.append({
-                "name": src.stem,
+                "name": ref.name,
                 "snapshot_id": snap.id,
                 "outputs": len(snap.output_blobs),
                 "missing_outputs": snap.missing_outputs,
@@ -166,21 +174,35 @@ async def diff_route(request: Request) -> JSONResponse:
             snap_id = last.id
 
         snap = history.get_snapshot(table_name, snap_id)
-        sources, _ = discover_for_history(root)
-        src = _find_source(sources, table_name)
+        sources, batch_tables, _ = discover_for_history(root)
+        ref = _find_ref(sources, batch_tables, table_name)
 
-        current = src.read_bytes()
-        expected = history.read_blob(snap.source_blob)
-        if current == expected:
-            return {"snapshot_id": snap_id, "identical": True, "chunks": []}
+        comparable_blobs = legacy_compatible_source_blobs(ref.source_paths, snap.source_blobs)
+        files = []
+        for src in ref.source_paths:
+            current = src.read_bytes()
+            blob_hash = comparable_blobs.get(src.name)
+            expected = history.read_blob(blob_hash) if blob_hash else b""
+            if current == expected:
+                continue
+            chunks = []
+            max_len = max(len(current), len(expected))
+            for i in range(0, max_len, 8):
+                c_chunk, e_chunk = current[i:i + 8], expected[i:i + 8]
+                if c_chunk != e_chunk:
+                    chunks.append({"offset": i, "current": c_chunk.hex(" "), "snapshot": e_chunk.hex(" ")})
+            files.append({"filename": src.name, "chunks": chunks})
 
-        chunks = []
-        max_len = max(len(current), len(expected))
-        for i in range(0, max_len, 8):
-            c_chunk, e_chunk = current[i:i + 8], expected[i:i + 8]
-            if c_chunk != e_chunk:
-                chunks.append({"offset": i, "current": c_chunk.hex(" "), "snapshot": e_chunk.hex(" ")})
-        return {"snapshot_id": snap_id, "identical": False, "chunks": chunks}
+        if not files:
+            return {"snapshot_id": snap_id, "identical": True, "chunks": [], "files": []}
+        return {
+            "snapshot_id": snap_id, "identical": False,
+            # 'chunks' del primo file diverso, per retrocompatibilità col
+            # frontend a singolo-file esistente; 'files' è la vista
+            # completa multi-file (usata per le tabelle batch).
+            "chunks": files[0]["chunks"],
+            "files": files,
+        }
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
 
@@ -198,13 +220,18 @@ async def restore_route(request: Request) -> JSONResponse:
         history = HistoryStore(root)
         history.get_snapshot(table_name, snapshot_id)  # valida che esista, solleva se manca
 
-        sources, config = discover_for_history(root)
-        src = _find_source(sources, table_name)
+        sources, batch_tables, config = discover_for_history(root)
+        ref = _find_ref(sources, batch_tables, table_name)
 
         if not confirm:
-            return {"status": "confirmation_required", "source": str(src), "snapshot_id": snapshot_id}
+            return {
+                "status": "confirmation_required",
+                "source": str(ref.source_paths[0]) if not ref.is_batch else None,
+                "sources": [str(p) for p in ref.source_paths],
+                "snapshot_id": snapshot_id,
+            }
 
-        result = history.restore(table_name, snapshot_id, src, resolve(root, config.defaults.output_dir))
+        result = history.restore(table_name, snapshot_id, ref.source_paths, resolve(root, config.defaults.output_dir))
         return {
             "status": "restored",
             "written": [str(w) for w in result.written],
@@ -226,14 +253,20 @@ async def snapshot_download_route(request: Request) -> Response:
         raise InvalidRequestError("snapshot_id deve essere un numero intero")
 
     def _run() -> bytes:
-        sources, _ = discover_for_history(root)
-        src = _find_source(sources, table)
+        sources, batch_tables, _ = discover_for_history(root)
+        _find_ref(sources, batch_tables, table)  # valida che la tabella esista
         history = HistoryStore(root)
         snap = history.get_snapshot(table, snapshot_id)
 
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr(src.name, history.read_blob(snap.source_blob))
+            for filename, blob_hash in snap.source_blobs.items():
+                # <source> è il placeholder legacy (vedi
+                # SnapshotMeta.from_dict) per snapshot pre-tabelle-batch
+                # che non conoscevano il filename reale — usa il nome
+                # tabella come fallback, meglio di un file letteralmente
+                # chiamato '<source>' nello zip.
+                zf.writestr(filename if filename != "<source>" else table, history.read_blob(blob_hash))
             for filename, blob_hash in snap.output_blobs.items():
                 zf.writestr(filename, history.read_blob(blob_hash))
         return buf.getvalue()

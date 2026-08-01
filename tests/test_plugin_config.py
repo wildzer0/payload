@@ -53,7 +53,7 @@ def test_plugin_section_reaches_reader(tmp_path, registry):
     config = load_config(tmp_path, source_path=src)
     assert config.plugin == {"demo": {"delimiter": ";"}}
 
-    out_paths, _ = build(src, registry, config, tmp_path / "out")
+    out_paths, _ = build([src], registry, config, tmp_path / "out")
     assert out_paths[0].read_bytes() == b";"
 
 
@@ -73,7 +73,7 @@ def test_cli_opts_override_persistent_plugin_config(tmp_path, registry):
     src.write_text("x")
 
     config = load_config(tmp_path, source_path=src)
-    out_paths, _ = build(src, registry, config, tmp_path / "out", cli_opts={"delimiter": "|"})
+    out_paths, _ = build([src], registry, config, tmp_path / "out", cli_opts={"delimiter": "|"})
 
     assert out_paths[0].read_bytes() == b"|"
 
@@ -84,8 +84,8 @@ def test_cli_opts_invalidate_cache(tmp_path, registry):
     config = load_config(tmp_path, source_path=src)
     cache = BuildCache(tmp_path / "cache")
 
-    out1, built1 = build(src, registry, config, tmp_path / "out", cache=cache)
-    out2, built2 = build(src, registry, config, tmp_path / "out", cache=cache, cli_opts={"delimiter": "|"})
+    out1, built1 = build([src], registry, config, tmp_path / "out", cache=cache)
+    out2, built2 = build([src], registry, config, tmp_path / "out", cache=cache, cli_opts={"delimiter": "|"})
 
     assert built1 is True
     assert built2 is True  # NON deve essere servito dalla cache: cli_opts diverso

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Literal
 
 from payload.core.errors import GoldenMissingError, SnapshotNotFoundError
-from payload.core.history import HistoryStore
+from payload.core.history import HistoryStore, legacy_compatible_source_blobs
 
 logger = logging.getLogger(__name__)
 
@@ -41,15 +41,15 @@ class GoldenStatus:
 
 
 def check_golden(
-    history: HistoryStore, table_name: str, source_path: Path, output_paths: list[Path]
+    history: HistoryStore, table_name: str, source_paths: list[Path], output_paths: list[Path]
 ) -> GoldenStatus:
     golden_id = history.golden_snapshot_id(table_name)
     if golden_id is None:
         return GoldenStatus(status="missing")
 
     snap = history.get_snapshot(table_name, golden_id)
-    current_source_hash = _hash_bytes(source_path.read_bytes())
-    if current_source_hash != snap.source_blob:
+    current_source_hashes = {p.name: _hash_bytes(p.read_bytes()) for p in source_paths}
+    if current_source_hashes != legacy_compatible_source_blobs(source_paths, snap.source_blobs):
         return GoldenStatus(status="stale", golden_snapshot_id=golden_id, golden_message=snap.message)
 
     current_outputs = {p.name: _hash_bytes(p.read_bytes()) for p in output_paths if p.is_file()}

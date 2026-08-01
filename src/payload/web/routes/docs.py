@@ -26,6 +26,10 @@ DOCS = [
         "slug": "pipeline", "filename": "PIPELINE.md", "title": "Pipeline configurabile",
         "description": "Gli stage reader/writer/exec: come funzionano, la sintassi, gli esempi.",
     },
+    {
+        "slug": "batch", "filename": "BATCH.md", "title": "Tabelle batch",
+        "description": "Una tabella costruita da più file sorgente: [[batch_table]], parse_many, limiti.",
+    },
 ]
 _BY_SLUG = {d["slug"]: d for d in DOCS}
 

@@ -77,6 +77,24 @@ def _make_failing_writer(writer_name: str, ext: str, reason: str = "boom"):
     return _FailingWriter
 
 
+def _make_crashing_writer(writer_name: str, ext: str):
+    """A differenza di _make_failing_writer, questo simula un plugin
+    incompleto/buggy che solleva un'eccezione GREZZA (non della
+    gerarchia PayloadError) — es. uno scaffold mai finito."""
+    class _CrashingWriter:
+        name = writer_name
+        extension = ext
+        api_version = "1.0"
+        compatible_readers = None
+        called = False
+
+        def emit(self, ir, out_path, config):
+            type(self).called = True
+            raise NotImplementedError("TODO: implementa l'emit")
+
+    return _CrashingWriter
+
+
 @pytest.fixture(autouse=True)
 def _reset_counting_reader():
     _CountingReader.call_count = 0
@@ -108,7 +126,7 @@ def _fanout_stages(*writer_names):
 
 def test_fan_out_writes_n_files_with_distinct_extensions(tmp_path, source, registry):
     out_paths, built = build(
-        source, registry, _FakeConfig(_fanout_stages("bin", "hex", "header")), tmp_path / "out"
+        [source], registry, _FakeConfig(_fanout_stages("bin", "hex", "header")), tmp_path / "out"
     )
 
     assert built is True
@@ -119,7 +137,7 @@ def test_fan_out_writes_n_files_with_distinct_extensions(tmp_path, source, regis
 
 
 def test_fan_out_reader_parse_called_exactly_once(tmp_path, source, registry):
-    build(source, registry, _FakeConfig(_fanout_stages("bin", "hex", "header")), tmp_path / "out")
+    build([source], registry, _FakeConfig(_fanout_stages("bin", "hex", "header")), tmp_path / "out")
 
     assert _CountingReader.call_count == 1
 
@@ -128,8 +146,8 @@ def test_fan_out_cache_hit_on_second_identical_build(tmp_path, source, registry)
     cache = BuildCache(tmp_path / "cache")
     config = _FakeConfig(_fanout_stages("bin", "hex"))
 
-    _, first_built = build(source, registry, config, tmp_path / "out", cache=cache)
-    out_paths, second_built = build(source, registry, config, tmp_path / "out", cache=cache)
+    _, first_built = build([source], registry, config, tmp_path / "out", cache=cache)
+    out_paths, second_built = build([source], registry, config, tmp_path / "out", cache=cache)
 
     assert first_built is True
     assert second_built is False
@@ -140,10 +158,10 @@ def test_fan_out_cache_miss_if_one_of_n_outputs_deleted(tmp_path, source, regist
     cache = BuildCache(tmp_path / "cache")
     config = _FakeConfig(_fanout_stages("bin", "hex"))
 
-    out_paths, _ = build(source, registry, config, tmp_path / "out", cache=cache)
+    out_paths, _ = build([source], registry, config, tmp_path / "out", cache=cache)
     out_paths[1].unlink()
 
-    _, second_built = build(source, registry, config, tmp_path / "out", cache=cache)
+    _, second_built = build([source], registry, config, tmp_path / "out", cache=cache)
 
     assert second_built is True
 
@@ -153,7 +171,7 @@ def test_fan_out_writer_incompatibility_checked_for_every_writer_in_group(tmp_pa
     registry.register_writer(picky)
 
     with pytest.raises(WriterEmitError):
-        build(source, registry, _FakeConfig(_fanout_stages("bin", "picky")), tmp_path / "out")
+        build([source], registry, _FakeConfig(_fanout_stages("bin", "picky")), tmp_path / "out")
 
     assert picky.called is False
 
@@ -166,7 +184,7 @@ def test_fan_out_partial_failure_still_writes_successful_outputs(tmp_path, sourc
     out_dir = tmp_path / "out"
 
     with pytest.raises(FanOutWriteError) as exc_info:
-        build(source, registry, _FakeConfig(_fanout_stages("bin", "broken", "hex")), out_dir)
+        build([source], registry, _FakeConfig(_fanout_stages("bin", "broken", "hex")), out_dir)
 
     err = exc_info.value
     assert (out_dir / "t.bin").exists()
@@ -184,7 +202,7 @@ def test_fan_out_all_writers_fail_reports_empty_succeeded(tmp_path, source, regi
     out_dir = tmp_path / "out"
 
     with pytest.raises(FanOutWriteError) as exc_info:
-        build(source, registry, _FakeConfig(_fanout_stages("broken1", "broken2")), out_dir)
+        build([source], registry, _FakeConfig(_fanout_stages("broken1", "broken2")), out_dir)
 
     assert exc_info.value.context["succeeded_outputs"] == []
     assert len(exc_info.value.context["failed_writers"]) == 2
@@ -197,4 +215,31 @@ def test_single_terminal_writer_failure_is_not_wrapped(tmp_path, source, registr
     registry.register_writer(_make_failing_writer("broken", ".broken")())
 
     with pytest.raises(WriterEmitError):
-        build(source, registry, _FakeConfig(_fanout_stages("broken")), tmp_path / "out")
+        build([source], registry, _FakeConfig(_fanout_stages("broken")), tmp_path / "out")
+
+
+def test_fan_out_writer_raising_raw_exception_is_captured_not_crashing(tmp_path, source, registry):
+    """Regressione trovata dall'utente: un writer del fan-out che
+    solleva un'eccezione GREZZA (plugin incompleto, non PayloadError)
+    deve finire in failed_writers con un messaggio leggibile, non far
+    esplodere l'intera build con un traceback crudo."""
+    registry.register_writer(_make_crashing_writer("half_baked", ".half")())
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(FanOutWriteError) as exc_info:
+        build([source], registry, _FakeConfig(_fanout_stages("bin", "half_baked")), out_dir)
+
+    assert (out_dir / "t.bin").exists()
+    failed = exc_info.value.context["failed_writers"]
+    assert failed == [{"writer": "half_baked", "reason": "NotImplementedError: TODO: implementa l'emit"}]
+
+
+def test_single_writer_raising_raw_exception_is_wrapped_in_writer_emit_error(tmp_path, source, registry):
+    registry.register_writer(_make_crashing_writer("half_baked", ".half")())
+
+    with pytest.raises(WriterEmitError) as exc_info:
+        build([source], registry, _FakeConfig(_fanout_stages("half_baked")), tmp_path / "out")
+
+    assert "half_baked" in exc_info.value.message
+    assert "NotImplementedError" in exc_info.value.message
+    assert isinstance(exc_info.value.__cause__, NotImplementedError)

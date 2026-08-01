@@ -139,6 +139,28 @@ def test_doctor_runs_checks(tmp_path):
     assert any(c["name"] == "git" for c in checks)
 
 
+def test_doctor_survives_unimplemented_local_doctor_check(tmp_path):
+    """Regressione trovata dall'utente: aprire la pagina Doctor con un
+    plugin locale DOCTOR_CHECK creato ma mai implementato (scaffold con
+    'raise NotImplementedError') mandava in eccezione l'intera route
+    invece di segnalare solo QUEL check come fallito."""
+    root = _init_project(tmp_path)
+    from payload.plugin_scaffold import scaffold_local_plugin
+
+    scaffold_local_plugin("new_check", "doctor-check", root / "local_plugins")
+    client = _client(root)
+
+    r = client.get("/api/doctor")
+
+    assert r.status_code == 200
+    checks = r.json()["checks"]
+    crashed = next(c for c in checks if c["name"] == "new_check")
+    assert crashed["status"] == "fail"
+    assert "NotImplementedError" in crashed["message"]
+    # e gli altri check devono comunque essere presenti
+    assert any(c["name"] == "git" for c in checks)
+
+
 def test_export_produces_zip(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)

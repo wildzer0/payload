@@ -47,6 +47,26 @@ def compute_pipeline_cache_key(source_bytes: bytes, stage_signature: str, config
     return h.hexdigest()
 
 
+def compute_pipeline_cache_key_multi(
+    named_sources: list[tuple[str, bytes]], stage_signature: str, config: dict
+) -> str:
+    """Come compute_pipeline_cache_key, ma per una tabella batch (N file
+    sorgente invece di 1). named_sources deve già essere ordinato in modo
+    deterministico dal chiamante (stesso ordine usato per parse_many).
+    Ogni file entra nell'hash come (nome, lunghezza, bytes) invece di una
+    concatenazione in un unico bytearray — streaming nell'oggetto sha256
+    incrementale come sopra, e il nome/lunghezza prima dei bytes evita
+    collisioni tipo ["AB","CD"] == ["A","BCD"]."""
+    h = hashlib.sha256()
+    for name, data in named_sources:
+        h.update(name.encode())
+        h.update(len(data).to_bytes(8, "big"))
+        h.update(data)
+    h.update(stage_signature.encode())
+    h.update(json.dumps(config, sort_keys=True, default=str).encode())
+    return h.hexdigest()
+
+
 class BuildCache:
     def __init__(self, cache_dir: Path):
         self.cache_dir = cache_dir

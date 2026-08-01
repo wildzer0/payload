@@ -82,7 +82,7 @@ def test_changing_last_stage_reuses_earlier_checkpoint(tmp_path, source, registr
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "cp {input} {output}", "output_extension": ".v1"},
     ]
-    build(source, registry, _FakeConfig(stages_v1), tmp_path / "out", cache=cache)
+    build([source], registry, _FakeConfig(stages_v1), tmp_path / "out", cache=cache)
     assert _CountingReader.call_count == 1
 
     stages_v2 = [
@@ -90,7 +90,7 @@ def test_changing_last_stage_reuses_earlier_checkpoint(tmp_path, source, registr
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "echo altro > {output}", "output_extension": ".v2"},
     ]
-    build(source, registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
+    build([source], registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
 
     # il reader NON deve essere stato richiamato una seconda volta:
     # il checkpoint dopo lo stage 'writer' viene riusato
@@ -104,10 +104,10 @@ def test_force_bypasses_stage_checkpoint(tmp_path, source, registry):
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "cp {input} {output}", "output_extension": ".v1"},
     ]
-    build(source, registry, _FakeConfig(stages), tmp_path / "out", cache=cache)
+    build([source], registry, _FakeConfig(stages), tmp_path / "out", cache=cache)
     assert _CountingReader.call_count == 1
 
-    build(source, registry, _FakeConfig(stages), tmp_path / "out", cache=cache, force=True)
+    build([source], registry, _FakeConfig(stages), tmp_path / "out", cache=cache, force=True)
     assert _CountingReader.call_count == 2
 
 
@@ -118,7 +118,7 @@ def test_changing_source_invalidates_checkpoint(tmp_path, source, registry):
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "cp {input} {output}", "output_extension": ".v1"},
     ]
-    build(source, registry, _FakeConfig(stages_v1), tmp_path / "out", cache=cache)
+    build([source], registry, _FakeConfig(stages_v1), tmp_path / "out", cache=cache)
     assert _CountingReader.call_count == 1
 
     source.write_text("dato modificato")
@@ -128,7 +128,7 @@ def test_changing_source_invalidates_checkpoint(tmp_path, source, registry):
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "echo altro > {output}", "output_extension": ".v2"},
     ]
-    build(source, registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
+    build([source], registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
 
     # il sorgente e' cambiato: il checkpoint NON deve essere riusato
     assert _CountingReader.call_count == 2
@@ -141,14 +141,14 @@ def test_output_is_correct_when_resuming_from_checkpoint(tmp_path, source, regis
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "cp {input} {output}", "output_extension": ".v1"},
     ]
-    build(source, registry, _FakeConfig(stages_v1), tmp_path / "out", cache=cache)
+    build([source], registry, _FakeConfig(stages_v1), tmp_path / "out", cache=cache)
 
     stages_v2 = [
         {"type": "reader", "name": "counting_reader"},
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "printf 'MODIFICATO' > {output}", "output_extension": ".v2"},
     ]
-    out_paths, built = build(source, registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
+    out_paths, built = build([source], registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
 
     assert built is True
     assert out_paths[0].read_text() == "MODIFICATO"
@@ -163,7 +163,7 @@ def test_stage_checkpoint_survives_across_builds_after_tmp_cleanup(tmp_path, sou
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "cp {input} {output}", "output_extension": ".v1"},
     ]
-    build(source, registry, _FakeConfig(stages_v1), tmp_path / "out", cache=cache)
+    build([source], registry, _FakeConfig(stages_v1), tmp_path / "out", cache=cache)
 
     # tmp/ NON deve esistere piu' (ripulita a fine build, comportamento di default)
     assert not (source.parent / "tmp").exists()
@@ -173,6 +173,6 @@ def test_stage_checkpoint_survives_across_builds_after_tmp_cleanup(tmp_path, sou
         {"type": "writer", "name": "fake_writer"},
         {"type": "exec", "command": "echo altro > {output}", "output_extension": ".v2"},
     ]
-    build(source, registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
+    build([source], registry, _FakeConfig(stages_v2), tmp_path / "out", cache=cache)
 
     assert _CountingReader.call_count == 1  # checkpoint riusato comunque

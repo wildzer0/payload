@@ -73,3 +73,46 @@ class RawTextReader:
             source_format=self.name,
             comments=comments,
         )
+
+    def parse_many(self, paths: list[Path], config: dict) -> TableIR:
+        """Estensione opzionale (vedi src/payload/docs/BATCH.md): legge
+        N file NELL'ORDINE DATO da 'paths' (già risolto/ordinato dal
+        chiamante — [[batch_table]]) e li concatena come se fossero un
+        unico file più lungo, riusando la stessa logica riga-per-riga
+        di parse(). Gli offset dei commenti sono cumulativi attraverso
+        i file, non locali a ciascuno."""
+        data = bytearray()
+        comments: list[tuple[int, str]] = []
+
+        for path in paths:
+            for lineno, raw_line in enumerate(path.read_text().splitlines(), start=1):
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                code_part, _, comment_part = line.partition("#")
+                code_part = code_part.strip()
+                if not code_part:  # pragma: no cover - difesa, stessa garanzia di parse()
+                    continue
+
+                offset_before = len(data)
+                for token in (t.strip() for t in code_part.split(",")):
+                    if not token:
+                        continue
+                    try:
+                        data.append(int(token, 16))
+                    except ValueError as e:
+                        raise ReaderParseError(
+                            path, f"riga {lineno}: valore non valido '{token}'"
+                        ) from e
+
+                if comment_part.strip():
+                    comments.append((offset_before, comment_part.strip()))
+
+        return TableIR(
+            name=paths[0].stem,
+            data=bytes(data),
+            source_path=paths[0],
+            source_format=self.name,
+            comments=comments,
+        )
