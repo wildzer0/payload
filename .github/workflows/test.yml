@@ -21,15 +21,11 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Installa il pacchetto (con extra dev e serve)
+      - name: Intall al the needed packets (with extra dev e serve)
         run: pip install -e ".[dev,serve]"
 
       - name: pld --version
         run: pld --version
-
-      - name: pld doctor (deve girare anche senza toolchain configurato)
-        run: pld doctor
-        continue-on-error: true  # doctor può segnalare FAIL su compiler/objcopy assenti, atteso su CI pulita
 
       - name: Test suite
         run: pytest -v
