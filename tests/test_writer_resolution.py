@@ -2,24 +2,25 @@ from pathlib import Path
 
 import pytest
 
-from payload.core.errors import WriterEmitError, WriterNotSpecifiedError
+from payload.core.errors import AmbiguousReaderError, WriterEmitError, WriterNotSpecifiedError
 from payload.core.ir import TableIR
 from payload.core.pipeline import build
 from payload.core.registry import PluginRegistry
 
 
 class _FakeDefaults:
-    def __init__(self, writer=None):
+    def __init__(self, writer=None, reader=None):
         self.writer = writer
+        self.reader = reader
 
 
 class _FakeConfig:
-    def __init__(self, writer=None):
-        self.defaults = _FakeDefaults(writer)
+    def __init__(self, writer=None, reader=None):
+        self.defaults = _FakeDefaults(writer, reader)
         self.pipeline_stages = []
 
     def model_dump(self):
-        return {"defaults": {"writer": self.defaults.writer}}
+        return {"defaults": {"writer": self.defaults.writer, "reader": self.defaults.reader}}
 
 
 class _ReaderWithDefault:
@@ -137,3 +138,57 @@ def test_compatible_writer_accepted(tmp_path, registry):
     out_paths, built = build(src, registry, _FakeConfig(), tmp_path / "out", writer_name="picky")
 
     assert out_paths[0].suffix == ".picky"
+
+
+class _ReaderAltSameExtension:
+    """Stessa estensione di _ReaderWithDefault ma un altro reader:
+    da solo rende l'estensione ambigua, serve a dimostrare che
+    config.defaults.reader risolve l'ambiguità come farebbe --from."""
+    name = "reader_alt"
+    extensions = [".wd"]
+    api_version = "1.0"
+    default_writer = "generic"
+
+    def sniff(self, path):
+        return False
+
+    def parse(self, path, config):
+        return TableIR(name=path.stem, data=b"alt", source_path=path, source_format=self.name)
+
+
+def test_ambiguous_extension_raises_without_reader_default(tmp_path):
+    r = PluginRegistry()
+    r.register_reader(_ReaderWithDefault())
+    r.register_reader(_ReaderAltSameExtension())
+    r.register_writer(_GenericWriter())
+    src = tmp_path / "t.wd"
+    src.write_text("x")
+
+    with pytest.raises(AmbiguousReaderError):
+        build(src, r, _FakeConfig(), tmp_path / "out")
+
+
+def test_config_defaults_reader_resolves_ambiguous_extension(tmp_path):
+    r = PluginRegistry()
+    r.register_reader(_ReaderWithDefault())
+    r.register_reader(_ReaderAltSameExtension())
+    r.register_writer(_GenericWriter())
+    src = tmp_path / "t.wd"
+    src.write_text("x")
+
+    out_paths, built = build(src, r, _FakeConfig(reader="reader_alt"), tmp_path / "out")
+
+    assert out_paths[0].read_bytes() == b"alt"
+
+
+def test_explicit_from_wins_over_config_defaults_reader(tmp_path):
+    r = PluginRegistry()
+    r.register_reader(_ReaderWithDefault())
+    r.register_reader(_ReaderAltSameExtension())
+    r.register_writer(_GenericWriter())
+    src = tmp_path / "t.wd"
+    src.write_text("x")
+
+    out_paths, built = build(src, r, _FakeConfig(reader="reader_alt"), tmp_path / "out", reader_name="reader_with_default")
+
+    assert out_paths[0].read_bytes() == b"x"

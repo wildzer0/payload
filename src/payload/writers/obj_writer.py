@@ -74,7 +74,12 @@ class ObjWriter:
                 "--rename-section", f".data={section},alloc,load,readonly,data,contents",
                 str(bin_path), str(out_path),
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True)
+            except FileNotFoundError as e:
+                raise ToolchainExecutionError(
+                    cmd, -1, f"eseguibile non trovato: '{objcopy}' ({e})"
+                ) from e
             if result.returncode != 0:
                 raise ToolchainExecutionError(cmd, result.returncode, result.stderr)
         finally:

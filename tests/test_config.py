@@ -17,7 +17,7 @@ def test_model_dump_returns_plain_dict():
     d = c.model_dump()
     assert d == {
         "defaults": {
-            "writer": None, "output_dir": "build", "golden_dir": "golden",
+            "writer": None, "reader": None, "output_dir": "build",
             "cache_dir": ".payload_cache", "byte_order": "little",
         },
         "toolchain": {

@@ -73,6 +73,29 @@ class WriterEmitError(BuildError):
         super().__init__(f"Writer '{writer_name}' non può generare output: {reason}", **kw)
 
 
+class FanOutWriteError(BuildError):
+    """Un fan-out terminale (reader -> più writer, tutti alimentati
+    dalla stessa IR) ha completato SOLO una parte dei writer: quelli
+    fallliti hanno sollevato un errore, quelli riusciti hanno comunque
+    scritto il proprio output su disco (sono indipendenti l'uno
+    dall'altro). Il messaggio elenca ESPLICITAMENTE successi e
+    fallimenti — altrimenti un errore generico nasconderebbe che 2
+    file su 3 sono realmente stati costruiti, lasciando l'utente senza
+    modo di saperlo."""
+
+    def __init__(self, succeeded: list[Path], failures: list[tuple[str, str]], **kw):
+        total = len(succeeded) + len(failures)
+        ok_desc = ", ".join(p.name for p in succeeded) if succeeded else "nessuno"
+        fail_desc = "; ".join(f"'{name}': {reason}" for name, reason in failures)
+        super().__init__(
+            f"Fan-out parziale: {len(succeeded)}/{total} writer completati ({ok_desc}) — falliti: {fail_desc}",
+            hint="Gli output riusciti sono comunque su disco: verifica prima di committare stato incompleto",
+            succeeded_outputs=[str(p) for p in succeeded],
+            failed_writers=[{"writer": name, "reason": reason} for name, reason in failures],
+            **kw,
+        )
+
+
 class BatchBuildError(BuildError):
     """Aggregato: una o più tabelle hanno fallito in build-all."""
 
@@ -103,12 +126,12 @@ class InvalidConfigError(ConfigError):
 
 class InvalidPipelineError(ConfigError):
     """Regole di alternanza violate (reader/writer/exec) — vedi
-    docs/PIPELINE.md. Sollevato PRIMA di eseguire qualunque stage."""
+    src/payload/docs/PIPELINE.md. Sollevato PRIMA di eseguire qualunque stage."""
 
     def __init__(self, stage_index: int, reason: str, **kw):
         super().__init__(
             f"Pipeline non valida allo stage #{stage_index}: {reason}",
-            hint="Vedi docs/PIPELINE.md per le regole di alternanza reader/writer/exec",
+            hint="Vedi src/payload/docs/PIPELINE.md per le regole di alternanza reader/writer/exec",
             stage_index=stage_index,
             **kw,
         )
@@ -210,16 +233,37 @@ class GoldenError(PayloadError):
 
 
 class GoldenMismatchError(GoldenError):
+    """Sorgente invariato rispetto allo snapshot golden, ma l'output
+    attuale ha bytes diversi — una vera regressione, il caso per cui
+    golden esiste."""
+
     log_level = logging.WARNING
 
-    def __init__(self, path: Path, **kw):
+    def __init__(self, table_name: str, **kw):
         super().__init__(
-            f"Output di '{path}' non corrisponde al golden salvato",
+            f"L'output di '{table_name}' non corrisponde allo snapshot golden",
             hint=(
-                "Esegui 'pld golden diff' per vedere le differenze, "
-                "o 'pld golden update' se il cambio è intenzionale"
+                "Esegui 'pld golden diff <tabella>' per vedere le differenze, "
+                "o 'pld commit --golden' se il cambio è intenzionale"
             ),
-            path=str(path),
+            table=table_name,
+            **kw,
+        )
+
+
+class GoldenStaleError(GoldenError):
+    """Il SORGENTE è cambiato rispetto allo snapshot golden — il
+    confronto sull'output non è più affidabile (potrebbe combaciare per
+    caso, o no): prima bisogna ricommittare per sapere se il nuovo
+    output è ancora corretto."""
+
+    log_level = logging.WARNING
+
+    def __init__(self, table_name: str, **kw):
+        super().__init__(
+            f"Il sorgente di '{table_name}' è cambiato dopo l'ultimo golden: il confronto non è affidabile",
+            hint="Esegui 'pld commit --golden' per aggiornare golden allo stato attuale, se è quello corretto",
+            table=table_name,
             **kw,
         )
 
@@ -227,11 +271,11 @@ class GoldenMismatchError(GoldenError):
 class GoldenMissingError(GoldenError):
     log_level = logging.WARNING
 
-    def __init__(self, path: Path, **kw):
+    def __init__(self, table_name: str, **kw):
         super().__init__(
-            f"Nessun golden trovato per '{path}'",
-            hint="Esegui 'pld golden update' per crearlo",
-            path=str(path),
+            f"Nessun golden impostato per '{table_name}'",
+            hint="Esegui 'pld golden set <tabella>' per impostarlo (richiede almeno uno snapshot già salvato)",
+            table=table_name,
             **kw,
         )
 
@@ -262,6 +306,29 @@ class NoWriterFoundError(NotFoundError):
         super().__init__(
             f"Writer '{name}' non registrato",
             hint="Usa 'pld plugins list' per vedere i writer disponibili",
+            name=name,
+            **kw,
+        )
+
+
+class TableNotFoundError(NotFoundError):
+    """Nessun sorgente scoperto con questo nome tabella (stem) — usato
+    dai comandi/route che cercano una tabella per nome invece che per
+    path esplicito (es. 'pld config show <tabella>', le route web)."""
+
+    def __init__(self, name: str, **kw):
+        super().__init__(f"Tabella '{name}' non trovata", name=name, **kw)
+
+
+class PluginNotFoundError(NotFoundError):
+    """Nessun reader/writer/doctor-check registrato con questo nome —
+    usato dai comandi/route che cercano un plugin per nome (es. 'pld
+    plugin info <nome>', le route web)."""
+
+    def __init__(self, name: str, **kw):
+        super().__init__(
+            f"Plugin '{name}' non trovato",
+            hint="Usa 'pld plugins' per vedere quelli disponibili",
             name=name,
             **kw,
         )

@@ -1,7 +1,6 @@
 [defaults]
 writer = "bin"
 output_dir = "build"
-golden_dir = "golden"
 cache_dir = ".payload_cache"
 byte_order = "little"
 

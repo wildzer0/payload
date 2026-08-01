@@ -34,5 +34,5 @@ class TableIR:
     # extra["fields"] = [{"offset": int, "width": int, "value": int}, ...]
     # opzionale — un reader lo popola solo se lavora con valori multi-byte
     # e vuole permettere a un writer di ripacchettarli in un ordine diverso
-    # da byte_order (vedi payload.core.byteorder.repack). Vedi docs/PLUGINS.md.
+    # da byte_order (vedi payload.core.byteorder.repack). Vedi src/payload/docs/PLUGINS.md.
     extra: dict = field(default_factory=dict)

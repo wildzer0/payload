@@ -222,10 +222,10 @@ def test_golden_check_missing_exits_with_expected_code(tmp_path, monkeypatch):
     monkeypatch.chdir(proj)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
 
-    result = runner.invoke(app, ["golden", "check", "build/example_table.bin"])
+    result = runner.invoke(app, ["golden", "check", "example_table"])
 
     assert result.exit_code == 0  # 'missing' non è un errore bloccante per golden check
-    assert "mancante" in result.stdout or "!" in result.stdout
+    assert "non impostato" in result.stdout or "!" in result.stdout
 
 
 @pytest.mark.skipif(

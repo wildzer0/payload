@@ -43,6 +43,25 @@ def test_objcopy_failure_raises_toolchain_error(tmp_path):
             ObjWriter().emit(ir, tmp_path / "out.o", config)
 
 
+def test_objcopy_not_found_raises_toolchain_error_not_bare_exception(tmp_path):
+    """subprocess.run() solleva FileNotFoundError se l'eseguibile non
+    esiste proprio (non un returncode diverso da zero) — prima non era
+    gestito, arrivava all'utente come traceback Python grezzo."""
+    source = tmp_path / "sensor.c"
+    source.write_text("irrilevante")
+    ir = TableIR(name="sensor", data=b"\x0a", source_path=source, source_format="c_source")
+    config = {"toolchain": {"objcopy": "objcopy-che-non-esiste", "objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
+
+    def fake_run(cmd, capture_output=True, text=True):
+        raise FileNotFoundError(2, "No such file or directory", "objcopy-che-non-esiste")
+
+    with patch("payload.writers.obj_writer.subprocess.run", fake_run):
+        with pytest.raises(ToolchainExecutionError) as exc_info:
+            ObjWriter().emit(ir, tmp_path / "out.o", config)
+    assert "objcopy-che-non-esiste" in str(exc_info.value)
+    assert not (source.parent / "tmp" / "obj_writer_scratch").exists()  # ripulita anche qui
+
+
 def test_successful_emit_writes_input_and_calls_objcopy(tmp_path):
     source = tmp_path / "sensor.c"
     source.write_text("irrilevante")

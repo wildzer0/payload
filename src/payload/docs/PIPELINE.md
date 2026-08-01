@@ -119,6 +119,21 @@ di scrivere qualunque file, come per una pipeline lineare.
 caso comune, uno per writer con un fan-out) — vedi `core/pipeline.py`,
 `final_output_paths()`.
 
+**Fallimento parziale**: se un fan-out ha **più di un** writer
+terminale, ciascuno è trattato come indipendente — un writer che
+fallisce a runtime (es. un errore del toolchain) NON blocca gli altri,
+che vengono comunque tentati e scrivono il proprio file normalmente.
+La build fallisce comunque alla fine (non è un successo silenzioso),
+ma con `FanOutWriteError`, che elenca esplicitamente quali writer sono
+riusciti (con i path scritti) e quali sono falliti (con il motivo) —
+senza questo, un fan-out a 3 writer con 1 solo fallito nasconderebbe
+che gli altri 2 sono realmente su disco. Un fan-out con un solo writer
+terminale (cioè: non è affatto un fan-out) non ha questo trattamento:
+fallisce e basta, non c'è nulla di "parziale" da riportare. Se poi
+committi uno stato nato da un fallimento parziale, lo snapshot lo
+segnala (`missing_outputs`, vedi `pld commit`/`pld log` in USAGE.md) —
+non passa inosservato nemmeno più avanti.
+
 **Cosa NON è supportato**: un fan-out con **continuazione per ramo** —
 es. `writer bin -> exec firma-v1` e, in parallelo, `writer hex -> exec
 firma-v2`, ognuno con i propri stage successivi indipendenti. Ogni

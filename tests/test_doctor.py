@@ -112,6 +112,28 @@ def test_dir_writable_check_ok(tmp_path, monkeypatch):
     assert result.status == CheckStatus.OK
 
 
+def test_dir_writable_check_resolves_relative_to_project_root_not_cwd(tmp_path, monkeypatch):
+    """Regressione: con _project_root diverso dalla cwd del processo
+    (es. 'pld serve' lanciato da una cartella diversa dal progetto
+    servito), le directory vanno create sotto _project_root, MAI sotto
+    la cwd — altrimenti il check inquina silenziosamente la cwd del
+    processo server con directory vuote."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+
+    result = DirWritableCheck().run({
+        "_project_root": str(project_root),
+        "defaults": {"output_dir": "build", "golden_dir": "golden", "cache_dir": ".cache"},
+    })
+
+    assert result.status == CheckStatus.OK
+    assert (project_root / "build").exists()
+    assert not (elsewhere / "build").exists()
+
+
 def test_dir_writable_check_fails_when_path_is_a_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     blocked = tmp_path / "build"
@@ -129,6 +151,23 @@ def test_cache_integrity_check_ok_no_cache(tmp_path):
     result = CacheIntegrityCheck().run({"defaults": {"cache_dir": str(tmp_path / "nope")}})
     assert result.status == CheckStatus.OK
     assert "Nessuna cache" in result.message
+
+
+def test_cache_integrity_check_resolves_relative_cache_dir_against_project_root(tmp_path, monkeypatch):
+    """Stessa regressione di DirWritableCheck: un cache_dir relativo va
+    risolto rispetto a _project_root, non alla cwd del processo."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    project_root = tmp_path / "project"
+    cache_dir = project_root / ".cache"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / ".payload_cache.json").write_text("{}")
+
+    result = CacheIntegrityCheck().run({"_project_root": str(project_root), "defaults": {"cache_dir": ".cache"}})
+
+    assert result.status == CheckStatus.OK
+    assert "integra" in result.message
 
 
 def test_cache_integrity_check_ok_valid_cache(tmp_path):

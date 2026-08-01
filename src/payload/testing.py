@@ -3,7 +3,7 @@ Suite di conformità per plugin reader/writer.
 
 Non verifica "esistono dei test" (impossibile a runtime — i test non
 vengono distribuiti col pacchetto installato). Verifica invece che il
-plugin rispetti davvero il contratto descritto in docs/PLUGINS.md,
+plugin rispetti davvero il contratto descritto in src/payload/docs/PLUGINS.md,
 sia a livello strutturale (attributi richiesti) sia comportamentale
 (parse/emit producono quello che devono produrre).
 

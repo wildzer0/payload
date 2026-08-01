@@ -6,6 +6,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from payload.core.config import load_config
+from payload.core.errors import DuplicateTableNameError
+from payload.core.registry import load_plugins
+
+if TYPE_CHECKING:
+    from payload.core.config import PayloadConfig
 
 
 def discover_table_sources(
@@ -47,3 +55,19 @@ def find_duplicate_stems(sources: list[Path]) -> dict[str, list[Path]]:
     for p in sources:
         by_stem[p.stem].append(p)
     return {name: paths for name, paths in by_stem.items() if len(paths) > 1}
+
+
+def discover_for_history(root: Path) -> tuple[list[Path], "PayloadConfig"]:
+    """Helper condiviso da CLI e web UI: stesso identico insieme di
+    tabelle che vedrebbe build-all, così 'pld status'/'pld commit' e la
+    dashboard web non disaccordano mai su cosa esiste."""
+    registry = load_plugins(project_root=root)
+    config = load_config(root)
+    known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
+    sources = discover_table_sources(root, known_ext, Path(config.defaults.output_dir))
+
+    duplicates = find_duplicate_stems(sources)
+    if duplicates:
+        raise DuplicateTableNameError(duplicates)
+
+    return sources, config

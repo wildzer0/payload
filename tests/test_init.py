@@ -31,7 +31,7 @@ def test_init_project_creates_target_dir_from_scratch(tmp_path):
     assert (target / "table-tool.toml").exists()
     assert (target / "example_table.raw").exists()
     assert (target / "build").is_dir()
-    assert (target / "golden").is_dir()
+    assert not (target / "golden").exists()  # golden non è più una cartella
 
 
 def test_init_project_does_not_overwrite_without_force(tmp_path):

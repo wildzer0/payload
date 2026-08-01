@@ -57,6 +57,34 @@ def test_extract_failure_raises_toolchain_error(tmp_path):
             CSourceReader().parse(c_file, {})
 
 
+def test_compiler_not_found_raises_toolchain_error_not_bare_exception(tmp_path):
+    """subprocess.run() solleva FileNotFoundError (non un returncode
+    diverso da zero) quando l'eseguibile non esiste proprio — prima
+    non era gestito, quindi arrivava all'utente come traceback Python
+    grezzo invece di un ToolchainExecutionError pulito."""
+    c_file = tmp_path / "t.c"
+    c_file.write_text(C_SOURCE)
+    with patch("payload.readers.c_source.subprocess.run", side_effect=FileNotFoundError(2, "No such file or directory", "gcc-che-non-esiste")):
+        with pytest.raises(ToolchainExecutionError) as exc_info:
+            CSourceReader().parse(c_file, {"toolchain": {"compiler": "gcc-che-non-esiste"}})
+    assert "gcc-che-non-esiste" in str(exc_info.value)
+
+
+def test_objcopy_not_found_raises_toolchain_error_not_bare_exception(tmp_path):
+    c_file = tmp_path / "t.c"
+    c_file.write_text(C_SOURCE)
+
+    def _run(cmd, capture_output=True, text=True):
+        if "-c" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise FileNotFoundError(2, "No such file or directory", "objcopy-che-non-esiste")
+
+    with patch("payload.readers.c_source.subprocess.run", _run):
+        with pytest.raises(ToolchainExecutionError) as exc_info:
+            CSourceReader().parse(c_file, {"toolchain": {"objcopy": "objcopy-che-non-esiste"}})
+    assert "objcopy-che-non-esiste" in str(exc_info.value)
+
+
 def test_no_section_extracted_raises_reader_parse_error(tmp_path):
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)

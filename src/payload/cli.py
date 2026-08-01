@@ -24,25 +24,26 @@ from rich.table import Table
 from payload.core.batch import run_batch_build
 from payload.core.cache import BuildCache
 from payload.core.config import load_config, resolve_config_with_provenance
-from payload.core.discovery import discover_table_sources, find_duplicate_stems
+from payload.core.discovery import discover_for_history, discover_table_sources, find_duplicate_stems
 from payload.core.doctor import run_doctor
 from payload.core.errors import (
     BatchBuildError,
     DuplicateTableNameError,
     GoldenMismatchError,
+    GoldenStaleError,
     InvalidCliOptionError,
     NothingToCommitError,
     PayloadError,
 )
-from payload.core.golden import check_golden, update_golden
+from payload.core.golden import check_golden, clear_golden, golden_diff, set_golden
 from payload.core.history import HistoryStore
 from payload.core.logging_setup import setup_logging
-from payload.core.pipeline import build
+from payload.core.pipeline import build, describe_table_build
 from payload.core.plugin_base import CheckStatus
 from payload.core.registry import load_plugins
 from payload._version import __version__
 from payload.init_cmd import init_project, is_nonempty_existing_dir
-from payload.plugin_scaffold import scaffold_plugin
+from payload.plugin_scaffold import scaffold_local_plugin, scaffold_plugin
 from payload.ui.banner import print_banner, random_tip
 from payload.ui.flavor import random_loading_phrase
 from payload.watch import watch as watch_loop
@@ -201,10 +202,12 @@ def build_cmd(
             cache.save()
 
             if check_golden_flag and not dry_run:
-                for out_path in out_paths:
-                    result = check_golden(out_path, Path(config.defaults.golden_dir))
-                    if result.status == "mismatch":
-                        raise GoldenMismatchError(out_path)
+                history = HistoryStore(Path.cwd())
+                result = check_golden(history, source.stem, source, out_paths)
+                if result.status == "mismatch":
+                    raise GoldenMismatchError(source.stem)
+                if result.status == "stale":
+                    raise GoldenStaleError(source.stem)
 
         status = "costruito" if was_built else "da cache"
         destinations = ", ".join(str(p) for p in out_paths)
@@ -390,28 +393,14 @@ def view(
 # status / commit / log / diff / restore  (checkpoint leggero per tabella)
 # --------------------------------------------------------------------------
 
-def _discover_for_history(root: Path):
-    """Helper condiviso: stesso identico insieme di tabelle che vedrebbe
-    build-all, così status/commit non disaccordano mai su cosa esiste."""
-    registry = load_plugins(project_root=root)
-    config = load_config(root)
-    known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
-    sources = discover_table_sources(root, known_ext, Path(config.defaults.output_dir))
-
-    duplicates = find_duplicate_stems(sources)
-    if duplicates:
-        raise DuplicateTableNameError(duplicates)
-
-    return sources, config
-
-
 @app.command()
 def status(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
     """Mostra quali tabelle sono cambiate rispetto all'ultimo snapshot."""
 
     def _run():
-        sources, _ = _discover_for_history(root)
+        sources, config = discover_for_history(root)
         history = HistoryStore(root)
+        output_dir = Path(config.defaults.output_dir)
 
         table = Table(title="Stato tabelle")
         table.add_column("Tabella")
@@ -420,11 +409,12 @@ def status(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
         any_change = False
         for src in sources:
             name = src.stem
+            output_paths = list(output_dir.glob(f"{name}.*")) if output_dir.exists() else []
             last = history.last_snapshot(name)
             if last is None:
                 table.add_row(src.name, "[yellow]mai salvata[/]")
                 any_change = True
-            elif history.is_dirty(name, src):
+            elif history.is_dirty(name, src, output_paths):
                 table.add_row(src.name, "[red]modificata[/]")
                 any_change = True
             else:
@@ -446,28 +436,46 @@ def commit(
     only: Optional[list[str]] = typer.Option(
         None, "--only", help="Limita ai nomi tabella indicati (ripetibile, es. --only t1 --only t2)"
     ),
+    golden: bool = typer.Option(
+        False, "--golden", help="Imposta anche il nuovo snapshot come golden per ogni tabella committata"
+    ),
     root: Path = typer.Argument(Path(".")),
 ):
     """Salva uno snapshot di sorgente + output generato per ogni tabella
     modificata (o solo per quelle indicate con --only)."""
 
     def _run():
-        sources, config = _discover_for_history(root)
+        sources, config = discover_for_history(root)
         history = HistoryStore(root)
+        registry = load_plugins(project_root=root)
         output_dir = Path(config.defaults.output_dir)
 
         if only:
             sources = [s for s in sources if s.stem in only]
 
-        dirty = [s for s in sources if history.is_dirty(s.stem, s)]
+        dirty = []
+        for s in sources:
+            output_paths = list(output_dir.glob(f"{s.stem}.*"))
+            if history.is_dirty(s.stem, s, output_paths):
+                table_config = load_config(root, source_path=s)
+                build_info = describe_table_build(s, registry, table_config, output_paths, output_dir)
+                dirty.append((s, output_paths, build_info))
         if not dirty:
             raise NothingToCommitError()
 
-        for src in dirty:
-            output_paths = list(output_dir.glob(f"{src.stem}.*"))
-            snap = history.commit(src.stem, src, output_paths, message)
+        for src, output_paths, build_info in dirty:
+            snap = history.commit(src.stem, src, output_paths, message, **build_info)
             n_out = len(snap.output_blobs)
-            console.print(f"[green]✓[/] {src.stem} → snapshot #{snap.id} ({n_out} output allegati)")
+            suffix = ""
+            if golden:
+                history.set_golden(src.stem, snap.id)
+                suffix = " [gold1]★ golden[/]"
+            console.print(f"[green]✓[/] {src.stem} → snapshot #{snap.id} ({n_out} output allegati){suffix}")
+            if snap.missing_outputs:
+                console.print(
+                    f"    [yellow]![/] pipeline incompleta: manca {', '.join(snap.missing_outputs)} "
+                    "(un writer del gruppo non ha prodotto output — verifica prima di fidarti di questo snapshot)"
+                )
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -492,10 +500,22 @@ def log_cmd(
             snapshots = history.log(name)
             if not snapshots:
                 continue
+            head_id = history.head_snapshot_id(name)
             console.print(f"[bold]{name}[/]")
             for s in reversed(snapshots):
-                n_out = len(s.output_blobs)
-                console.print(f"  #{s.id}  {s.timestamp}  {s.message}  [dim]({n_out} output)[/]")
+                outputs = ", ".join(s.output_blobs) if s.output_blobs else "—"
+                if s.pipeline_explicit and s.pipeline_description:
+                    pipeline_str = f"  [dim]{s.pipeline_description}[/]"
+                else:
+                    pipeline_bits = [s.reader] if s.reader else []
+                    if s.writers:
+                        pipeline_bits.append("+".join(s.writers))
+                    pipeline_str = f"  [dim]{' → '.join(pipeline_bits)}[/]" if pipeline_bits else ""
+                marker = "  [cyan]● attuale[/]" if s.id == head_id else ""
+                warn = f"  [yellow]![/] pipeline incompleta, manca {', '.join(s.missing_outputs)}" if s.missing_outputs else ""
+                console.print(
+                    f"  #{s.id}  {s.timestamp}  {s.message}  [dim]({outputs})[/]{pipeline_str}{marker}{warn}"
+                )
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -521,7 +541,7 @@ def diff_cmd(
 
         snap = history.get_snapshot(table_name, snap_id)
 
-        sources, _ = _discover_for_history(root)
+        sources, _ = discover_for_history(root)
         src = next((s for s in sources if s.stem == table_name), None)
         if src is None:
             console.print(f"[red]✗[/] sorgente per '{table_name}' non trovato")
@@ -562,7 +582,7 @@ def restore_cmd(
         history = HistoryStore(root)
         history.get_snapshot(table_name, snapshot_id)  # valida che esista, solleva se manca
 
-        sources, config = _discover_for_history(root)
+        sources, config = discover_for_history(root)
         src = next((s for s in sources if s.stem == table_name), None)
         if src is None:
             console.print(f"[red]✗[/] sorgente per '{table_name}' non trovato")
@@ -571,15 +591,19 @@ def restore_cmd(
         if not yes:
             console.print(
                 f"Verranno sovrascritti {src.name} e i relativi output "
-                f"con lo stato dello snapshot #{snapshot_id}."
+                f"con lo stato dello snapshot #{snapshot_id}. "
+                "Nessun nuovo snapshot viene creato: solo l'attuale si sposta indietro, "
+                "la cronologia resta intatta."
             )
             if not typer.confirm("Confermi?"):
                 console.print("Annullato.")
                 return
 
-        written = history.restore(table_name, snapshot_id, src, Path(config.defaults.output_dir))
-        for w in written:
+        result = history.restore(table_name, snapshot_id, src, Path(config.defaults.output_dir))
+        for w in result.written:
             console.print(f"[green]✓[/] ripristinato {w}")
+        for r in result.removed:
+            console.print(f"[yellow]—[/] rimosso (non fa parte dello snapshot #{snapshot_id}): {r}")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -601,7 +625,7 @@ def config_show(
     def _run():
         source_path = None
         if table:
-            sources, _ = _discover_for_history(root)
+            sources, _ = discover_for_history(root)
             src = next((s for s in sources if s.stem == table), None)
             if src is None:
                 console.print(f"[red]✗[/] tabella '{table}' non trovata")
@@ -659,7 +683,7 @@ def pipeline_show(
         )
         from payload.core.pipeline_spec import ExecStage, ReaderStage, WriterStage
 
-        sources, _ = _discover_for_history(root)
+        sources, _ = discover_for_history(root)
         src = next((s for s in sources if s.stem == table), None)
         if src is None:
             console.print(f"[red]✗[/] tabella '{table}' non trovata")
@@ -723,7 +747,7 @@ def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
     byte_order, stato golden e ultimo snapshot history."""
 
     def _run():
-        sources, _ = _discover_for_history(root)
+        sources, _ = discover_for_history(root)
         history = HistoryStore(root)
 
         t = Table(title=f"Report progetto ({len(sources)} tabelle)")
@@ -744,15 +768,15 @@ def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
             output_files = list(out_dir.glob(f"{name}.*")) if out_dir.exists() else []
             if output_files:
                 out_size = f"{output_files[0].stat().st_size} B"
-                golden_result = check_golden(output_files[0], Path(table_config.defaults.golden_dir))
-                golden_str = {
-                    "match": "[green]match[/]",
-                    "mismatch": "[red]mismatch[/]",
-                    "missing": "[yellow]nessuno[/]",
-                }[golden_result.status]
             else:
                 out_size = "[dim]mai buildata[/]"
-                golden_str = "[dim]—[/]"
+            golden_result = check_golden(history, name, src, output_files)
+            golden_str = {
+                "match": "[green]match[/]",
+                "mismatch": "[red]mismatch[/]",
+                "stale": "[yellow]stale[/]",
+                "missing": "[dim]nessuno[/]",
+            }[golden_result.status]
 
             last = history.last_snapshot(name)
             snap_str = f"#{last.id} ({last.timestamp[:10]})" if last else "[dim]mai salvata[/]"
@@ -778,7 +802,7 @@ def export(
     def _run():
         from payload.export import export_project
 
-        sources, config = _discover_for_history(root)
+        sources, config = discover_for_history(root)
         export_project(root, sources, output, include_history=include_history)
         console.print(f"[green]✓[/] {len(sources)} tabelle archiviate in {output}")
 
@@ -789,56 +813,131 @@ def export(
 # golden
 # --------------------------------------------------------------------------
 
-@golden_app.command("update")
-def golden_update(
+def _table_source(root: Path, sources: list[Path], table_name: str) -> Path:
+    src = next((s for s in sources if s.stem == table_name), None)
+    if src is None:
+        console.print(f"[red]✗[/] sorgente per '{table_name}' non trovato")
+        raise typer.Exit(code=4)
+    return src
+
+
+def _current_output_paths(root: Path, table_name: str, src: Path) -> list[Path]:
+    table_config = load_config(root, source_path=src)
+    out_dir = Path(table_config.defaults.output_dir)
+    return list(out_dir.glob(f"{table_name}.*")) if out_dir.exists() else []
+
+
+@golden_app.command("set")
+def golden_set_cmd(
     ctx: typer.Context,
-    target: Path = typer.Argument(..., help="File di output o cartella build"),
+    table_name: str = typer.Argument(...),
+    snapshot: Optional[int] = typer.Option(None, "--snapshot", help="ID dello snapshot (default: l'ultimo)"),
+    root: Path = typer.Option(Path("."), "--root"),
 ):
+    """Imposta quale snapshot già salvato è il riferimento golden per
+    una tabella — non serve un output appena buildato, solo uno
+    snapshot esistente ('pld log <tabella>' per vedere quali ci sono)."""
+
     def _run():
-        config = load_config(Path.cwd())
-        gdir = Path(config.defaults.golden_dir)
-        targets = [target] if target.is_file() else list(target.rglob("*"))
-        for t in targets:
-            if t.is_file():
-                gpath = update_golden(t, gdir)
-                console.print(f"[green]✓[/] golden aggiornato: {gpath}")
+        history = HistoryStore(root)
+        golden_id = set_golden(history, table_name, snapshot)
+        console.print(f"[gold1]★[/] golden per '{table_name}' impostato allo snapshot #{golden_id}")
 
     run_command(_run, ctx.obj["verbosity"])
 
 
-@golden_app.command("check")
-def golden_check(ctx: typer.Context, target: Path = typer.Argument(...)):
+@golden_app.command("clear")
+def golden_clear_cmd(
+    ctx: typer.Context,
+    table_name: str = typer.Argument(...),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Rimuove il riferimento golden di una tabella (gli snapshot
+    restano, solo il puntatore golden viene tolto)."""
+
     def _run():
-        config = load_config(Path.cwd())
-        gdir = Path(config.defaults.golden_dir)
-        result = check_golden(target, gdir)
-        if result.status == "match":
-            console.print(f"[green]✓[/] {target.name}: match")
-        elif result.status == "missing":
-            console.print(f"[yellow]![/] {target.name}: golden mancante")
+        history = HistoryStore(root)
+        if clear_golden(history, table_name):
+            console.print(f"[green]✓[/] golden per '{table_name}' rimosso")
         else:
-            raise GoldenMismatchError(target)
+            console.print(f"Nessun golden impostato per '{table_name}'.")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+_GOLDEN_STATUS_STYLE = {
+    "match": "[green]✓ match[/]",
+    "mismatch": "[red]✗ mismatch[/]",
+    "stale": "[yellow]⚠ stale (sorgente cambiato dopo il golden)[/]",
+    "missing": "[dim]— nessun golden impostato[/]",
+}
+
+
+@golden_app.command("check")
+def golden_check_cmd(
+    ctx: typer.Context,
+    table_name: Optional[str] = typer.Argument(None, help="Nome tabella (default: tutte)"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Verifica lo stato golden di una tabella, o di tutte se omessa
+    (utile in CI: esce con codice diverso da zero se qualcosa non
+    combacia o è stale)."""
+
+    def _run():
+        sources, _ = discover_for_history(root)
+        history = HistoryStore(root)
+
+        if table_name is not None:
+            src = _table_source(root, sources, table_name)
+            output_paths = _current_output_paths(root, table_name, src)
+            result = check_golden(history, table_name, src, output_paths)
+            if result.status == "match":
+                console.print(f"[green]✓[/] {table_name}: match")
+            elif result.status == "missing":
+                console.print(f"[yellow]![/] {table_name}: golden non impostato")
+            elif result.status == "stale":
+                raise GoldenStaleError(table_name)
+            else:
+                raise GoldenMismatchError(table_name)
+            return
+
+        any_bad = False
+        for src in sources:
+            name = src.stem
+            output_paths = _current_output_paths(root, name, src)
+            result = check_golden(history, name, src, output_paths)
+            console.print(f"{name}: {_GOLDEN_STATUS_STYLE[result.status]}")
+            if result.status in ("mismatch", "stale"):
+                any_bad = True
+        if any_bad:
+            raise typer.Exit(code=3)
 
     run_command(_run, ctx.obj["verbosity"])
 
 
 @golden_app.command("diff")
-def golden_diff(ctx: typer.Context, target: Path = typer.Argument(...)):
+def golden_diff_cmd(
+    ctx: typer.Context,
+    table_name: str = typer.Argument(...),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Differenze byte per byte tra l'output attuale e lo snapshot golden di una tabella."""
+
     def _run():
-        config = load_config(Path.cwd())
-        gdir = Path(config.defaults.golden_dir)
-        result = check_golden(target, gdir)
-        if result.status != "mismatch":
-            console.print(f"Nessuna differenza ({result.status})")
+        sources, _ = discover_for_history(root)
+        src = _table_source(root, sources, table_name)
+        history = HistoryStore(root)
+        output_paths = _current_output_paths(root, table_name, src)
+
+        diffs = golden_diff(history, table_name, output_paths)
+        if not diffs:
+            console.print(f"Nessuna differenza per '{table_name}'.")
             return
-        console.print(f"[bold]Diff per {target.name}[/]")
-        max_len = max(len(result.current), len(result.expected))
-        for i in range(0, max_len, 8):
-            cur_chunk = result.current[i:i + 8]
-            exp_chunk = result.expected[i:i + 8]
-            if cur_chunk != exp_chunk:
+        for filename, chunks in diffs.items():
+            console.print(f"[bold]Diff per {filename}[/]")
+            for c in chunks:
                 console.print(
-                    f"0x{i:04X}  attuale: {cur_chunk.hex(' ')}  |  golden: {exp_chunk.hex(' ')}",
+                    f"0x{c['offset']:04X}  attuale: {c['current']}  |  golden: {c['golden']}",
                     style="red",
                 )
 
@@ -1023,89 +1122,17 @@ def plugin_new_local(
     (pacchetto pip vero), usa invece 'pld plugin new'."""
 
     def _run():
-        if kind not in ("reader", "writer", "doctor-check"):
+        try:
+            out_path = scaffold_local_plugin(name, kind, dest)
+        except ValueError:
             console.print(f"[red]✗[/] kind sconosciuto: '{kind}' (reader|writer|doctor-check)")
             raise typer.Exit(code=2)
-
-        slug = name.replace("-", "_")
-        class_suffix = {"reader": "Reader", "writer": "Writer", "doctor-check": "Check"}[kind]
-        raw_class_name = "".join(p.capitalize() for p in slug.split("_"))
-        class_name = raw_class_name if raw_class_name.lower().endswith(class_suffix.lower()) else raw_class_name + class_suffix
-        attr_name = {"reader": "READER", "writer": "WRITER", "doctor-check": "DOCTOR_CHECK"}[kind]
-
-        dest.mkdir(parents=True, exist_ok=True)
-        out_path = dest / f"{slug}.py"
-        if out_path.exists():
-            console.print(f"[red]✗[/] '{out_path}' esiste già")
+        except FileExistsError:
+            console.print(f"[red]✗[/] '{dest / (name.replace('-', '_') + '.py')}' esiste già")
             raise typer.Exit(code=2)
 
-        if kind == "reader":
-            body = f'''"""TODO: descrivi qui il formato che questo plugin legge, con un esempio."""
-from __future__ import annotations
-
-from pathlib import Path
-
-from payload.core.errors import ReaderParseError
-from payload.core.ir import TableIR
-
-
-class {class_name}:
-    name = "{slug}"
-    extensions = [".{slug}"]
-    api_version = "1.0"
-    default_writer = "bin"  # opzionale: writer suggerito, o None
-
-    def sniff(self, path: Path) -> bool:
-        return False
-
-    def parse(self, path: Path, config: dict) -> TableIR:
-        raise NotImplementedError("TODO: implementa il parsing")
-
-
-{attr_name} = {class_name}
-'''
-        elif kind == "writer":
-            body = f'''"""TODO: descrivi qui il formato che questo plugin scrive, con un esempio."""
-from __future__ import annotations
-
-from pathlib import Path
-
-from payload.core.ir import TableIR
-
-
-class {class_name}:
-    name = "{slug}"
-    extension = ".{slug}"
-    api_version = "1.0"
-    compatible_readers = None  # opzionale: lista di reader compatibili, o None per tutti
-
-    def emit(self, ir: TableIR, out_path: Path, config: dict) -> Path:
-        raise NotImplementedError("TODO: implementa la scrittura")
-
-
-{attr_name} = {class_name}
-'''
-        else:
-            body = f'''"""TODO: descrivi qui cosa verifica questo check."""
-from __future__ import annotations
-
-from payload.core.plugin_base import CheckResult, CheckStatus
-
-
-class {class_name}:
-    name = "{slug}"
-    api_version = "1.0"
-
-    def run(self, config: dict) -> CheckResult:
-        raise NotImplementedError("TODO: implementa il check")
-
-
-{attr_name} = {class_name}
-'''
-
-        out_path.write_text(body)
         console.print(f"[green]✓[/] creato {out_path}")
-        console.print(f"    → 'pld plugins' per verificare che venga scoperto dopo averlo completato", style="dim")
+        console.print("    → 'pld plugins' per verificare che venga scoperto dopo averlo completato", style="dim")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -1136,30 +1163,36 @@ def clean(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Non chiedere conferma"),
 ):
-    """Svuota cache, output di build, o golden file. Utile durante lo
-    sviluppo quando si vuole ripartire da zero senza tracce residue."""
+    """Svuota cache, output di build, o i riferimenti golden. Utile
+    durante lo sviluppo quando si vuole ripartire da zero senza tracce
+    residue. 'golden' non è più una cartella: rimuove i puntatori
+    golden di tutte le tabelle, gli snapshot restano intatti."""
 
     def _run():
         config = load_config(Path.cwd())
-        dirs_by_target = {
-            "cache": [Path(config.defaults.cache_dir)],
-            "build": [Path(config.defaults.output_dir)],
-            "golden": [Path(config.defaults.golden_dir)],
-        }
-        dirs_by_target["all"] = [d for dirs in dirs_by_target.values() for d in dirs]
-
-        if target not in dirs_by_target:
+        if target not in ("cache", "build", "golden", "all"):
             console.print(f"[red]✗[/] target sconosciuto: '{target}' (cache|build|golden|all)")
             raise typer.Exit(code=2)
 
-        dirs = dirs_by_target[target]
+        dirs = []
+        if target in ("cache", "all"):
+            dirs.append(Path(config.defaults.cache_dir))
+        if target in ("build", "all"):
+            dirs.append(Path(config.defaults.output_dir))
         existing = [d for d in dirs if d.exists()]
-        if not existing:
+
+        history = HistoryStore(Path.cwd())
+        golden_map = history.all_golden() if target in ("golden", "all") else {}
+
+        if not existing and not golden_map:
             console.print("Niente da pulire.")
             return
 
         if not yes:
-            console.print(f"Verranno cancellate: {', '.join(str(d) for d in existing)}")
+            parts = [str(d) for d in existing]
+            if golden_map:
+                parts.append(f"riferimenti golden ({len(golden_map)} tabelle)")
+            console.print(f"Verranno cancellate: {', '.join(parts)}")
             if not typer.confirm("Confermi?"):
                 console.print("Annullato.")
                 return
@@ -1167,6 +1200,54 @@ def clean(
         for d in existing:
             shutil.rmtree(d)
             console.print(f"[green]✓[/] rimossa {d}")
+
+        if golden_map:
+            for name in golden_map:
+                history.clear_golden(name)
+            console.print(f"[green]✓[/] rimossi riferimenti golden per {len(golden_map)} tabelle")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+# --------------------------------------------------------------------------
+# serve
+# --------------------------------------------------------------------------
+
+@app.command()
+def serve(
+    ctx: typer.Context,
+    root: Path = typer.Argument(Path("."), help="Cartella progetto da servire"),
+    host: str = typer.Option("127.0.0.1", "--host", help="Indirizzo su cui ascoltare"),
+    port: int = typer.Option(8420, "--port", help="Porta su cui ascoltare"),
+):
+    """Avvia un server web locale con interfaccia grafica per tutte le
+    funzionalità di payload — utile per chi preferisce non usare il
+    terminale. Richiede l'extra opzionale 'serve' (pip install
+    'payload[serve]')."""
+
+    def _run():
+        try:
+            import uvicorn
+
+            from payload.web.app import create_app
+        except ImportError:
+            console.print("[red]✗[/] dipendenze web non installate")
+            console.print(r"    → esegui: pip install 'payload\[serve]'", style="dim")
+            raise typer.Exit(code=2)
+
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            err_console.print(Panel(
+                f"[bold]ATTENZIONE[/]: server esposto su [bold]{host}[/], non solo localhost.\n"
+                "Chiunque raggiunga questo indirizzo in rete può avviare build\n"
+                "(inclusi stage 'exec', che eseguono comandi di sistema arbitrari)\n"
+                "e modificare file del progetto. Usa solo su reti fidate.",
+                title="[red]⚠ Server esposto oltre localhost[/]", border_style="red",
+            ))
+
+        web_app = create_app(root.resolve())
+        console.print(f"[green]✓[/] payload serve su [bold]http://{host}:{port}[/]  (root: {root.resolve()})")
+        console.print("[dim]Ctrl+C per fermare[/]")
+        uvicorn.run(web_app, host=host, port=port, log_level="warning")
 
     run_command(_run, ctx.obj["verbosity"])
 

@@ -10,7 +10,7 @@ from payload.core.local_plugins import LOCAL_PLUGINS_DIRNAME
 LOCAL_PLUGINS_README = '''# Plugin locali
 
 File .py messi qui vengono scoperti automaticamente da payload, senza
-bisogno di `pip install` — vedi docs/PLUGINS.md, sezione
+bisogno di `pip install` — vedi src/payload/docs/PLUGINS.md, sezione
 "Plugin locali senza pip install", per la guida completa.
 
 Convenzione minima:
@@ -72,7 +72,7 @@ def init_project(
     writer=_UNSET,
     byte_order: str = "little",
 ) -> list[Path]:
-    """Crea target_dir se non esiste, poi table-tool.toml, build/, golden/,
+    """Crea target_dir se non esiste, poi table-tool.toml, build/,
     (opzionalmente) local_plugins/ e una tabella di esempio al suo
     interno. Ritorna la lista dei file/dir creati. Non sovrascrive
     nulla salvo force=True.
@@ -102,10 +102,9 @@ def init_project(
         config_dest.write_text(config_content)
         created.append(config_dest)
 
-    for d in ("build", "golden"):
-        p = target_dir / d
-        p.mkdir(parents=True, exist_ok=True)
-        created.append(p)
+    build_dir = target_dir / "build"
+    build_dir.mkdir(parents=True, exist_ok=True)
+    created.append(build_dir)
 
     if include_local_plugins:
         local_plugins_dir = target_dir / LOCAL_PLUGINS_DIRNAME

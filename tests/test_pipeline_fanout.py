@@ -1,6 +1,6 @@
 """
 Fan-out: un reader seguito da più writer consecutivi (tutti terminali)
-riceve la STESSA IR, parsata una sola volta. Vedi docs/PIPELINE.md,
+riceve la STESSA IR, parsata una sola volta. Vedi src/payload/docs/PIPELINE.md,
 sezione Fan-out.
 """
 from pathlib import Path
@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from payload.core.cache import BuildCache
-from payload.core.errors import WriterEmitError
+from payload.core.errors import FanOutWriteError, WriterEmitError
 from payload.core.ir import TableIR
 from payload.core.pipeline import build
 from payload.core.registry import PluginRegistry
@@ -60,6 +60,21 @@ def _make_writer(writer_name: str, ext: str, compatible=None):
             return out_path
 
     return _Writer
+
+
+def _make_failing_writer(writer_name: str, ext: str, reason: str = "boom"):
+    class _FailingWriter:
+        name = writer_name
+        extension = ext
+        api_version = "1.0"
+        compatible_readers = None
+        called = False
+
+        def emit(self, ir, out_path, config):
+            type(self).called = True
+            raise WriterEmitError(writer_name, reason)
+
+    return _FailingWriter
 
 
 @pytest.fixture(autouse=True)
@@ -141,3 +156,45 @@ def test_fan_out_writer_incompatibility_checked_for_every_writer_in_group(tmp_pa
         build(source, registry, _FakeConfig(_fanout_stages("bin", "picky")), tmp_path / "out")
 
     assert picky.called is False
+
+
+def test_fan_out_partial_failure_still_writes_successful_outputs(tmp_path, source, registry):
+    """Regressione trovata dall'utente: con 3 writer di cui 1 fallisce
+    a runtime, gli altri 2 devono comunque scrivere il proprio output —
+    altrimenti l'utente non ha modo di sapere che 2/3 sono riusciti."""
+    registry.register_writer(_make_failing_writer("broken", ".broken", "reason simulata")())
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(FanOutWriteError) as exc_info:
+        build(source, registry, _FakeConfig(_fanout_stages("bin", "broken", "hex")), out_dir)
+
+    err = exc_info.value
+    assert (out_dir / "t.bin").exists()
+    assert (out_dir / "t.hex").exists()
+    assert not (out_dir / "t.broken").exists()
+    assert err.context["succeeded_outputs"] == [str(out_dir / "t.bin"), str(out_dir / "t.hex")]
+    assert err.context["failed_writers"] == [{"writer": "broken", "reason": "Writer 'broken' non può generare output: reason simulata"}]
+    assert "t.bin, t.hex" in err.message
+    assert "broken" in err.message
+
+
+def test_fan_out_all_writers_fail_reports_empty_succeeded(tmp_path, source, registry):
+    registry.register_writer(_make_failing_writer("broken1", ".b1")())
+    registry.register_writer(_make_failing_writer("broken2", ".b2")())
+    out_dir = tmp_path / "out"
+
+    with pytest.raises(FanOutWriteError) as exc_info:
+        build(source, registry, _FakeConfig(_fanout_stages("broken1", "broken2")), out_dir)
+
+    assert exc_info.value.context["succeeded_outputs"] == []
+    assert len(exc_info.value.context["failed_writers"]) == 2
+
+
+def test_single_terminal_writer_failure_is_not_wrapped(tmp_path, source, registry):
+    """Un solo writer terminale (niente fan-out) non ha nulla di
+    'parziale' da riportare: deve fallire esattamente come prima,
+    senza il wrapping introdotto per il caso fan-out."""
+    registry.register_writer(_make_failing_writer("broken", ".broken")())
+
+    with pytest.raises(WriterEmitError):
+        build(source, registry, _FakeConfig(_fanout_stages("broken")), tmp_path / "out")

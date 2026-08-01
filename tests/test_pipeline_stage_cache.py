@@ -17,6 +17,7 @@ from payload.core.registry import PluginRegistry
 class _FakeDefaults:
     def __init__(self):
         self.writer = None
+        self.reader = None
 
 
 class _FakeConfig:

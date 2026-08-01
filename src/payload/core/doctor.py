@@ -135,14 +135,19 @@ class DirWritableCheck:
     api_version = "1.0"
 
     def run(self, config: dict) -> CheckResult:
+        # Come ogni altro check qui: risolto rispetto a _project_root,
+        # MAI rispetto alla cwd del processo — le due possono differire
+        # (es. 'pld serve' lanciato da una cartella diversa dal progetto
+        # servito). La CLI le fa sempre coincidere per convenzione, ma
+        # questo check non può assumerlo.
+        project_root = Path(config.get("_project_root", "."))
         dirs = [
             config.get("defaults", {}).get("output_dir", "build"),
-            config.get("defaults", {}).get("golden_dir", "golden"),
             config.get("defaults", {}).get("cache_dir", ".payload_cache"),
         ]
         problems = []
         for d in dirs:
-            p = Path(d)
+            p = project_root / d
             try:
                 p.mkdir(parents=True, exist_ok=True)
                 test_file = p / ".payload_write_test"
@@ -162,7 +167,8 @@ class CacheIntegrityCheck:
     api_version = "1.0"
 
     def run(self, config: dict) -> CheckResult:
-        cache_dir = Path(config.get("defaults", {}).get("cache_dir", ".payload_cache"))
+        project_root = Path(config.get("_project_root", "."))
+        cache_dir = project_root / config.get("defaults", {}).get("cache_dir", ".payload_cache")
         cache_file = cache_dir / ".payload_cache.json"
         if not cache_file.exists():
             return CheckResult(self.name, CheckStatus.OK, "Nessuna cache presente (ok)")
@@ -284,7 +290,7 @@ class GitCheck:
 class PipelineExecStagesCheck:
     """Segnala quanti stage 'exec' sono configurati nel progetto — uno
     stage exec esegue codice arbitrario letto da config (vedi
-    docs/PIPELINE.md, sezione Sicurezza). Non bloccante: solo
+    src/payload/docs/PIPELINE.md, sezione Sicurezza). Non bloccante: solo
     visibilità, per non ignorarlo senza accorgersene."""
 
     name = "pipeline_exec"
@@ -322,7 +328,7 @@ class PipelineExecStagesCheck:
                 self.name, CheckStatus.WARN,
                 f"{exec_count} stage 'exec' configurati in {len(files_with_exec)} file — "
                 f"eseguono comandi esterni durante la build",
-                hint=f"File: {', '.join(files_with_exec)}. Vedi docs/PIPELINE.md, sezione Sicurezza",
+                hint=f"File: {', '.join(files_with_exec)}. Vedi src/payload/docs/PIPELINE.md, sezione Sicurezza",
             )
         return CheckResult(self.name, CheckStatus.OK, "nessuno stage 'exec' configurato")
 

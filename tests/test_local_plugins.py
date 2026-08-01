@@ -4,7 +4,13 @@ from pathlib import Path
 import pytest
 
 from payload.core.errors import PluginLoadError
-from payload.core.local_plugins import discover_local_plugin_dirs, load_local_plugins
+from payload.core.local_plugins import (
+    discover_local_plugin_dirs,
+    extract_plugin_classes,
+    list_local_plugin_files,
+    load_local_plugins,
+    load_module_from_file,
+)
 from payload.core.registry import PluginRegistry, load_plugins
 
 
@@ -194,3 +200,45 @@ def test_registry_warns_on_name_collision(tmp_path, caplog):
         registry.register_writer(FakeWriter())
 
     assert any("già registrato" in r.message for r in caplog.records)
+
+
+# --- load_module_from_file / extract_plugin_classes / list_local_plugin_files (editor web) ---
+
+
+def test_load_module_from_file_and_extract_plugin_classes(tmp_path):
+    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir.mkdir()
+    path = plugin_dir / "upper.py"
+    path.write_text(WRITER_SOURCE)
+
+    module = load_module_from_file(path)
+    classes = extract_plugin_classes(module)
+
+    assert classes == [("writer", module.UpperWriter)]
+
+
+def test_extract_plugin_classes_multi_reader(tmp_path):
+    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir.mkdir()
+    path = plugin_dir / "multi.py"
+    path.write_text(MULTI_READER_SOURCE)
+
+    module = load_module_from_file(path)
+    classes = extract_plugin_classes(module)
+
+    assert [kind for kind, _ in classes] == ["reader", "reader"]
+
+
+def test_list_local_plugin_files_no_dir_returns_empty(tmp_path):
+    assert list_local_plugin_files(tmp_path) == []
+
+
+def test_list_local_plugin_files_excludes_underscore_prefixed(tmp_path):
+    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir.mkdir()
+    (plugin_dir / "upper.py").write_text(WRITER_SOURCE)
+    (plugin_dir / "_helper.py").write_text("x = 1\n")
+
+    files = list_local_plugin_files(tmp_path)
+
+    assert [f.name for f in files] == ["upper.py"]

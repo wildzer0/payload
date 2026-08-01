@@ -14,7 +14,7 @@ Il nome sezione è fisso (non dipende dal nome tabella): questo .c viene
 compilato solo per ESTRARNE i bytes, non è quello che finisce linkato
 nel firmware — quella parte (con la sezione nominata per tabella e i
 simboli __start_X/__stop_X) è responsabilità del writer 'obj', non di
-questo reader. Vedi docs/PLUGINS.md.
+questo reader. Vedi src/payload/docs/PLUGINS.md.
 
 I commenti // a fine riga sono estratti su base "best effort" per 'pld
 view': non sono mai autorevoli sul contenuto — se il parsing testuale
@@ -70,7 +70,12 @@ class CSourceReader:
             bin_path = tmp / "extracted.bin"
 
             compile_cmd = [compiler, *compiler_flags, "-c", str(path), "-o", str(obj_path)]
-            result = subprocess.run(compile_cmd, capture_output=True, text=True)
+            try:
+                result = subprocess.run(compile_cmd, capture_output=True, text=True)
+            except FileNotFoundError as e:
+                raise ToolchainExecutionError(
+                    compile_cmd, -1, f"eseguibile non trovato: '{compiler}' ({e})"
+                ) from e
             if result.returncode != 0:
                 raise ToolchainExecutionError(compile_cmd, result.returncode, result.stderr)
 
@@ -79,7 +84,12 @@ class CSourceReader:
                 f"--only-section={SECTION_NAME}",
                 str(obj_path), str(bin_path),
             ]
-            result = subprocess.run(extract_cmd, capture_output=True, text=True)
+            try:
+                result = subprocess.run(extract_cmd, capture_output=True, text=True)
+            except FileNotFoundError as e:
+                raise ToolchainExecutionError(
+                    extract_cmd, -1, f"eseguibile non trovato: '{objcopy}' ({e})"
+                ) from e
             if result.returncode != 0:
                 raise ToolchainExecutionError(extract_cmd, result.returncode, result.stderr)
 

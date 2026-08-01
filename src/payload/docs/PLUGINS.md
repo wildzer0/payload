@@ -466,10 +466,10 @@ progetto/
 **Unico vincolo reale**: il **nome tabella** (il filename senza
 estensione) deve essere **unico in tutto il progetto**, non solo nella
 stessa cartella. Il nome è l'identità usata ovunque — file di output in
-`build/`, riferimento in `golden/`, snapshot in `.payload_history/` —
-tutti indicizzati per nome, non per percorso completo. Due file con lo
+`build/`, snapshot e riferimento golden in `.payload_history/` — tutti
+indicizzati per nome, non per percorso completo. Due file con lo
 stesso stem in cartelle diverse (`sensori/temp.raw` e `attuatori/temp.raw`)
-collidono silenziosamente su questi tre fronti. `pld build-all` e `pld
+collidono silenziosamente su questi fronti. `pld build-all` e `pld
 doctor` rilevano questa collisione e la segnalano con
 `DuplicateTableNameError` invece di lasciarti scoprire una sovrascrittura
 a sorpresa.

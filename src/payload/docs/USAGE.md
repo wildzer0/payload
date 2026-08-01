@@ -59,8 +59,10 @@ Ogni tabella è un file sorgente indipendente. Il **reader** è scelto per
 estensione (o esplicitamente con `--from`); il **writer** di destinazione
 si sceglie con `--to` (o dal default in config). Una **cache basata su
 hash** evita di ricompilare tabelle il cui sorgente/config non è
-cambiato; i **golden file** permettono di rilevare se l'output è
-cambiato rispetto a un riferimento congelato in precedenza.
+cambiato; **golden** permette di rilevare se l'output è cambiato
+rispetto a uno snapshot storico marcato come riferimento (vedi `pld
+commit`/`pld golden set` più sotto — golden non è un file separato, è
+un puntatore a uno snapshot già salvato).
 
 ---
 
@@ -68,10 +70,10 @@ cambiato rispetto a un riferimento congelato in precedenza.
 
 ### `pld init [nome] [--force] [--wizard/-w] [--yes/-y]`
 
-Crea lo scaffold minimo di un progetto: `table-tool.toml`, le cartelle
-`build/`, `golden/` e `local_plugins/` (per plugin esterni senza `pip
-install`, vedi [PLUGINS.md](PLUGINS.md#plugin-locali-senza-pip-install)),
-e una tabella di esempio (`example_table.raw`).
+Crea lo scaffold minimo di un progetto: `table-tool.toml`, la cartella
+`build/` e `local_plugins/` (per plugin esterni senza `pip install`,
+vedi [PLUGINS.md](PLUGINS.md#plugin-locali-senza-pip-install)), e una
+tabella di esempio (`example_table.raw`).
 
 ```bash
 pld init mio-progetto     # crea una cartella nuova dedicata (consigliato)
@@ -100,7 +102,7 @@ del wizard senza interazione.
 Compila una singola tabella. Internamente esegue sempre una
 **pipeline** — implicita a 2 stage (`--from`/`--to`, il caso comune) o
 esplicita se la tabella ha una sezione `[pipeline]` in config, vedi
-[docs/PIPELINE.md](PIPELINE.md).
+[PIPELINE.md](PIPELINE.md).
 
 | Opzione | Default | Significato |
 |---|---|---|
@@ -109,7 +111,7 @@ esplicita se la tabella ha una sezione `[pipeline]` in config, vedi
 | `--out <dir>` | `build` | cartella di output |
 | `--force` | off | ignora la cache, ricompila comunque |
 | `--dry-run` | off | mostra cosa verrebbe fatto senza scrivere nulla (non esegue mai stage `exec`) |
-| `--check-golden` | off | fallisce (exit 3) se l'output non combacia col golden salvato |
+| `--check-golden` | off | fallisce (exit 3) se lo stato golden non è `match` (mismatch o stale) |
 | `--opt chiave=valore` | — | override una tantum per il plugin attivo, ripetibile (vedi [PLUGINS.md](PLUGINS.md#passare-informazioni-extra-a-un-plugin)) |
 | `--keep-intermediate` | off | non ripulisce `tmp/` dopo la build — utile per ispezionare i file intermedi di una pipeline multi-stage |
 
@@ -214,23 +216,46 @@ Mostra quali tabelle sono cambiate rispetto all'ultimo snapshot salvato
 pld status
 ```
 
-### `pld commit -m "messaggio" [--only <tabella>] [root]`
+### `pld commit -m "messaggio" [--only <tabella>] [--golden] [root]`
 
 Salva uno snapshot di **sorgente + output generato** per ogni tabella
 modificata (o solo per quelle indicate con `--only`, ripetibile). A
 differenza di git non c'è un passo `add` separato: le tabelle sono
 indipendenti tra loro, quindi non c'è nulla da comporre insieme — ogni
-`commit` cattura da sola tutto ciò che è cambiato.
+`commit` cattura da sola tutto ciò che è cambiato. "Modificata" ora
+considera anche l'output, non solo il sorgente: cambiare writer senza
+toccare il sorgente produce comunque qualcosa da committare.
+
+Con `--golden`, lo snapshot appena creato diventa anche il riferimento
+golden per ogni tabella committata — collassa "build → commit →
+imposta come golden" in un solo comando.
+
+Se lo stato che stai committando viene da una pipeline fan-out andata
+in fallimento parziale (vedi PIPELINE.md, sezione Fan-out) — cioè uno o
+più writer del gruppo non hanno prodotto il proprio output — il
+comando stampa un avviso esplicito (`pipeline incompleta: manca
+<file>`) e lo snapshot lo ricorda per sempre (vedi `pld log` sotto):
+non c'è modo di committare per sbaglio uno stato parziale senza
+accorgertene, né ora né rivedendo la storia più avanti.
 
 ```bash
 pld commit -m "calibrazione sensore aggiornata"
 pld commit -m "solo questa tabella" --only temp_table
+pld commit -m "output verificato" --golden
 ```
 
 ### `pld log [tabella] [--root <dir>]`
 
 Storico degli snapshot, come `git log`. Senza argomento, mostra tutte le
-tabelle mai salvate.
+tabelle mai salvate. Ogni riga mostra anche gli output allegati e da
+cosa sono stati prodotti: il writer è dedotto dall'**estensione dei
+file realmente committati** (accurato anche con un override ad-hoc
+`--to`/`--from` mai scritto in config), il reader resta una
+risoluzione best-effort dalla config al momento del commit. La riga è
+marcata `● attuale` se è lo snapshot su cui la tabella si trova ora (la
+punta, di default, o uno snapshot precedente dopo un `pld restore`), ed
+è marcata con un avviso se nato da una pipeline fan-out parziale (vedi
+`pld commit` sopra).
 
 ```bash
 pld log temp_table
@@ -239,8 +264,9 @@ pld log                # tutte le tabelle tracciate
 
 ### `pld diff <tabella> [--snapshot <N>] [--root <dir>]`
 
-Confronta il sorgente attuale con uno snapshot (l'ultimo, se `--snapshot`
-è omesso). Byte per byte, stesso motore di `golden diff`.
+Confronta il **sorgente** attuale con uno snapshot (l'ultimo, se
+`--snapshot` è omesso), byte per byte — per confrontare l'**output**
+contro il riferimento golden, vedi `pld golden diff`.
 
 ```bash
 pld diff temp_table
@@ -249,8 +275,15 @@ pld diff temp_table --snapshot 2
 
 ### `pld restore <tabella> <N> [--root <dir>] [--yes]`
 
-Riporta **sorgente e output generato** allo stato dello snapshot `N`.
-Chiede conferma salvo `--yes`.
+Riporta **sorgente e output generato** allo stato dello snapshot `N` e
+sposta l'"attuale" (head) su quello snapshot — stile `git checkout
+<commit>`: nessun nuovo snapshot viene creato, la cronologia resta
+intatta e invariata (gli snapshot più recenti restano lì, consultabili
+e riscaricabili, semplicemente non sono più quelli "attuali" finché non
+arriva un nuovo `pld commit`, che diventa comunque la nuova punta). Se
+uno snapshot più recente aveva output di un writer diverso, quei file
+orfani vengono rimossi dal disco (stile `git checkout`, non lasciati
+lì). Chiede conferma salvo `--yes`.
 
 ```bash
 pld restore temp_table 3
@@ -274,23 +307,39 @@ una tabella, senza scrivere alcun output.
 pld view sensors/temp_table.raw
 ```
 
-### `pld golden update <file|dir>`
+### `pld golden set <tabella> [--snapshot N]`
 
-Congela l'output attuale come riferimento. Da usare quando un cambio di
-output è intenzionale, mai in automatico.
+Imposta quale **snapshot già salvato** (vedi `pld commit`) è il
+riferimento golden per una tabella — non un file frozen separato, un
+puntatore: sorgente e output di quello snapshot SONO il golden. Senza
+`--snapshot`, usa l'ultimo. Richiede almeno uno snapshot esistente
+(`pld commit` prima).
 
 ```bash
-pld golden update build/sensors/temp_table.bin
-pld golden update build/    # tutti i file in build/
+pld golden set sensors_temp_table              # ultimo snapshot
+pld golden set sensors_temp_table --snapshot 3 # uno specifico
+pld commit -m "output corretto" --golden       # commit + set golden in un colpo
 ```
 
-### `pld golden check <file>`
+### `pld golden check [tabella]`
 
-Verifica senza aggiornare. Exit 3 se mismatch.
+Verifica lo stato golden di una tabella, o di tutte se omessa. Quattro
+stati possibili: `match` (sorgente e output coincidono con lo
+snapshot), `mismatch` (sorgente invariato, output diverso — una vera
+regressione), `stale` (il *sorgente* è cambiato dopo il golden, quindi
+il confronto sull'output non è più affidabile), `missing` (nessun
+golden impostato). Exit 3 se `mismatch`/`stale` (su una singola
+tabella) o se una qualunque tabella non è a `match` (controllo su
+tutte).
 
-### `pld golden diff <file>`
+### `pld golden diff <tabella>`
 
-Mostra le differenze byte per byte tra output attuale e golden salvato.
+Differenze byte per byte tra output attuale e snapshot golden.
+
+### `pld golden clear <tabella>`
+
+Rimuove il riferimento golden di una tabella. Gli snapshot restano
+intatti, solo il puntatore viene tolto.
 
 ### `pld doctor`
 
@@ -357,7 +406,10 @@ pld plugin validate csv --sample esempio.csv
 
 ### `pld clean [--target cache|build|golden|all] [--yes]`
 
-Svuota cache, output di build, o golden file. Chiede conferma salvo `--yes`.
+Svuota cache, output di build, o (`golden`) i riferimenti golden di
+tutte le tabelle — non una cartella da cancellare, i puntatori vengono
+tolti da `.payload_history/`, gli snapshot restano. Chiede conferma
+salvo `--yes`.
 
 ```bash
 pld clean --target cache
@@ -394,8 +446,8 @@ solo le chiavi che dichiara esplicitamente.
 ```toml
 [defaults]
 writer = "bin"              # writer usato quando --to non è specificato
+reader = "raw_text"         # reader usato quando --from non è specificato (auto-detect se assente)
 output_dir = "build"
-golden_dir = "golden"
 cache_dir = ".payload_cache"
 byte_order = "little"       # "little" | "big" — target per reader/writer che gestiscono valori multi-byte
 
@@ -528,7 +580,7 @@ giusta.
 pld init                                    # scaffold iniziale
 pld doctor                                  # verifica che tutto sia a posto
 pld build example_table.raw --to bin        # prima build
-pld golden update build/example_table.bin   # congela il riferimento
+pld commit -m "output corretto" --golden    # snapshot + congela come riferimento
 # ... modifichi il tool o il plugin ...
 pld build-all . --check-golden --jobs 4     # verifica di non aver rotto nulla
 ```

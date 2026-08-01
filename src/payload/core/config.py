@@ -21,6 +21,8 @@ import sys
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
+import tomli_w
+
 from payload.core.errors import InvalidConfigError
 
 logger = logging.getLogger(__name__)
@@ -49,8 +51,8 @@ class ToolchainConfig:
 @dataclass
 class DefaultsConfig:
     writer: str | None = None  # None = nessuna preferenza esplicita: il reader può suggerirne uno
+    reader: str | None = None  # None = auto-risoluzione da estensione/sniff (vedi PluginRegistry.find_reader)
     output_dir: str = "build"
-    golden_dir: str = "golden"
     cache_dir: str = ".payload_cache"
     byte_order: str = "little"  # "little" | "big" — target per reader/writer che gestiscono valori multi-byte
 
@@ -79,7 +81,7 @@ class PayloadConfig:
         return asdict(self)
 
 
-_DEFAULTS_STR_FIELDS = ("writer", "output_dir", "golden_dir", "cache_dir", "byte_order")
+_DEFAULTS_STR_FIELDS = ("writer", "reader", "output_dir", "cache_dir", "byte_order")
 _TOOLCHAIN_STR_FIELDS = ("compiler", "objcopy", "objcopy_target", "objcopy_arch")
 _TOOLCHAIN_LIST_STR_FIELDS = ("compiler_flags",)
 _VALID_BYTE_ORDERS = ("little", "big")
@@ -229,3 +231,120 @@ def resolve_config_with_provenance(
         config.defaults.writer, config.toolchain.compiler,
     )
     return config, provenance
+
+
+def config_schema() -> dict:
+    """Schema dei campi editabili di 'defaults'/'toolchain', nell'ordine
+    di dichiarazione delle dataclass — usato dalla web UI per generare il
+    form di config senza duplicare l'elenco dei campi lato JS."""
+    def _section(cls, list_fields: tuple) -> list[dict]:
+        return [{"key": f.name, "type": "list" if f.name in list_fields else "string"} for f in fields(cls)]
+
+    return {
+        "defaults": _section(DefaultsConfig, ()),
+        "toolchain": _section(ToolchainConfig, _TOOLCHAIN_LIST_STR_FIELDS),
+    }
+
+
+def _drop_none_values(section: dict) -> dict:
+    """'defaults.writer' e' l'unico campo con default None ('nessuna
+    preferenza esplicita') — un form che lo invia vuoto manda None, che
+    va trattato come "chiave assente", non come valore stringa
+    invalido, altrimenti _validate_section lo rifiuterebbe (si aspetta
+    solo str per i campi *_STR_FIELDS)."""
+    return {k: v for k, v in section.items() if v is not None}
+
+
+def write_global_config(project_root: Path, defaults: dict, toolchain: dict) -> Path:
+    """Scrive/sovrascrive le sezioni [defaults]/[toolchain] di
+    table-tool.toml, preservando [plugin.*]/[pipeline] esistenti se
+    presenti. Valida PRIMA di scrivere: una config che non supererebbe
+    load_config() non finisce mai su disco."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    merged = dict(_load_toml(path)) if path.exists() else {}
+    merged["defaults"] = _drop_none_values(defaults)
+    merged["toolchain"] = _drop_none_values(toolchain)
+
+    _build_config(merged, path)
+
+    path.write_text(tomli_w.dumps(merged))
+    logger.debug("Config globale scritta: %s", path)
+    return path
+
+
+def read_raw_sidecar(source_path: Path) -> dict:
+    """TOML grezzo del sidecar di source_path, o {} se non esiste —
+    usato dalla web UI per precompilare il form coi soli campi
+    effettivamente overridati (non con l'intera config risolta)."""
+    sidecar_path = source_path.parent / f"{source_path.stem}{SIDECAR_SUFFIX}"
+    if not sidecar_path.exists():
+        return {}
+    return _load_toml(sidecar_path)
+
+
+def write_sidecar_config(
+    source_path: Path,
+    defaults: dict | None = None,
+    toolchain: dict | None = None,
+    pipeline_stages: list | None = None,
+) -> Path:
+    """Aggiorna il sidecar di source_path un pezzo alla volta: ogni
+    parametro None lascia la sezione esistente intatta, un dict/lista
+    vuoti la rimuovono (disattiva l'override senza toccare il resto del
+    sidecar, es. [plugin.*] scritto a mano). Se il sidecar risultante è
+    completamente vuoto, il file viene eliminato invece di lasciare un
+    TOML vuoto sul disco."""
+    sidecar_path = source_path.parent / f"{source_path.stem}{SIDECAR_SUFFIX}"
+    merged = dict(_load_toml(sidecar_path)) if sidecar_path.exists() else {}
+
+    if defaults is not None:
+        defaults = _drop_none_values(defaults)
+        if defaults:
+            merged["defaults"] = defaults
+        else:
+            merged.pop("defaults", None)
+    if toolchain is not None:
+        toolchain = _drop_none_values(toolchain)
+        if toolchain:
+            merged["toolchain"] = toolchain
+        else:
+            merged.pop("toolchain", None)
+    if pipeline_stages is not None:
+        if pipeline_stages:
+            merged["pipeline"] = {**merged.get("pipeline", {}), "stages": pipeline_stages}
+        else:
+            merged.pop("pipeline", None)
+
+    # Stessa validazione strutturale di _build_config per defaults/toolchain
+    # (pipeline.stages è già stato validato dal chiamante con
+    # PipelineSpec.from_raw_stages prima di arrivare qui — le regole di
+    # alternanza reader/writer/exec non sono territorio di questo modulo).
+    _validate_section(merged.get("defaults", {}), "defaults", _DEFAULTS_STR_FIELDS, (), sidecar_path)
+    _validate_section(merged.get("toolchain", {}), "toolchain", _TOOLCHAIN_STR_FIELDS, _TOOLCHAIN_LIST_STR_FIELDS, sidecar_path)
+    byte_order = merged.get("defaults", {}).get("byte_order")
+    if byte_order is not None and byte_order not in _VALID_BYTE_ORDERS:
+        raise InvalidConfigError(
+            sidecar_path, field="defaults.byte_order",
+            reason=f"deve essere 'little' o 'big', trovato '{byte_order}'",
+        )
+
+    if not merged:
+        if sidecar_path.exists():
+            sidecar_path.unlink()
+        logger.debug("Sidecar rimosso (vuoto dopo l'update): %s", sidecar_path)
+        return sidecar_path
+
+    sidecar_path.write_text(tomli_w.dumps(merged))
+    logger.debug("Sidecar scritto: %s", sidecar_path)
+    return sidecar_path
+
+
+def delete_sidecar_config(source_path: Path) -> bool:
+    """Elimina il sidecar di source_path se esiste. Ritorna True se un
+    file è stato effettivamente rimosso (idempotente: False se non
+    c'era già nulla da eliminare)."""
+    sidecar_path = source_path.parent / f"{source_path.stem}{SIDECAR_SUFFIX}"
+    if sidecar_path.exists():
+        sidecar_path.unlink()
+        return True
+    return False

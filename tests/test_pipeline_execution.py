@@ -13,8 +13,9 @@ from payload.core.registry import PluginRegistry
 
 
 class _FakeDefaults:
-    def __init__(self, writer=None):
+    def __init__(self, writer=None, reader=None):
         self.writer = writer
+        self.reader = reader
 
 
 class _FakeConfig:

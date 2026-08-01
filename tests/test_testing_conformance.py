@@ -1,7 +1,7 @@
 """
 Test della suite di conformità stessa (payload/testing.py) — deve
 saper intercettare OGNI violazione del contratto Reader/Writer
-descritto in docs/PLUGINS.md, non solo i casi già coperti in
+descritto in src/payload/docs/PLUGINS.md, non solo i casi già coperti in
 test_conformance.py. Ogni fake qui sotto viola esattamente UNA regola,
 per isolare quale check la intercetta."""
 from pathlib import Path

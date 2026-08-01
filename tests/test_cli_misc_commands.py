@@ -37,13 +37,25 @@ def test_view_shows_bytes_and_comments(tmp_path, monkeypatch):
 
 # --- build: check-golden ----------------------------------------------------
 
-def test_build_check_golden_mismatch_raises(tmp_path, monkeypatch):
+def test_build_check_golden_stale_when_source_changed_raises(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
-    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
     (proj / "example_table.raw").write_text("0x99\n")
 
     result = runner.invoke(app, ["build", "example_table.raw", "--to", "bin", "--force", "--check-golden"])
+
+    assert result.exit_code == 3
+
+
+def test_build_check_golden_mismatch_on_tampered_output_raises(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
+    (proj / "build" / "example_table.bin").write_bytes(b"manomesso a mano")
+
+    # sorgente invariato -> cache hit, il build non riscrive l'output manomesso
+    result = runner.invoke(app, ["build", "example_table.raw", "--to", "bin", "--check-golden"])
 
     assert result.exit_code == 3
 
@@ -74,9 +86,11 @@ def test_build_all_duplicate_names_raises(tmp_path, monkeypatch):
 
 def test_build_all_golden_mismatch_reported_not_fatal(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
-    golden_dir = proj / "golden"  # già creata da 'init'
-    (golden_dir / "example_table.bin.golden").write_bytes(b"contenuto sbagliato")
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
+    (proj / "build" / "example_table.bin").write_bytes(b"manomesso a mano")
 
+    # sorgente invariato -> cache hit, build-all non riscrive l'output manomesso
     result = runner.invoke(app, ["build-all", "--check-golden"])
 
     assert result.exit_code == 0
@@ -164,56 +178,66 @@ def test_pipeline_show_explicit_exec_stage_and_checkpoint_states(tmp_path, monke
     assert "valido" in after.stdout
 
 
-# --- golden update/check/diff: rami rimanenti -------------------------------
+# --- golden set/check/diff/clear ---------------------------------------------
 
-def test_golden_update_single_file(tmp_path, monkeypatch):
-    proj = _init_project(tmp_path, monkeypatch)
+def test_golden_set_defaults_to_latest_snapshot(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["commit", "-m", "v1"])
 
-    result = runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+    result = runner.invoke(app, ["golden", "set", "example_table"])
 
     assert result.exit_code == 0
-    assert (proj / "golden" / "example_table.bin.golden").exists()
+    assert "#1" in result.stdout
 
 
-def test_golden_update_directory_updates_all_files(tmp_path, monkeypatch):
-    proj = _init_project(tmp_path, monkeypatch)
+def test_golden_set_no_snapshot_yet_fails(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["golden", "set", "example_table"])
+
+    assert result.exit_code != 0
+
+
+def test_golden_check_single_table_match(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
 
-    result = runner.invoke(app, ["golden", "update", "build"])
-
-    assert result.exit_code == 0
-    assert (proj / "golden" / "example_table.bin.golden").exists()
-
-
-def test_golden_check_match(tmp_path, monkeypatch):
-    proj = _init_project(tmp_path, monkeypatch)
-    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
-    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
-
-    result = runner.invoke(app, ["golden", "check", "build/example_table.bin"])
+    result = runner.invoke(app, ["golden", "check", "example_table"])
 
     assert result.exit_code == 0
     assert "match" in result.stdout
 
 
-def test_golden_check_mismatch_raises(tmp_path, monkeypatch):
+def test_golden_check_single_table_mismatch_raises(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
-    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
     (proj / "build" / "example_table.bin").write_bytes(b"altro contenuto")
 
-    result = runner.invoke(app, ["golden", "check", "build/example_table.bin"])
+    result = runner.invoke(app, ["golden", "check", "example_table"])
 
     assert result.exit_code == 3
 
 
-def test_golden_diff_no_difference(tmp_path, monkeypatch):
-    proj = _init_project(tmp_path, monkeypatch)
+def test_golden_check_all_tables_reports_summary(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
-    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
 
-    result = runner.invoke(app, ["golden", "diff", "build/example_table.bin"])
+    result = runner.invoke(app, ["golden", "check"])
+
+    assert result.exit_code == 0
+    assert "match" in result.stdout
+
+
+def test_golden_diff_no_difference(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
+
+    result = runner.invoke(app, ["golden", "diff", "example_table"])
 
     assert result.exit_code == 0
     assert "Nessuna differenza" in result.stdout
@@ -222,13 +246,82 @@ def test_golden_diff_no_difference(tmp_path, monkeypatch):
 def test_golden_diff_shows_byte_differences(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
-    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
     (proj / "build" / "example_table.bin").write_bytes(b"\xff\xff\xff\xff")
 
-    result = runner.invoke(app, ["golden", "diff", "build/example_table.bin"])
+    result = runner.invoke(app, ["golden", "diff", "example_table"])
 
     assert result.exit_code == 0
     assert "Diff per" in result.stdout
+
+
+def test_golden_clear_removes_pointer(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
+
+    result = runner.invoke(app, ["golden", "clear", "example_table"])
+    assert result.exit_code == 0
+
+    after = runner.invoke(app, ["golden", "check", "example_table"])
+    assert "non impostato" in after.stdout
+
+
+def test_golden_clear_idempotent(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["golden", "clear", "example_table"])
+    assert result.exit_code == 0
+    assert "Nessun golden" in result.stdout
+
+
+def test_golden_check_unknown_table_exits_4(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["golden", "check", "non_esiste"])
+    assert result.exit_code == 4
+
+
+def test_golden_diff_unknown_table_exits_4(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    result = runner.invoke(app, ["golden", "diff", "non_esiste"])
+    assert result.exit_code == 4
+
+
+def test_golden_check_single_table_stale_raises(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
+    (proj / "example_table.raw").write_text("0x99\n")
+
+    result = runner.invoke(app, ["golden", "check", "example_table"])
+
+    assert result.exit_code == 3
+
+
+def test_golden_check_all_tables_exits_3_if_any_bad(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "second.raw").write_text("0x02\n")
+    runner.invoke(app, ["build-all"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
+    (proj / "build" / "second.bin").write_bytes(b"manomesso")
+
+    result = runner.invoke(app, ["golden", "check"])
+
+    assert result.exit_code == 3
+    assert "match" in result.stdout
+    assert "mismatch" in result.stdout
+
+
+def test_clean_golden_confirmation_prompt_declined(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
+
+    result = runner.invoke(app, ["clean", "--target", "golden"], input="n\n")
+
+    assert result.exit_code == 0
+    assert "Annullato" in result.stdout
+    after = runner.invoke(app, ["golden", "check", "example_table"])
+    assert "match" in after.stdout  # non toccato, confermato annullato
 
 
 # --- plugin info -------------------------------------------------------------
@@ -429,12 +522,24 @@ def test_clean_unknown_target_exits_2(tmp_path, monkeypatch):
 
 
 def test_clean_nothing_to_clean(tmp_path, monkeypatch):
-    # 'init' crea già build/ e golden/ (vuote) ma non .payload_cache/,
-    # creata solo al primo salvataggio della cache
+    # 'init' crea già build/ (vuota) ma non .payload_cache/, creata
+    # solo al primo salvataggio della cache
     _init_project(tmp_path, monkeypatch)
     result = runner.invoke(app, ["clean", "--target", "cache"])
     assert result.exit_code == 0
     assert "Niente da pulire" in result.stdout
+
+
+def test_clean_golden_target_clears_pointers_not_a_directory(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
+
+    result = runner.invoke(app, ["clean", "--target", "golden", "--yes"])
+
+    assert result.exit_code == 0
+    after = runner.invoke(app, ["golden", "check", "example_table"])
+    assert "non impostato" in after.stdout
 
 
 def test_clean_declined_confirmation(tmp_path, monkeypatch):
@@ -461,13 +566,14 @@ def test_clean_yes_removes_target(tmp_path, monkeypatch):
 def test_clean_all_target(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
     runner.invoke(app, ["build", "example_table.raw", "--to", "bin"])
-    runner.invoke(app, ["golden", "update", "build/example_table.bin"])
+    runner.invoke(app, ["commit", "-m", "v1", "--golden"])
 
     result = runner.invoke(app, ["clean", "--target", "all", "--yes"])
 
     assert result.exit_code == 0
     assert not (proj / "build").exists()
-    assert not (proj / "golden").exists()
+    after = runner.invoke(app, ["golden", "check", "example_table"])
+    assert "non impostato" in after.stdout
 
 
 # --- init: rami rimanenti -----------------------------------------------

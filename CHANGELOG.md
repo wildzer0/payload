@@ -3,7 +3,7 @@
 ## v0.2.0
 
 **Pipeline configurabile** — modello unico per ogni build, vedi
-[docs/PIPELINE.md](docs/PIPELINE.md) per il design completo.
+[src/payload/docs/PIPELINE.md](src/payload/docs/PIPELINE.md) per il design completo.
 
 - Tre tipi di stage: `reader` (file → dati), `writer` (dati → file),
   `exec` (file → file, comando shell/software host)
@@ -110,8 +110,8 @@ Prima versione funzionante del tool.
 - Suite di conformità (`payload.testing`) per validare plugin di terze parti a runtime, senza richiedere pytest
 
 ### Documentazione
-- `docs/USAGE.md` — guida utente completa
-- `docs/PLUGINS.md` — guida sviluppatore plugin, incluse sezioni su endianness e legame reader/writer
+- `src/payload/docs/USAGE.md` — guida utente completa
+- `src/payload/docs/PLUGINS.md` — guida sviluppatore plugin, incluse sezioni su endianness e legame reader/writer
 - Docstring sulla classe di ogni plugin, mostrata da `pld plugin info <nome>`
 
 ### Cose note, non ancora fatte

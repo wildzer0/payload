@@ -119,13 +119,44 @@ def discover_local_plugin_dirs(project_root: Path) -> list[Path]:
     return dirs
 
 
-def _load_module_from_file(path: Path):
+def load_module_from_file(path: Path):
+    """Pubblica (non solo per load_local_plugins): usata anche
+    dall'editor web per caricare ed eseguire un singolo file plugin
+    locale senza passare da un intero PluginRegistry."""
     spec = importlib.util.spec_from_file_location(f"payload_local_plugin_{path.stem}", path)
     if spec is None or spec.loader is None:  # pragma: no cover - difesa
         raise ImportError(f"impossibile creare uno spec per {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def extract_plugin_classes(module) -> list[tuple[str, type]]:
+    """Ritorna [(kind, classe), ...] per ogni READER/WRITER/DOCTOR_CHECK
+    (singolare o plurale) dichiarato nel modulo — stessa convenzione di
+    load_local_plugins, fattorizzata così l'editor web può ispezionare
+    un file senza registrarlo in un PluginRegistry."""
+    found: list[tuple[str, type]] = []
+    for singular_attr, plural_attr, kind in _ATTR_MAP:
+        single = getattr(module, singular_attr, None)
+        if single is not None:
+            found.append((kind, single))
+        plural = getattr(module, plural_attr, None)
+        if plural:
+            for cls in plural:
+                found.append((kind, cls))
+    return found
+
+
+def list_local_plugin_files(project_root: Path) -> list[Path]:
+    """File .py in <project_root>/local_plugins/ (solo la cartella del
+    progetto, non i percorsi aggiuntivi di PAYLOAD_PLUGIN_PATH — quelli
+    possono vivere ovunque sul filesystem e non sono nel dominio di
+    'cosa può modificare l'editor web di questo progetto')."""
+    d = project_root / LOCAL_PLUGINS_DIRNAME
+    if not d.is_dir():
+        return []
+    return sorted(p for p in d.glob("*.py") if not p.name.startswith("_"))
 
 
 def _register_one(plugin_cls, source_file: Path, kind: str, register_fn, registry: "PluginRegistry", strict: bool) -> None:
@@ -162,7 +193,7 @@ def load_local_plugins(project_root: Path, registry: "PluginRegistry", strict: b
                     continue  # non tentare nemmeno il caricamento, fallirebbe comunque
 
             try:
-                module = _load_module_from_file(py_file)
+                module = load_module_from_file(py_file)
             except Exception as e:
                 logger.debug("Fallito caricamento file %s: %s", py_file, e)
                 if strict:

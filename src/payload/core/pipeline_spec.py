@@ -1,5 +1,5 @@
 """
-Specifica e validazione della pipeline. Vedi docs/PIPELINE.md per il
+Specifica e validazione della pipeline. Vedi src/payload/docs/PIPELINE.md per il
 design completo e il perché delle regole di alternanza.
 
 Tre tipi di stage:
@@ -18,7 +18,7 @@ Regole di alternanza, verificate PRIMA di eseguire qualunque stage:
    2+ writer consecutivi dev'essere l'ultimo della pipeline: non può
    esserci un reader/exec dopo un fan-out. Un gruppo di un solo writer
    resta senza questa restrizione (comportamento di sempre: reader/exec
-   possono seguirlo). Vedi docs/PIPELINE.md, sezione Fan-out.
+   possono seguirlo). Vedi src/payload/docs/PIPELINE.md, sezione Fan-out.
 """
 from __future__ import annotations
 

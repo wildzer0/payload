@@ -9,7 +9,7 @@ Serve come secondo esempio, più realistico di raw_text.py, per mostrare:
 - come si popolano TUTTI i campi di TableIR, comments incluso
 - come si segnalano errori di parsing riga per riga
 - come un reader con valori multi-byte gestisce l'endianness (vedi
-  docs/PLUGINS.md, sezione "Gestire l'endianness")
+  src/payload/docs/PLUGINS.md, sezione "Gestire l'endianness")
 
     value,width,comment
     0x0A,1,soglia min
@@ -44,7 +44,7 @@ class CsvReader:
         0xDEADBEEF,4,magic number
 
     Rispetta 'defaults.byte_order' dalla config per i valori multi-byte
-    (vedi docs/PLUGINS.md, sezione "Gestire l'endianness"). Senza
+    (vedi src/payload/docs/PLUGINS.md, sezione "Gestire l'endianness"). Senza
     colonna 'width', ogni valore è un singolo byte (retrocompatibile)."""
 
     name = "csv"

@@ -21,6 +21,7 @@ from payload.core.cache import BuildCache
 from payload.core.config import load_config
 from payload.core.errors import PayloadError
 from payload.core.golden import check_golden
+from payload.core.history import HistoryStore
 from payload.core.pipeline import build
 from payload.core.registry import PluginRegistry
 
@@ -61,6 +62,7 @@ def run_batch_build(
     progress bar, opzionale altrimenti."""
     summary = BatchBuildSummary()
     lock = threading.Lock()
+    history = HistoryStore(root)  # sola lettura qui (check_golden), sicuro condiviso tra i thread
 
     def _build_one(src: Path):
         """Eseguita in un thread del pool. Ritorna sempre, non solleva:
@@ -75,10 +77,11 @@ def run_batch_build(
             )
             mismatch = False
             if check_golden_flag and not dry_run:
-                golden_dir = Path(per_table_config.defaults.golden_dir)
-                mismatch = any(
-                    check_golden(p, golden_dir).status == "mismatch" for p in out_paths
-                )
+                # 'stale' conta come mismatch qui: il sorgente è cambiato dopo
+                # il golden, quindi anche un output che sembra combaciare non è
+                # una verifica affidabile — batch-build vuole un segnale netto.
+                status = check_golden(history, src.stem, src, out_paths).status
+                mismatch = status in ("mismatch", "stale")
             return ("ok", src, was_built, mismatch, None)
         except PayloadError as e:
             return ("error", src, False, False, e)

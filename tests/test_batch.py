@@ -2,6 +2,8 @@ from pathlib import Path
 
 from payload.core.batch import run_batch_build
 from payload.core.cache import BuildCache
+from payload.core.golden import set_golden
+from payload.core.history import HistoryStore
 from payload.core.registry import PluginRegistry
 from tests.fakes import BrokenReader, FakeReader, FakeWriter
 
@@ -55,22 +57,56 @@ def test_run_batch_build_collects_failures_without_raising(tmp_path):
     assert len(summary.failures) == 1
 
 
-def test_run_batch_build_detects_golden_mismatch(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # 'defaults.golden_dir' di default è relativo alla cwd
+def test_run_batch_build_detects_golden_stale_when_source_changed(tmp_path):
+    """Golden è uno snapshot: se il sorgente cambia dopo che golden è
+    stato impostato, il confronto sull'output non è più affidabile —
+    'stale' conta come mismatch nel riepilogo del batch build."""
     src = tmp_path / "t.fake"
-    src.write_text("contenuto")
+    src.write_text("v1")
     registry = _registry()
     cache = BuildCache(tmp_path / "cache")
-    golden_dir = tmp_path / "golden"
-    golden_dir.mkdir()
-    (golden_dir / "t.fakeout.golden").write_bytes(b"contenuto diverso dal golden atteso")
+    out_dir = tmp_path / "out"
+
+    run_batch_build([src], tmp_path, registry, cache, out_dir, writer_name="fake_writer")
+    history = HistoryStore(tmp_path)
+    snap = history.commit("t", src, [out_dir / "t.fakeout"], "v1")
+    set_golden(history, "t", snap.id)
+
+    src.write_text("v2")  # sorgente cambiato dopo il golden
 
     summary = run_batch_build(
-        [src], tmp_path, registry, cache, tmp_path / "out",
-        writer_name="fake_writer", check_golden_flag=True,
+        [src], tmp_path, registry, cache, out_dir,
+        writer_name="fake_writer", check_golden_flag=True, force=True,
     )
 
     assert summary.built == 1
+    assert summary.golden_mismatch == 1
+
+
+def test_run_batch_build_detects_golden_mismatch_on_tampered_output(tmp_path):
+    """Sorgente invariato ma l'output su disco è diverso da quello che
+    lo snapshot golden aveva registrato: una vera regressione."""
+    src = tmp_path / "t.fake"
+    src.write_text("v1")
+    registry = _registry()
+    cache = BuildCache(tmp_path / "cache")
+    out_dir = tmp_path / "out"
+
+    run_batch_build([src], tmp_path, registry, cache, out_dir, writer_name="fake_writer")
+    history = HistoryStore(tmp_path)
+    snap = history.commit("t", src, [out_dir / "t.fakeout"], "v1")
+    set_golden(history, "t", snap.id)
+
+    (out_dir / "t.fakeout").write_bytes(b"manomesso a mano, non dal writer")
+
+    # sorgente invariato -> cache hit, il build NON riscrive l'output manomesso
+    summary = run_batch_build(
+        [src], tmp_path, registry, cache, out_dir,
+        writer_name="fake_writer", check_golden_flag=True,
+    )
+
+    assert summary.built == 0
+    assert summary.cached == 1
     assert summary.golden_mismatch == 1
 
 
