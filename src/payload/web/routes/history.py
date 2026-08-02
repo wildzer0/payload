@@ -11,9 +11,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from payload.core.activity import log_event, read_events
 from payload.core.clusters import resolve_clusters
 from payload.core.config import GLOBAL_CONFIG_FILENAME, create_batch_table
-from payload.core.discovery import all_table_refs, discover_for_history, resolve_table_config, resolve_table_ref
+from payload.core.discovery import all_table_refs, describe_problems, discover_for_history, discover_for_history_lenient, resolve_table_config, resolve_table_ref
 from payload.core.errors import NoOutputToCommitError, NothingToCommitError, SnapshotNotFoundError, TableNotFoundError
 from payload.core.history import HistoryStore, legacy_compatible_source_blobs
 from payload.core.pipeline import describe_table_build
@@ -34,7 +35,7 @@ async def status(request: Request) -> JSONResponse:
     root = request.app.state.root
 
     def _run():
-        sources, batch_tables, base_config = discover_for_history(root)
+        sources, batch_tables, base_config, problems = discover_for_history_lenient(root)
         history = HistoryStore(root)
         clusters = resolve_clusters(root, base_config)
         table_metas = resolve_table_meta(root, base_config, clusters)
@@ -60,7 +61,7 @@ async def status(request: Request) -> JSONResponse:
                 "cluster": meta.cluster if meta else None,
                 "tags": meta.tags if meta else [],
             })
-        return {"tables": tables}
+        return {"tables": tables, "warnings": describe_problems(problems)}
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
 
@@ -110,6 +111,7 @@ async def commit(request: Request) -> JSONResponse:
         committed = []
         for ref, output_paths, build_info in committable:
             snap = history.commit(ref.name, ref.source_paths, output_paths, message, **build_info)
+            log_event(root, "commit", f"'{ref.name}' → snapshot #{snap.id}")
             committed.append({
                 "name": ref.name,
                 "snapshot_id": snap.id,
@@ -340,8 +342,21 @@ async def snapshot_download_route(request: Request) -> Response:
     )
 
 
+async def activity_route(request: Request) -> JSONResponse:
+    """Project-wide event timeline (builds, commits, golden changes, file
+    ops) — newest first, paged like /api/log."""
+    root = request.app.state.root
+    try:
+        limit = min(int(request.query_params.get("limit") or 100), 500)
+        offset = max(0, int(request.query_params.get("offset") or 0))
+    except ValueError:
+        raise InvalidRequestError("'limit'/'offset' must be integers")
+    return JSONResponse(await anyio.to_thread.run_sync(lambda: read_events(root, limit=limit, offset=offset)))
+
+
 ROUTES = [
     Route("/api/status", status, methods=["GET"]),
+    Route("/api/log/activity", activity_route, methods=["GET"]),
     Route("/api/commit", commit, methods=["POST"]),
     Route("/api/log", tracked_tables, methods=["GET"]),
     Route("/api/log/{table_name}", log_route, methods=["GET"]),

@@ -286,3 +286,143 @@ def test_clean_golden_target_clears_pointers_not_a_directory(tmp_path):
     assert r.json()["golden_tables"] == ["example_table"]
     after = client.get("/api/golden/example_table")
     assert after.json()["status"] == "missing"
+
+
+def test_table_analyze_output(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    client.post("/api/build", json={"source": "example_table.raw", "to": "bin"})
+
+    r = client.get("/api/table/example_table/analyze")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert "entropy" in body
+    assert "freq" in body
+    assert "magic" in body
+    assert body["path"].endswith("example_table.bin")
+
+
+def test_table_analyze_without_output(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    r = client.get("/api/table/example_table/analyze")
+    assert r.status_code == 404  # NoBuildOutputError
+
+
+def test_table_analyze_unknown_table(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    assert client.get("/api/table/ghost/analyze").status_code == 404
+
+
+def test_view_slices_with_offset_and_limit(tmp_path):
+    import base64
+
+    root = _init_project(tmp_path)
+    client = _client(root)
+    # a 1024-byte source in raw_text format (0x00..0xFF repeated 4x)
+    blob = bytes(range(256)) * 4
+    (root / "blob.raw").write_text(
+        "\n".join(f"0x{b:02X}," for b in blob), encoding="utf-8"
+    )
+    src = str(root / "blob.raw")
+
+    first = client.get("/api/view", params={"source": src, "offset": 0, "limit": 256}).json()
+    assert first["offset"] == 0
+    assert first["has_more"] is True
+    # the page is the byte slice: page 1 ends with 0xFF
+    assert base64.b64decode(first["data_base64"])[-1] == 0xFF
+
+    second = client.get("/api/view", params={"source": src, "offset": 256, "limit": 256}).json()
+    assert second["offset"] == 256
+    assert second["has_more"] is True
+    # page 2 starts right where page 1 ended (0x00)
+    assert base64.b64decode(second["data_base64"])[0] == 0x00
+
+    last = client.get("/api/view", params={"source": src, "offset": 1024, "limit": 256}).json()
+    assert last["offset"] == 1024
+    assert last["has_more"] is False
+    assert base64.b64decode(last["data_base64"]) == b""
+
+
+def test_view_slices_keep_comments_absolute(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.get("/api/view", params={"source": str(root / "example_table.raw"), "offset": 0, "limit": 64}).json()
+    # comments in the slice keep their absolute (file) offsets
+    assert all(0 <= c["offset"] < 64 for c in r["comments"])
+
+
+def test_view_tolerates_malformed_paging_params(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    # non-numeric offset/limit must fall back to defaults, not 500
+    r = client.get("/api/view", params={"source": str(root / "example_table.raw"), "offset": "abc", "limit": "-3"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["offset"] == 0
+    assert body["limit"] == 0  # 0 = whole file
+    assert body["has_more"] is False
+
+
+def test_report_html_endpoint(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    from payload.core.config import set_table_meta_fields
+
+    set_table_meta_fields(root, "example_table", notes="calibrated", properties={"address": "0x8000"})
+
+    r = client.get("/api/report/html")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    body = r.text
+    assert "<title>Table report" in body
+    assert "example_table" in body
+    assert "calibrated" in body  # notes
+    assert "0x8000" in body  # properties
+
+
+def test_report_collect_matches_json_endpoint(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    json_rows = client.get("/api/report").json()["tables"]
+    from payload.core.report import collect_report_data
+
+    core_rows = collect_report_data(root)["tables"]
+    assert {t["name"] for t in json_rows} == {t["name"] for t in core_rows}
+
+
+def test_report_html_empty_project(tmp_path):
+    root = _init_project(tmp_path)
+    (root / "example_table.raw").unlink()
+    client = _client(root)
+    body = client.get("/api/report/html").text
+    assert "No table in this project" in body
+
+
+def test_report_html_golden_statuses(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    source = root / "example_table.raw"
+    original = source.read_text()
+
+    # build + commit + set golden -> match ("built")
+    client.post("/api/build", json={"source": str(source)})
+    client.post("/api/commit", json={"message": "v1", "only": ["example_table"]})
+    client.put("/api/golden/example_table", json={})
+    assert "built" in client.get("/api/report/html").text
+
+    # source changed -> stale
+    source.write_text("# changed\n", encoding="utf-8")
+    client.post("/api/build", json={"source": str(source)})
+    assert "stale" in client.get("/api/report/html").text
+
+    # source EXACTLY back to the golden, but output tampered -> mismatch
+    source.write_text(original, encoding="utf-8")
+    client.post("/api/build", json={"source": str(source)})
+    out = next((root / "build").glob("example_table.*"))
+    out.write_bytes(out.read_bytes() + b"tampered")
+    assert "golden mismatch" in client.get("/api/report/html").text

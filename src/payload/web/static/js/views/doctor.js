@@ -1,39 +1,61 @@
-/* Doctor view (route "/doctor"): system status check results, grouped
- * by OK/warn/fail. Split out of the former single-file app.js — no
- * behavior change. */
+/* Doctor view (route "/doctor"): system status check results, ordered
+ * by severity — a status banner up top, then Failures / Warnings
+ * sections, and the passing checks collapsed by default (they're the
+ * noise; "everything is fine" is the banner). A "Re-run" re-checks. */
 "use strict";
 
-import { raw, render, pageHeader, ICONS } from "../ui.js";
+import { escapeHtml, iconSpan, pageHeader, statusPill } from "../ui.js";
 import { api } from "../api.js";
-
-const DOCTOR_STATUS_ICON = { ok: "check", warn: "warnTri", fail: "cross" };
 
 async function viewDoctor() {
   const r = await api("/api/doctor");
-  const counts = { ok: 0, warn: 0, fail: 0 };
-  r.checks.forEach((c) => { counts[c.status] = (counts[c.status] || 0) + 1; });
+  const fail = r.checks.filter((c) => c.status === "fail");
+  const warn = r.checks.filter((c) => c.status === "warn");
+  const ok = r.checks.filter((c) => c.status === "ok");
+  const nFail = fail.length;
+  const nWarn = warn.length;
+  const nOk = ok.length;
+  const okAll = nFail === 0 && nWarn === 0;
 
-  const items = r.checks.map((c) => render`
-    <div class="doctor-item doctor-item-${c.status}">
-      <div class="doctor-item-icon">${raw(ICONS[DOCTOR_STATUS_ICON[c.status]] || ICONS.dash)}</div>
-      <div class="doctor-item-body">
-        <div class="doctor-item-name">${c.name.toUpperCase()}</div>
-        <div class="doctor-item-message">${c.message}</div>
-        ${raw(c.hint ? render`<div class="doctor-item-hint">${c.hint}</div>` : "")}
+  const itemHtml = (c) => `
+    <div class="doctor-row doctor-row-${c.status}">
+      ${statusPill(c.status).__raw}
+      <div class="doctor-row-body">
+        <div class="doctor-row-name">${escapeHtml(c.name)}</div>
+        <div class="doctor-row-message">${escapeHtml(c.message)}</div>
+        ${c.hint ? `<div class="doctor-row-hint">${escapeHtml(c.hint)}</div>` : ""}
       </div>
-    </div>
-  `);
+    </div>`;
 
-  document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Doctor", "System status check (toolchain, plugins, config, and directories)."))}
-    <div class="stat-grid">
-      <div class="stat-card"><div class="stat-label">Total checks</div><div class="stat-value">${r.checks.length}</div></div>
-      <div class="stat-card"><div class="stat-label">OK</div><div class="stat-value">${counts.ok}</div></div>
-      <div class="stat-card ${counts.warn ? "stat-warn" : ""}"><div class="stat-label">Warning</div><div class="stat-value">${counts.warn}</div></div>
-      <div class="stat-card ${counts.fail ? "stat-fail" : ""}"><div class="stat-label">Failed</div><div class="stat-value">${counts.fail}</div></div>
-    </div>
-    <div class="doctor-list">${items.length ? items : ['<p class="empty-state">No check registered.</p>']}</div>
+  const section = (cls, title, icon, items) => items.length
+    ? `
+    <div class="doctor-section doctor-section-${cls}">
+      <h3 class="doctor-section-title">${iconSpan(icon)}${escapeHtml(title)}</h3>
+      ${items.map(itemHtml).join("")}
+    </div>`
+    : "";
+
+  const banner = `
+    <div class="doctor-banner doctor-banner-${okAll ? "ok" : (nFail ? "fail" : "warn")}">
+      ${iconSpan(okAll ? "check" : (nFail ? "cross" : "warnTri"))}
+      <div class="doctor-banner-text">
+        <strong>${okAll ? "All systems nominal" : (nFail ? `${nFail} check${nFail === 1 ? "" : "s"} failed` : `${nWarn} warning${nWarn === 1 ? "" : "s"}`)}</strong>
+        <span>${nOk} ok · ${nWarn} warnings · ${nFail} failed</span>
+      </div>
+      <span class="flex-1"></span>
+      <button id="doctor-rerun">${iconSpan("refresh")}Re-run</button>
+    </div>`;
+
+  document.getElementById("content").innerHTML = `
+    ${pageHeader("Doctor", "System status check (toolchain, plugins, config, and directories).")}
+    ${banner}
+    ${section("fail", "Failures", "cross", fail)}
+    ${section("warn", "Warnings", "warnTri", warn)}
+    ${section("ok", `Passed (${nOk})`, "check", ok)}
   `;
+
+  const rerun = document.getElementById("doctor-rerun");
+  if (rerun) rerun.onclick = () => viewDoctor();
 }
 
 export { viewDoctor };

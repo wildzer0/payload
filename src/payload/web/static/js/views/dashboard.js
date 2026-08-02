@@ -7,46 +7,11 @@
 import {
   escapeHtml, raw, render, icon, iconSpan, toast, toastError,
   confirmDialog, promptDialog, infoDialog, openDialog, statusPill, pageHeader,
-  goldBadge, fmtBytes, fmtShortTimestamp, debounce,
+  goldBadge, fmtBytes,
 } from "../ui.js";
-import { api, apiUpload, getPlugins } from "../api.js";
+import { api, apiUpload, getPlugins, invalidateTableSources } from "../api.js";
 
-/* Default reader/writer <select> for a dashboard row: the 'auto'
- * option shows in parentheses what would actually be resolved today
- * (resolvedValue), the other options are the explicit override — a
- * single control covers both "what happens" and "what I chose".
- * Disabled (with a separate badge in the table) if the table has an
- * explicit pipeline: in that case default reader/writer don't apply
- * at all, they're ignored by resolution. */
-function _defaultSelectHtml(kind, tableName, options, currentValue, resolvedValue, disabled) {
-  const id = `dd-${kind}-${tableName}`;
-  const autoLabel = disabled ? "pipeline" : (resolvedValue ? `auto (${resolvedValue})` : "auto");
-  const opts = [`<option value="">${escapeHtml(autoLabel)}</option>`].concat(
-    options.map((o) => `<option value="${escapeHtml(o)}"${o === currentValue ? " selected" : ""}>${escapeHtml(o)}</option>`)
-  );
-  return `<select id="${id}" class="inline-select" data-default-kind="${kind}" data-default-table="${escapeHtml(tableName)}"${disabled ? " disabled" : ""}>${opts.join("")}</select>`;
-}
 
-/* Highlights the "current" snapshot (accent, same treatment as the
- * table page) and, if the history HEAD is further ahead (the table is
- * stuck at an earlier restore), flags it with a secondary chip —
- * otherwise the fact that more recent, never-"reactivated" snapshots
- * exist would disappear. Both the empty state and the "behind HEAD"
- * state are kept to short, non-wrapping content (icon + at most a
- * number) with the explanation moved into the title tooltip, since
- * this chip lives in a narrow grid cell where multi-word labels wrap
- * mid-phrase and look broken. */
-function _snapshotChipHtml(t) {
-  if (!t.last_snapshot) {
-    return `<span class="pill pill-dim" title="No snapshot saved yet">${iconSpan("dash")}—</span>`;
-  }
-  const current = `<span class="pill pill-current">#${t.last_snapshot.id}</span>`;
-  const behindTip = t.tip_snapshot_id && t.tip_snapshot_id !== t.last_snapshot.id;
-  const tipNote = behindTip
-    ? `<span class="pill pill-dim" title="History goes up to snapshot #${t.tip_snapshot_id}, this table is showing an earlier restore">${iconSpan("warnTri")}#${t.tip_snapshot_id}</span>`
-    : "";
-  return current + tipNote;
-}
 
 /* A card per table instead of a row in one big HTML table: with 9
  * columns of different information (status, golden, pipeline,
@@ -84,72 +49,69 @@ function _orphanedTablesHtml(names) {
     </div>`;
 }
 
-function _tableCardHtml(t, stateByName) {
-  return render`
-    <div class="table-summary-card">
-      <div class="table-summary-head">
-        <a class="link table-summary-name" href="#/table/${t.name}">${t.name}</a>
-        <div class="table-summary-actions">
-          <div class="table-summary-badges">
-            ${statusPill(stateByName[t.name] || "never_saved")}
-            ${statusPill(t.golden_status || "missing")}
-            ${raw(t.golden_snapshot_id ? goldBadge() : "")}
-            ${raw(t.pipeline_explicit ? '<span class="pill pill-warn" title="Explicit pipeline configured: overrides default reader/writer">pipeline</span>' : "")}
-            ${raw(t.has_sidecar ? '<span class="pill pill-dim" title="Sidecar (<name>.config.toml) active for this table">override</span>' : "")}
-            ${raw(t.cluster ? `<span class="pill pill-current" title="Cluster">${escapeHtml(t.cluster)}</span>` : "")}
-          </div>
-          ${raw(t.output_size != null
-            ? `<a class="btn icon-only" href="/api/table/${encodeURIComponent(t.name)}/download" title="Download the last built output" download>${iconSpan("download")}</a>`
-            : "")}
-          <button class="icon-only" data-quick-build="${t.name}" title="Quick build (uses default reader/writer, no other parameter)">${icon("play")}</button>
-        </div>
-      </div>
-      <div class="table-summary-meta">
-        <span class="meta-chip meta-chip-control"><strong>Reader</strong>${raw(_defaultSelectHtml("reader", t.name, _dashReaderNames, t.reader_override, t.resolved_reader, t.pipeline_explicit))}</span>
-        <span class="meta-chip meta-chip-control"><strong>Writer</strong>${raw(_defaultSelectHtml("writer", t.name, _dashWriterNames, t.writer_override, t.resolved_writer, t.pipeline_explicit))}</span>
-        <span class="meta-chip"><strong>Size</strong><span class="mono">${fmtBytes(t.source_size)} → ${fmtBytes(t.output_size)}</span></span>
-        <span class="meta-chip" title="${t.source_mtime}"><strong>Modified</strong><span class="mono">${fmtShortTimestamp(t.source_mtime)}</span></span>
-        <span class="meta-chip"><strong>Snapshot</strong>${raw(_snapshotChipHtml(t))}</span>
-      </div>
-      ${raw(t.tags && t.tags.length
-        ? `<div class="table-summary-tags">${t.tags.map((tag) => `<span class="pill pill-dim">${escapeHtml(tag)}</span>`).join("")}</div>`
-        : "")}
-    </div>
-  `;
+/* Default reader/writer <select> for a dashboard row: the 'auto'
+ * option shows in parentheses what would actually be resolved today
+ * (resolvedValue), the other options are the explicit override. */
+function _defaultSelectHtml(kind, tableName, options, currentValue, resolvedValue, disabled) {
+  const id = `dd-${kind}-${tableName}`;
+  const autoLabel = disabled ? "pipeline" : (resolvedValue ? `auto (${resolvedValue})` : "auto");
+  const opts = [`<option value="">${escapeHtml(autoLabel)}</option>`].concat(
+    options.map((o) => `<option value="${escapeHtml(o)}"${o === currentValue ? " selected" : ""}>${escapeHtml(o)}</option>`)
+  );
+  return `<select id="${id}" class="inline-select" data-default-kind="${kind}" data-default-table="${escapeHtml(tableName)}"${disabled ? " disabled" : ""}>${opts.join("")}</select>`;
 }
 
-/* Search box (name/tags substring) + cluster chip row (single active
- * selection, like the Plugins page's kind filter) + tag chip row
- * (MULTIPLE simultaneously active, OR semantics — a table matching
- * ANY active tag passes, more natural for a "quick search" aid than
- * requiring every tag at once). Returns "" (nothing rendered) if the
- * project uses neither clusters nor tags, so a project not using this
- * feature sees no extra UI at all. */
-function _dashboardFilterHtml(tables) {
-  const clusterNames = [...new Set(tables.map((t) => t.cluster).filter(Boolean))].sort();
-  const tagCounts = {};
-  for (const t of tables) for (const tag of t.tags || []) tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-  const tagNames = Object.keys(tagCounts).sort();
-  if (!clusterNames.length && !tagNames.length) return "";
-
-  const clusterRow = clusterNames.length ? `
-    <div class="toggle-chip-row" id="dash-cluster-filters">
-      <button type="button" class="toggle-chip dash-cluster-chip active" data-cluster-filter="">All clusters</button>
-      ${clusterNames.map((c) => `<button type="button" class="toggle-chip dash-cluster-chip" data-cluster-filter="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join("")}
-    </div>` : "";
-
-  const tagRow = tagNames.length ? `
-    <div class="toggle-chip-row" id="dash-tag-filters">
-      ${tagNames.map((tag) => `<button type="button" class="toggle-chip dash-tag-chip" data-tag-filter="${escapeHtml(tag)}">${escapeHtml(tag)} <span class="pill pill-dim">${tagCounts[tag]}</span></button>`).join("")}
-    </div>` : "";
-
+function _tableRowHtml(t, stateByName) {
+  const state = stateByName[t.name] || "never_saved";
+  const tags = t.tags || [];
+  const shown = tags.slice(0, 2);
+  const extra = tags.length - shown.length;
+  // tags under the name, on ONE line (nowrap + ellipsis) so they never
+  // stretch the row height
+  // the tags line is ALWAYS rendered (min-height in CSS): a table
+  // without tags keeps the same row height as one with tags
+  const tagsHtml = `<div class="dash-tags"${tags.length ? ` title="${escapeHtml(tags.join(", "))}"` : ""}>${
+    tags.length
+      ? shown.map((tag) => `<span class="pill pill-dim">${escapeHtml(tag)}</span>`).join("")
+        + (extra > 0 ? `<span class="pill pill-dim">+${extra}</span>` : "")
+      : ""
+  }</div>`;
+  const snap = t.last_snapshot ? `snapshot #${t.last_snapshot.id} · ` : "";
+  // NOTE: PLAIN template — interpolate built HTML strings directly,
+  // never raw()/icon() (they return {__raw} markers -> "[object Object]")
   return `
-    <div class="card dashboard-filters">
-      <input type="text" id="dash-search" class="dash-search-input" placeholder="Search tables by name or tag…">
-      ${clusterRow}
-      ${tagRow}
-    </div>`;
+    <tr>
+      <td>
+        <a class="link" href="#/table/${encodeURIComponent(t.name)}" title="${escapeHtml(snap)}modified ${escapeHtml(t.source_mtime)}">${escapeHtml(t.name)}</a>
+        ${t.is_batch ? `<span class="batch-marker" title="batch table — ${t.source_count} source files">${iconSpan("layers")}</span>` : ""}
+        ${tagsHtml}
+      </td>
+      <td>${t.cluster ? `<span class="pill pill-current" title="Cluster">${escapeHtml(t.cluster)}</span>` : ""}</td>
+      <td>${_rawString(statusPill(state))}</td>
+      <td>${_rawString(statusPill(t.golden_status || "missing"))}${t.golden_snapshot_id ? goldBadge() : ""}</td>
+      <td class="dash-pipeline">
+        ${_defaultSelectHtml("reader", t.name, _dashReaderNames, t.reader_override, t.resolved_reader, t.pipeline_explicit)}
+        <span class="dash-arrow" aria-hidden="true">→</span>
+        ${_defaultSelectHtml("writer", t.name, _dashWriterNames, t.writer_override, t.resolved_writer, t.pipeline_explicit)}
+      </td>
+      <td class="mono dash-size">${fmtBytes(t.source_size)}${t.output_size != null ? ` → ${fmtBytes(t.output_size)}` : ""}</td>
+      <td class="dash-actions">
+        <!-- download slot is ALWAYS rendered (visibility-hidden when no
+             output): the build button stays at the same x on every row -->
+        <a class="btn icon-only${t.output_size != null ? "" : " dash-hidden"}" href="/api/table/${encodeURIComponent(t.name)}/download" title="Download the last built output" download>${iconSpan("download")}</a>
+        <button class="icon-only" data-quick-build="${t.name}" title="Quick build (default reader/writer)">${iconSpan("play")}</button>
+      </td>
+    </tr>`;
 }
+
+
+
+
+
+/* render`...`-helpers like statusPill return raw() markers; in a plain
+ * string template they must be unwrapped, otherwise they stringify to
+ * "[object Object]". */
+const _rawString = (v) => (v && v.__raw !== undefined ? v.__raw : v);
 
 let _dashReaderNames = [];
 let _dashWriterNames = [];
@@ -170,20 +132,6 @@ async function viewDashboard() {
   const mismatches = report.tables.filter((t) => t.golden_status === "mismatch" || t.golden_status === "stale").length;
   const dirty = report.tables.filter((t) => stateByName[t.name] === "dirty").length;
 
-  let searchQuery = "";
-  let clusterFilter = "";
-  const activeTags = new Set();
-
-  const matchesFilters = (t) => {
-    if (clusterFilter && t.cluster !== clusterFilter) return false;
-    if (activeTags.size && !(t.tags || []).some((tag) => activeTags.has(tag))) return false;
-    if (searchQuery) {
-      const haystack = `${t.name} ${(t.tags || []).join(" ")}`.toLowerCase();
-      if (!haystack.includes(searchQuery)) return false;
-    }
-    return true;
-  };
-
   const wireCardHandlers = () => {
     document.querySelectorAll("[data-quick-build]").forEach((btn) => {
       btn.onclick = async () => {
@@ -200,6 +148,8 @@ async function viewDashboard() {
       };
     });
 
+    // default reader/writer selects (Pipeline column): persists to the
+    // sidecar, same semantics as before
     document.querySelectorAll("[data-default-kind]").forEach((sel) => {
       sel.onchange = async () => {
         const kind = sel.dataset.defaultKind;
@@ -212,9 +162,6 @@ async function viewDashboard() {
           await api("/api/sidecar/" + encodeURIComponent(table), { method: "PUT", body: { defaults } });
 
           if (kind === "reader" && sel.value) {
-            // the chosen reader exists, but does it REALLY read this
-            // table's file? same check as 'Validate conformance' on
-            // plugins, here pointed at the reader just set as default.
             try {
               const v = await api("/api/source/" + encodeURIComponent(table) + "/validate", { method: "POST" });
               if (v.conforms) {
@@ -237,16 +184,59 @@ async function viewDashboard() {
     });
   };
 
-  const renderCards = () => {
-    const filtered = report.tables.filter(matchesFilters);
-    const cards = filtered.map((t) => _tableCardHtml(t, stateByName));
-    document.getElementById("table-summary-list").innerHTML =
-      cards.length ? cards.join("") : '<p class="empty-state card">No table matches this filter.</p>';
+  // filter (name/tag/cluster/note/property) + sortable columns
+  let filterText = "";
+  let sortKey = "name";
+  let sortDir = 1; // 1 = ascending, -1 = descending
+
+  const sortHeader = (key, label) => `
+    <th class="sortable${sortKey === key ? " sorted" + (sortDir < 0 ? " desc" : "") : ""}" data-sort="${key}">
+      ${label}${sortKey === key ? (sortDir < 0 ? " ↓" : " ↑") : ""}
+    </th>`;
+
+  const applyView = () => {
+    const q = filterText.trim().toLowerCase();
+    const rows = report.tables.filter((t) => {
+      if (!q) return true;
+      const hay = [
+        t.name, t.cluster || "", ...(t.tags || []), t.notes || "",
+        ...Object.entries(t.properties || {}).map(([k, v]) => `${k} ${v}`),
+      ].join(" ").toLowerCase();
+      return hay.includes(q);
+    });
+    rows.sort((a, b) => {
+      let va, vb;
+      if (sortKey === "size") { va = (a.source_size || 0) + (a.output_size || 0); vb = (b.source_size || 0) + (b.output_size || 0); }
+      else { va = a[sortKey] != null ? a[sortKey] : ""; vb = b[sortKey] != null ? b[sortKey] : ""; }
+      const diff = typeof va === "number" && typeof vb === "number"
+        ? va - vb
+        : String(va).localeCompare(String(vb));
+      return diff * sortDir;
+    });
+    const countEl = document.getElementById("dash-count");
+    if (countEl) countEl.textContent = rows.length === total ? `${total} tables` : `${rows.length} of ${total} tables`;
+    document.getElementById("table-list").innerHTML = rows.length
+      ? rows.map((t) => _tableRowHtml(t, stateByName)).join("")
+      : '<tr><td colspan="7" class="dash-empty">No table matches the current filter.</td></tr>';
     wireCardHandlers();
+  };
+
+  const wireSort = () => {
+    document.querySelectorAll(".sortable").forEach((th) => {
+      th.onclick = () => {
+        const key = th.dataset.sort;
+        if (sortKey === key) sortDir = -sortDir;
+        else { sortKey = key; sortDir = 1; }
+        applyView();
+      };
+    });
   };
 
   document.getElementById("content").innerHTML = render`
     ${raw(pageHeader(health.project_name, `Dashboard · ${total} tables discovered in this project.`))}
+    ${raw((report.warnings || []).length
+      ? `<div class="card dashboard-warnings">${icon("warnTri")}<div><strong>Project needs attention</strong><ul>${report.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div></div>`
+      : "")}
     ${raw(_importZoneHtml())}
     <div class="stat-grid">
       <div class="stat-card"><div class="stat-label">Total tables</div><div class="stat-value">${total}</div></div>
@@ -254,40 +244,35 @@ async function viewDashboard() {
       <div class="stat-card ${mismatches ? "stat-fail" : ""}"><div class="stat-label">Golden mismatch/stale</div><div class="stat-value">${mismatches}</div></div>
       <div class="stat-card ${dirty ? "stat-warn" : ""}"><div class="stat-label">To save</div><div class="stat-value">${dirty}</div></div>
     </div>
-    ${raw(_dashboardFilterHtml(report.tables))}
-    <div class="table-summary-list" id="table-summary-list"></div>
+    <div class="dash-toolbar">
+      <input type="text" id="dash-filter" class="fs-search-input" placeholder="Filter by name, tag, cluster, note or property…">
+      <span class="subtitle" id="dash-count"></span>
+      <span class="flex-1"></span>
+      <a class="btn" href="/api/report/html" target="_blank">${icon("book")}Report</a>
+    </div>
+    <div class="dash-table-wrap">
+      <table class="dash-table">
+        <thead><tr>
+          ${raw(sortHeader("name", "Table"))}
+          <th>Cluster</th>
+          <th>Status</th>
+          <th>Golden</th>
+          <th>Pipeline</th>
+          ${raw(sortHeader("size", "Size"))}
+          <th class="dash-actions"></th>
+        </tr></thead>
+        <tbody id="table-list"></tbody>
+      </table>
+    </div>
     ${raw(_orphanedTablesHtml(orphanedNames))}
   `;
 
-  renderCards();
-
-  const searchInput = document.getElementById("dash-search");
-  if (searchInput) {
-    searchInput.oninput = debounce(() => {
-      searchQuery = searchInput.value.trim().toLowerCase();
-      renderCards();
-    }, 150);
-  }
-  document.querySelectorAll("#dash-cluster-filters [data-cluster-filter]").forEach((btn) => {
-    btn.onclick = () => {
-      clusterFilter = btn.dataset.clusterFilter;
-      document.querySelectorAll("#dash-cluster-filters [data-cluster-filter]").forEach((b) => b.classList.toggle("active", b === btn));
-      renderCards();
-    };
+  document.getElementById("dash-filter").addEventListener("input", (ev) => {
+    filterText = ev.target.value;
+    applyView();
   });
-  document.querySelectorAll("#dash-tag-filters [data-tag-filter]").forEach((btn) => {
-    btn.onclick = () => {
-      const tag = btn.dataset.tagFilter;
-      if (activeTags.has(tag)) {
-        activeTags.delete(tag);
-        btn.classList.remove("active");
-      } else {
-        activeTags.add(tag);
-        btn.classList.add("active");
-      }
-      renderCards();
-    };
-  });
+  applyView();
+  wireSort();
 
   const dropZone = document.getElementById("import-drop");
   const importFileInput = document.getElementById("import-file-input");
@@ -401,6 +386,7 @@ async function _handleImportFiles(fileList) {
 
   try {
     const r = await apiUpload("/api/table/import", formData);
+    invalidateTableSources(); // new tables appeared
     if (r.kind === "bulk") {
       await _reportBulkImport(r);
     } else {

@@ -144,6 +144,49 @@ def discover_for_history(root: Path) -> tuple[list[Path], list[BatchTable], "Pay
     return sources, batch_tables, config
 
 
+def discover_for_history_lenient(
+    root: Path,
+) -> tuple[list[Path], list[BatchTable], "PayloadConfig", dict]:
+    """Like discover_for_history, but NEVER raises for duplicate table
+    names / batch-name collisions: returns (sources, batch_tables,
+    config, problems) instead, with problems describing every conflict
+    as human-readable messages. The web layer uses this for the
+    dashboard/status so a project broken by hand (e.g. two files with
+    the same stem) degrades to 'healthy tables + a warning' instead of
+    failing the whole request — the CLI keeps the strict version."""
+    config = load_config(root)
+    sources = discover_table_sources(root, Path(config.defaults.output_dir), Path(config.defaults.cache_dir))
+    duplicates = find_duplicate_stems(sources)
+
+    batch_tables = resolve_batch_tables(root, config)
+    sources = exclude_batch_members(sources, batch_tables)
+    batch_names = {bt.name for bt in batch_tables}
+    batch_collisions = {
+        p.stem: [str(p), f"[[batch_table]] '{p.stem}'"]
+        for p in sources if p.stem in batch_names
+    }
+
+    problems = {
+        "duplicate_stems": {
+            name: [str(p) for p in paths] for name, paths in duplicates.items()
+        },
+        "batch_collisions": batch_collisions,
+    }
+    return sources, batch_tables, config, problems
+
+
+def describe_problems(problems: dict) -> list[str]:
+    """Human-readable lines for the problems dict returned by
+    discover_for_history_lenient — shown as warnings on the dashboard
+    instead of failing the whole request."""
+    out = []
+    for name, paths in problems["duplicate_stems"].items():
+        out.append(f"duplicate table name '{name}': {', '.join(paths)}")
+    for name in problems["batch_collisions"]:
+        out.append(f"table name '{name}' collides with a [[batch_table]]")
+    return out
+
+
 @dataclass
 class TableRef:
     """Normalized reference to ONE table, regardless of whether it's a

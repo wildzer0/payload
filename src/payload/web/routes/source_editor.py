@@ -35,6 +35,12 @@ def _find_source(sources: list[Path], batch_tables: list, table_name: str) -> Pa
     return ref.source_paths[0]
 
 
+# sources bigger than this are served read-only: the in-browser
+# CodeMirror editor has no virtualization, so rendering a multi-megabyte
+# file would freeze the tab. The truncated content + the paged hex view
+# (via /api/view?offset=&limit=) stay available.
+SOURCE_EDIT_CAP = 1024 * 1024  # 1 MiB
+
 async def source_get(request: Request) -> JSONResponse:
     root = request.app.state.root
     table = request.path_params["table_name"]
@@ -50,7 +56,11 @@ async def source_get(request: Request) -> JSONResponse:
                 "table": table, "path": str(src), "editable": False,
                 "reason": "the file isn't UTF-8 text, probably a binary format",
             }
-        return {"table": table, "path": str(src), "editable": True, "content": text}
+        truncated = len(text) > SOURCE_EDIT_CAP
+        return {
+            "table": table, "path": str(src), "editable": not truncated,
+            "truncated": truncated, "content": text[:SOURCE_EDIT_CAP] if truncated else text,
+        }
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
 

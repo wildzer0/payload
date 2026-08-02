@@ -13,3 +13,8 @@ tmp/
 .claudeignore
 TODO.md
 golden
+# Reasonix agent state (local, not part of the project)
+.reasonix/
+
+# macOS metadata
+.DS_Store

@@ -118,6 +118,19 @@ def validate_alternation(stages: list[Stage]) -> None:
             while i < n and isinstance(stages[i], WriterStage):
                 i += 1
             run_end = i - 1
+            # a writer name must be unique WITHIN a fan-out group: two
+            # consecutive stages with the same writer would collide on
+            # the same output file (fan-out means several DIFFERENT
+            # writers). Two writers separated by a reader are two
+            # separate read→write pairs and MAY reuse a writer.
+            seen: dict[str, int] = {}
+            for k in range(run_start, run_end + 1):
+                name = stages[k].name
+                if name in seen:
+                    raise InvalidPipelineError(
+                        k, f"writer '{name}' is already used in this fan-out group (stage #{seen[name]}) — a fan-out needs different writers"
+                    )
+                seen[name] = k
             if (run_end - run_start + 1) >= 2 and run_end != n - 1:
                 raise InvalidPipelineError(
                     run_end,

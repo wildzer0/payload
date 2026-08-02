@@ -114,8 +114,9 @@ _DEFAULTS_STR_FIELDS = ("writer", "reader", "output_dir", "cache_dir", "byte_ord
 _VALID_BYTE_ORDERS = ("little", "big")
 _BATCH_TABLE_STR_FIELDS = ("name", "reader", "writer", "byte_order")
 _BATCH_TABLE_LIST_STR_FIELDS = ("sources",)
-_TABLE_META_STR_FIELDS = ("name", "cluster")
+_TABLE_META_STR_FIELDS = ("name", "cluster", "notes")
 _TABLE_META_LIST_STR_FIELDS = ("tags",)
+_TABLE_META_DICT_STR_FIELDS = ("properties",)
 
 
 def _load_toml(path: Path) -> dict:
@@ -139,9 +140,10 @@ def deep_merge(base: dict, override: dict) -> dict:
 
 
 def _validate_section(
-    section: dict, section_name: str, str_fields: tuple, list_str_fields: tuple, path: Path
+    section: dict, section_name: str, str_fields: tuple, list_str_fields: tuple, path: Path,
+    dict_str_fields: tuple = (),
 ) -> None:
-    known = set(str_fields) | set(list_str_fields)
+    known = set(str_fields) | set(list_str_fields) | set(dict_str_fields)
     for key, value in section.items():
         field_path = f"{section_name}.{key}"
         if key not in known:
@@ -154,6 +156,11 @@ def _validate_section(
         if key in list_str_fields:
             if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
                 raise InvalidConfigError(path, field=field_path, reason="must be a list of strings")
+        if key in dict_str_fields:
+            if not isinstance(value, dict) or not all(
+                isinstance(k, str) and isinstance(v, str) for k, v in value.items()
+            ):
+                raise InvalidConfigError(path, field=field_path, reason="must be a dict of strings")
 
 
 def _validate_batch_table_entry(entry: dict, index: int, path: Path) -> None:
@@ -209,7 +216,7 @@ def _validate_table_meta_entry(entry: dict, index: int, path: Path) -> None:
         raise InvalidConfigError(path, field=field_prefix, reason="must be a TOML table, e.g. \\[\\[table_meta]]")
     if not entry.get("name"):
         raise InvalidConfigError(path, field=f"{field_prefix}.name", reason="required, can't be empty")
-    _validate_section(entry, field_prefix, _TABLE_META_STR_FIELDS, _TABLE_META_LIST_STR_FIELDS, path)
+    _validate_section(entry, field_prefix, _TABLE_META_STR_FIELDS, _TABLE_META_LIST_STR_FIELDS, path, _TABLE_META_DICT_STR_FIELDS)
 
 
 def _build_config(merged: dict, path: Path) -> PayloadConfig:
@@ -599,6 +606,40 @@ def remove_batch_table_entry(project_root: Path, name: str) -> bool:
     return True
 
 
+def upsert_batch_table(
+    project_root: Path,
+    name: str,
+    sources: list[str],
+    reader: str | None = None,
+    writer: str | None = None,
+    byte_order: str | None = None,
+) -> Path:
+    """Creates the [[batch_table]] if missing, otherwise replaces its
+    'sources' and sets/clears the optional reader/writer/byte_order —
+    the web editor's whole-list save (the CLI adds members one at a
+    time through add_batch_table_source, the web replaces the list).
+    None for reader/writer/byte_order leaves the field untouched;
+    "" explicitly clears it."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    merged, batch_table_list = _read_batch_table_list(path)
+    entry = next((e for e in batch_table_list if e.get("name") == name), None)
+    if entry is None:
+        entry = {"name": name, "sources": list(sources)}
+        batch_table_list.append(entry)
+    else:
+        entry["sources"] = list(sources)
+    for field, value in (("reader", reader), ("writer", writer), ("byte_order", byte_order)):
+        if value is None:
+            continue
+        if value:
+            entry[field] = value
+        else:
+            entry.pop(field, None)
+    _write_batch_table_list(path, merged, batch_table_list)
+    logger.debug("[[batch_table]] '%s' upserted (%d sources)", name, len(sources))
+    return path
+
+
 # --- programmatic mutation of [[cluster]] / [[table_meta]] ------------------
 #
 # Same load-mutate-validate-write pattern as [[batch_table]] above.
@@ -725,7 +766,7 @@ def _upsert_table_meta(table_meta_list: list[dict], name: str) -> dict:
 
 
 def _drop_table_meta_if_empty(table_meta_list: list[dict], entry: dict) -> list[dict]:
-    if not entry.get("cluster") and not entry.get("tags"):
+    if not entry.get("cluster") and not entry.get("tags") and not entry.get("notes") and not entry.get("properties"):
         return [e for e in table_meta_list if e is not entry]
     return table_meta_list
 
@@ -776,6 +817,39 @@ def set_table_tags(project_root: Path, table_name: str, tags: list[str]) -> Path
 
     _write_table_meta_list(path, merged, table_meta_list)
     logger.debug("[[table_meta]] '%s': tags set to %s", table_name, deduped)
+    return path
+
+
+def set_table_meta_fields(
+    project_root: Path,
+    table_name: str,
+    notes: str | None = None,
+    properties: dict[str, str] | None = None,
+) -> Path:
+    """Sets/clears a table's free-form notes and/or custom properties
+    (key -> string, e.g. a memory address, metadata, ...). None = leave
+    untouched; "" / {} = clear. Same [[table_meta]] upsert/drop rules as
+    set_table_tags: the entry is created if missing and removed again
+    when no cluster/tags/notes/properties remain."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    merged, table_meta_list = _read_table_meta_list(path)
+
+    entry = _upsert_table_meta(table_meta_list, table_name)
+    if notes is not None:
+        if notes:
+            entry["notes"] = str(notes)
+        else:
+            entry.pop("notes", None)
+    if properties is not None:
+        cleaned = {str(k): str(v) for k, v in properties.items() if k}
+        if cleaned:
+            entry["properties"] = cleaned
+        else:
+            entry.pop("properties", None)
+    table_meta_list = _drop_table_meta_if_empty(table_meta_list, entry)
+
+    _write_table_meta_list(path, merged, table_meta_list)
+    logger.debug("[[table_meta]] '%s': notes/properties updated", table_name)
     return path
 
 

@@ -1,5 +1,82 @@
 # Changelog
 
+## v0.6.0 (2026-08-03)
+
+**Webapp rework** — the browser UI got a full pass: a filterable/sortable
+dashboard, a proper table page, full-screen editors, and a report.
+
+- Dashboard: compact table (fixed layout, no horizontal scroll) with
+  status/golden/pipeline/size columns, inline filter (name/tag/cluster/
+  note/property), column sorting, quick build + download.
+- Table page: "Table info" card (cluster, tags, notes, custom
+  properties), Build/Commit/History with snapshot detail modal + context
+  menu (download/set golden/restore), paged hex view for binary sources,
+  rename/clone table.
+- Custom per-table properties (`pld meta`, `[[table_meta]] notes/
+  properties`) — exposed to plugins at build time via
+  `config['table_meta']`, so a reader can forward them to the writer
+  through `TableIR.extra`.
+- Files: light detail pane (no inline previews) — **Edit** opens a
+  near-fullscreen CodeMirror modal, **View hex** a full-screen paged hex
+  viewer; grouped action buttons (Content/Manage); full right-click
+  context menu (edit/hex/analyze/compare/download/move/copy/delete);
+  drag & drop clears the selection.
+- Docs: cross-guide links navigate in-app (`#/docs/<slug>`), external
+  URLs keep a new tab.
+- Doctor: severity banner + Failures/Warnings/Passed sections (static —
+  no collapsible boxes that resize the layout).
+- New **Batch tables** page (`/batch`): create/edit/delete `[[batch_table]]`
+  with a member picker; the picker shows only table-source candidates
+  (`/api/batch/candidates` — config/sidecars/hidden/internal dirs excluded)
+  and non-candidate members are rejected server-side.
+- Dashboard: batch tables marked with a small accent icon (not a tag),
+  uniform row heights with/without tags, fixed-width name column.
+- Table page: Pipeline and sidecar cards are always open (no more
+  collapsible boxes); batch marker icon.
+- Keyboard shortcuts: `/` palette, `?` help, `g <key>` two-key navigation.
+- Printable **HTML report** (`/api/report/html` and `pld report --html`):
+  same content from web and CLI.
+- Router: URL-decoded params (names with spaces/apostrophes), serialized
+  navigation, modals closed on navigation.
+
+
+**Project file browser + inspection tools** — the webapp can now manage
+the whole project folder from the browser ("never touch the filesystem"),
+and both the CLI and the web gained byte-level inspection commands.
+
+**File browser** (web, `/files`):
+- Tree with expand/collapse, table context badges (source/batch
+  member/sidecar), multi-selection with batch move/copy/delete, drag &
+  drop (move by default, modifier to copy, OS files dropped on a folder
+  upload there), right-click context menu, text editor (CodeMirror),
+  paged hex view (8+8 grouping, ASCII, Strings), full CRUD/upload.
+- Safety: every path is checked against the project root (no traversal
+  or symlink escape), and creating/renaming/uploading a file whose name
+  would collide with an existing table is refused (table names must stay
+  unique project-wide).
+
+**Inspection commands** (CLI + web): `pld compare <a> <b>` (byte-level
+diff), `pld grep <pattern> [--hex]` (content search), `pld analyze
+<file>` (entropy/magic/frequency), `pld activity` (project-wide
+timeline). In the web they are also available as buttons on the Files
+page (Compare with a file picker, Search, Analyze) and on the table page
+(`Diff vs snapshot`, `Diff vs golden`, `Analyze output`).
+
+**Web UI**:
+- Command palette (Ctrl/Cmd+K): search tables by name/tag, files, pages.
+- Activity log page (`/log`).
+- Redesigned Dashboard/table/Build-all/Clusters pages; dashboard table
+  search moved into the palette.
+- Activity events recorded in `.payload_activity/` for builds, commits,
+  golden changes and file operations.
+- Static files served with `Cache-Control: no-cache` (no stale frontend
+  code after an update).
+
+**Fixes**: CRLF files no longer look "edited" in the editors (normalized
+guard), dashboard/status degrade with a warning on duplicate table
+names instead of failing, icons and hex tables no longer render as
+escaped text.
+
 ## v0.5.0 (not yet released)
 
 **Clusters & tags** — for projects with more than a handful of tables. See

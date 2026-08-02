@@ -141,3 +141,23 @@ def test_validate_unknown_table_404(tmp_path):
     r = client.post("/api/source/does_not_exist/validate")
 
     assert r.status_code == 404
+
+
+def test_source_over_cap_is_read_only_and_truncated(tmp_path):
+    from payload.web.routes.source_editor import SOURCE_EDIT_CAP
+
+    root = _init_project(tmp_path)
+    client = _client(root)
+    big = ("x" * 4096 + "\n") * ((SOURCE_EDIT_CAP // 4096) + 2)  # > 1 MiB
+    (root / "example_table.raw").write_text(big, encoding="utf-8")
+
+    r = client.get("/api/source/example_table").json()
+    assert r["editable"] is False
+    assert r["truncated"] is True
+    assert len(r["content"]) == SOURCE_EDIT_CAP
+
+    # a normal-size source stays fully editable and untruncated
+    (root / "example_table.raw").write_text("# small\n", encoding="utf-8")
+    r = client.get("/api/source/example_table").json()
+    assert r["editable"] is True
+    assert r.get("truncated") is False

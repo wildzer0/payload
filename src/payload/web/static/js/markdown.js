@@ -15,7 +15,19 @@ function renderMarkdown(md) {
     let s = escapeHtml(text);
     s = s.replace(/`([^`]+)`/g, (_, code) => `<code>${code}</code>`);
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => `<a href="${href}" target="_blank" rel="noopener">${label}</a>`);
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+      // cross-guide links (X.md or X.md#anchor) become in-app hash
+      // routes: #/docs/<slug> — opening them in a new tab would hit a
+      // raw /X.md URL that the webapp doesn't serve (404 Not Found)
+      const mdLink = href.match(/^([A-Za-z0-9_-]+)\.md(?:#.*)?$/);
+      if (mdLink) return `<a href="#/docs/${mdLink[1].toLowerCase()}">${label}</a>`;
+      // external URLs: a new tab is the right behavior
+      if (/^https?:\/\//i.test(href)) return `<a href="${href}" target="_blank" rel="noopener">${label}</a>`;
+      // in-doc anchors (#...) and relative filesystem paths
+      // (../../../examples/...) can't resolve in the SPA — render the
+      // label as plain text instead of a dead link
+      return label;
+    });
     return s;
   }
 

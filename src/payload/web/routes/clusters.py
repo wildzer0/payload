@@ -9,6 +9,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from payload.core.clusters import resolve_clusters
+from payload.core.config import load_config, set_table_meta_fields
 from payload.core.config import (
     config_schema,
     create_cluster,
@@ -146,6 +147,46 @@ async def table_tags_put_route(request: Request) -> JSONResponse:
     return JSONResponse(await anyio.to_thread.run_sync(_run))
 
 
+async def table_meta_get_route(request: Request) -> JSONResponse:
+    table_name = request.path_params["table_name"]
+    root = request.app.state.root
+
+    def _run():
+        base_config = load_config(root)
+        clusters = resolve_clusters(root, base_config)
+        metas = resolve_table_meta(root, base_config, clusters)
+        meta = metas.get(table_name)
+        return {
+            "cluster": meta.cluster if meta else None,
+            "tags": list(meta.tags) if meta else [],
+            "notes": meta.notes if meta else "",
+            "properties": dict(meta.properties) if meta else {},
+        }
+
+    return JSONResponse(await anyio.to_thread.run_sync(_run))
+
+
+async def table_meta_put_route(request: Request) -> JSONResponse:
+    table_name = request.path_params["table_name"]
+    body = await request.json()
+    notes = body.get("notes")
+    properties = body.get("properties")
+    if notes is not None and not isinstance(notes, str):
+        raise InvalidRequestError("'notes' must be a string")
+    if properties is not None and (
+        not isinstance(properties, dict)
+        or not all(isinstance(k, str) and isinstance(v, str) for k, v in properties.items())
+    ):
+        raise InvalidRequestError("'properties' must be a dict of strings")
+    root = request.app.state.root
+
+    def _run():
+        set_table_meta_fields(root, table_name, notes=notes, properties=properties)
+        return {"table_name": table_name, "notes": notes, "properties": properties}
+
+    return JSONResponse(await anyio.to_thread.run_sync(_run))
+
+
 ROUTES = [
     Route("/api/clusters", clusters_list, methods=["GET"]),
     Route("/api/clusters", cluster_create_route, methods=["POST"]),
@@ -154,4 +195,6 @@ ROUTES = [
     Route("/api/table/{table_name}/cluster", table_cluster_route, methods=["PUT"]),
     Route("/api/table/{table_name}/tags", table_tags_get_route, methods=["GET"]),
     Route("/api/table/{table_name}/tags", table_tags_put_route, methods=["PUT"]),
+    Route("/api/table/{table_name}/meta", table_meta_get_route, methods=["GET"]),
+    Route("/api/table/{table_name}/meta", table_meta_put_route, methods=["PUT"]),
 ]

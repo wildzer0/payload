@@ -6,11 +6,11 @@
 
 import {
   escapeHtml, raw, render, icon, iconSpan, ICONS, toast, toastError,
-  confirmDialog, statusPill, pageHeader, detailsCard, pinnedCard,
-  goldBadge, currentBadge, baseName, val, chk, attachAutocomplete,
-  registerDirtyGuard, removeDirtyGuard,
+  confirmDialog, promptDialog, openDialog, openContextMenu, statusPill, pageHeader, pinnedCard,
+  goldBadge, currentBadge, baseName, fmtBytes, val, chk, attachAutocomplete,
+  registerDirtyGuard, removeDirtyGuard, loadCodeMirror, emptyCard, openTextEditorModal,
 } from "../ui.js";
-import { api, getPlugins, ensureTableSources, findSourcePath } from "../api.js";
+import { api, getPlugins, ensureTableSources, findSourcePath, invalidateTableSources } from "../api.js";
 
 const COMMIT_MESSAGE_MAX_LENGTH = 1024;
 const HISTORY_PAGE_SIZE = 4;
@@ -20,8 +20,14 @@ async function viewTable(name) {
 
   const buildBody = `
     <div class="field-row">
-      <div class="field"><label>Writer (--to)</label><div class="autocomplete-wrap"><input type="text" id="f-to" placeholder="bin"></div></div>
-      <div class="field"><label>Reader (--from)</label><div class="autocomplete-wrap"><input type="text" id="f-from" placeholder="auto"></div></div>
+      <div class="field">
+        <label>Writer</label>
+        <div class="autocomplete-wrap"><input type="text" id="f-to" placeholder="default"></div>
+      </div>
+      <div class="field">
+        <label>Reader</label>
+        <div class="autocomplete-wrap"><input type="text" id="f-from" placeholder="auto"></div>
+      </div>
     </div>
     <div class="toggle-chip-row">
       <label class="toggle-chip"><input type="checkbox" id="f-force"><span>--force</span></label>
@@ -30,11 +36,18 @@ async function viewTable(name) {
     </div>
     <div class="build-actions">
       <button class="primary" id="btn-build">${iconSpan("play")}Build</button>
+      <span class="subtitle">Empty fields use the table's configured defaults.</span>
     </div>
+    <div class="toggle-chip-row inspect-row">
+      <button id="btn-diff-snapshot">${iconSpan("edit")}Diff vs snapshot</button>
+      <button id="btn-diff-golden">${iconSpan("star")}Diff vs golden</button>
+      <button id="btn-analyze-output">${iconSpan("box")}Analyze output</button>
+    </div>
+    <div id="inspect-result"></div>
     <div id="build-result"></div>
   `;
 
-  const historyBody = `
+  const commitBody = `
     <div id="golden-summary" class="mb-14"></div>
     <div class="field">
       <label>Commit message</label>
@@ -42,16 +55,17 @@ async function viewTable(name) {
       <div class="field-hint"><span id="commit-message-count">0</span>/${COMMIT_MESSAGE_MAX_LENGTH}</div>
     </div>
     <div class="toggle-chip-row">
-      <label class="toggle-chip"><input type="checkbox" id="commit-golden"><span>${iconSpan("star")}Also set as golden</span></label>
+      <label class="switch"><input type="checkbox" id="commit-golden"><span class="track"></span><span>${iconSpan("star")}Also set as golden</span></label>
     </div>
     <div class="build-actions">
       <button id="btn-commit">${iconSpan("save")}Commit changes</button>
     </div>
-    <div id="history-result"></div>
   `;
 
   const headerActionsHtml = `
     <a class="btn icon-only" id="btn-download-output" href="/api/table/${encodeURIComponent(name)}/download" title="Download the last built output" download hidden>${iconSpan("download")}</a>
+    <button id="btn-rename-table">${iconSpan("edit")}Rename</button>
+    <button id="btn-clone-table">${iconSpan("copy")}Clone</button>
     <button class="danger" id="btn-delete-table">${iconSpan("trash")}Delete table</button>
   `;
 
@@ -65,6 +79,22 @@ async function viewTable(name) {
       <div id="tc-tag-chips" class="table-summary-tags"></div>
       <input type="text" id="tc-tag-input" placeholder="Add a tag, press Enter" class="mt-8">
     </div>
+    <div class="field">
+      <label>Notes</label>
+      <textarea id="tc-notes" class="commit-message-input mono" rows="3" placeholder="Free-form notes about this table…"></textarea>
+    </div>
+    <div class="field">
+      <label>Properties</label>
+      <div id="tc-props" class="tc-props"></div>
+      <div class="tc-prop-add">
+        <input type="text" id="tc-prop-key" class="mono" placeholder="key, e.g. address">
+        <input type="text" id="tc-prop-value" class="mono" placeholder="value, e.g. 0x8000">
+        <button id="tc-prop-add-btn">${iconSpan("plus")}Add</button>
+      </div>
+    </div>
+    <div class="build-actions">
+      <button id="tc-save-meta">${iconSpan("save")}Save notes & properties</button>
+    </div>
   `;
 
   content.innerHTML = render`
@@ -72,14 +102,15 @@ async function viewTable(name) {
     ${raw(pageHeader(name, undefined, headerActionsHtml))}
     <div class="table-detail-layout">
       <div class="table-detail-main">
-        ${raw(detailsCard("Build", buildBody, { open: true }))}
-        ${raw(detailsCard("Source content", '<div id="view-result"><p class="empty-state">—</p></div>', { open: false }))}
-        ${raw(detailsCard("Pipeline", '<div id="pipeline-result"></div>', { open: true }))}
-        ${raw(detailsCard("Table-specific config (sidecar)", '<div id="sidecar-result"></div>', { open: false }))}
+        ${raw(pinnedCard("Build", buildBody))}
+        ${raw(pinnedCard("Source content", '<div id="view-result"><p class="empty-state">—</p></div>'))}
+        ${raw(pinnedCard("Pipeline", '<div id="pipeline-result"></div>'))}
+        ${raw(pinnedCard("Table-specific config (sidecar)", '<div id="sidecar-result"></div>'))}
       </div>
       <div class="table-detail-side">
-        ${raw(pinnedCard("Tags & cluster", tagsClusterBody))}
-        ${raw(pinnedCard("History", historyBody))}
+        ${raw(pinnedCard("Table info", tagsClusterBody))}
+        ${raw(pinnedCard("Commit changes", commitBody))}
+        ${raw(pinnedCard("History", '<div id="history-result"></div>'))}
       </div>
     </div>
   `;
@@ -104,7 +135,7 @@ async function viewTable(name) {
     const chips = tcTags.map((tag) => `
       <span class="pill pill-dim">${escapeHtml(tag)} <button type="button" class="chip-remove" data-remove-tag="${escapeHtml(tag)}" aria-label="Remove tag">×</button></span>
     `).join("");
-    document.getElementById("tc-tag-chips").innerHTML = chips || '<span class="empty-state m-0">No tag</span>';
+    document.getElementById("tc-tag-chips").innerHTML = chips || '<span class="table-tags-empty">No tags yet</span>';
     document.querySelectorAll("[data-remove-tag]").forEach((btn) => {
       btn.onclick = async () => {
         tcTags = tcTags.filter((t) => t !== btn.dataset.removeTag);
@@ -139,7 +170,60 @@ async function viewTable(name) {
     }
   };
 
-  Promise.all([api("/api/clusters"), api("/api/report")]).then(([clustersResp, report]) => {
+  // notes + custom properties (key/value pairs) — edited together,
+  // saved with one button; tags/cluster keep their auto-save behavior
+  let tcProps = {};
+  const renderProps = () => {
+    const el = document.getElementById("tc-props");
+    const rows = Object.entries(tcProps).map(([k, v]) => `
+      <div class="tc-prop-row">
+        <input type="text" class="tc-prop-key mono" value="${escapeHtml(k)}" aria-label="Property key">
+        <input type="text" class="tc-prop-value mono" value="${escapeHtml(v)}" aria-label="Property value">
+        <button type="button" class="chip-remove" aria-label="Remove property">×</button>
+      </div>`).join("");
+    el.innerHTML = rows || '<span class="table-tags-empty">No custom properties</span>';
+    const collect = () => {
+      tcProps = {};
+      el.querySelectorAll(".tc-prop-row").forEach((row) => {
+        const key = row.querySelector(".tc-prop-key").value.trim();
+        if (key) tcProps[key] = row.querySelector(".tc-prop-value").value;
+      });
+    };
+    el.querySelectorAll(".tc-prop-row").forEach((row) => {
+      row.querySelector(".tc-prop-key").addEventListener("input", collect);
+      row.querySelector(".tc-prop-value").addEventListener("input", collect);
+      row.querySelector(".chip-remove").onclick = () => { row.remove(); collect(); };
+    });
+  };
+  const addProp = () => {
+    const key = document.getElementById("tc-prop-key").value.trim();
+    if (!key) { toast("Property key can't be empty", "warn"); return; }
+    tcProps[key] = document.getElementById("tc-prop-value").value;
+    document.getElementById("tc-prop-key").value = "";
+    document.getElementById("tc-prop-value").value = "";
+    renderProps();
+  };
+  document.getElementById("tc-prop-add-btn").onclick = addProp;
+  document.getElementById("tc-prop-value").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); addProp(); }
+  });
+  document.getElementById("tc-save-meta").onclick = async () => {
+    try {
+      await api(`/api/table/${encodeURIComponent(name)}/meta`, {
+        method: "PUT",
+        body: { notes: document.getElementById("tc-notes").value, properties: tcProps },
+      });
+      toast("Table info saved", "ok");
+    } catch (e) {
+      toastError(e);
+    }
+  };
+
+  Promise.all([
+    api("/api/clusters"),
+    api("/api/report"),
+    api(`/api/table/${encodeURIComponent(name)}/meta`),
+  ]).then(([clustersResp, report, meta]) => {
     const sel = document.getElementById("tc-cluster");
     clustersResp.clusters.forEach((c) => {
       const opt = document.createElement("option");
@@ -153,6 +237,9 @@ async function viewTable(name) {
     sel.value = row.cluster || "";
     tcTags = row.tags || [];
     renderTagChips();
+    document.getElementById("tc-notes").value = meta.notes || "";
+    tcProps = meta.properties || {};
+    renderProps();
 
     if (row.output_size != null) document.getElementById("btn-download-output").hidden = false;
     if (row.pipeline_explicit) return;
@@ -175,6 +262,74 @@ async function viewTable(name) {
       loadPipelineBuilder(name);
     } catch (e) {
       toastError(e);
+    }
+  };
+
+  /* ---------- inspect: diff vs snapshot/golden, analyze output ---------- */
+  const inspectResult = document.getElementById("inspect-result");
+
+  const renderDiff = (r, labelRef) => {
+    const files = r.files || Object.entries(r.diffs || {}).map(([filename, chunks]) => ({ filename, chunks }));
+    const identical = r.identical != null ? r.identical : !files.length;
+    if (identical) {
+      inspectResult.innerHTML = render`<div class="result-line">${statusPill("ok")}<span>Identical — no difference${r.snapshot_id != null ? ` vs snapshot #${r.snapshot_id}` : ""}.</span></div>`;
+      return;
+    }
+    const rows = files.map((f) => `
+      <div class="diff-file">
+        <div class="diff-file-name">${escapeHtml(f.filename)}</div>
+        ${f.chunks.map((c) => `
+          <div class="diff-row">
+            <span class="diff-off mono">0x${c.offset.toString(16).padStart(4, "0").toUpperCase()}</span>
+            <span class="diff-cur mono">${escapeHtml(c.current)}</span>
+            <span class="diff-arrow">→</span>
+            <span class="diff-ref mono">${escapeHtml((c.snapshot != null ? c.snapshot : c.golden))}</span>
+          </div>`).join("")}
+      </div>`).join("");
+    inspectResult.innerHTML = render`
+      <div class="result-line">${statusPill("mismatch")}<span>${files.length} file(s) differ — current vs ${labelRef}.</span></div>
+      <div class="diff-list">${raw(rows)}</div>
+    `;
+  };
+
+  const renderAnalyze = (a) => {
+    const counts = new Map(a.freq);
+    const top = [...counts.entries()].sort((x, y) => y[1] - x[1]).slice(0, 32);
+    const max = top.length ? top[0][1] : 1;
+    inspectResult.innerHTML = render`
+      <div class="result-line"><span class="subtitle mono">${a.path}</span></div>
+      <div class="analyze-grid">
+        <div class="analyze-stat"><div class="v">${fmtBytes(a.size)}</div><div class="k">size</div></div>
+        <div class="analyze-stat"><div class="v">${a.entropy}</div><div class="k">entropy (bits/byte)</div></div>
+        <div class="analyze-stat"><div class="v">${a.distinct}/256</div><div class="k">distinct bytes</div></div>
+        <div class="analyze-stat"><div class="v">${Math.round(a.printable_ratio * 100)}%</div><div class="k">printable</div></div>
+        <div class="analyze-stat"><div class="v">${Math.round(a.null_ratio * 100)}%</div><div class="k">zero bytes</div></div>
+        <div class="analyze-stat"><div class="v">${a.ascii_runs}</div><div class="k">ASCII runs ≥4</div></div>
+        <div class="analyze-stat"><div class="v">${a.magic.length ? escapeHtml(a.magic.join(", ")) : "—"}</div><div class="k">magic</div></div>
+      </div>
+      <div class="analyze-hist-title">Byte frequency — top ${top.length} of 256 values</div>
+      <div class="analyze-hist">${top.map(([b, c]) => `<div class="bar" title="0x${b.toString(16).padStart(2, "0").toUpperCase()} ×${c}" style="height:${Math.max(4, Math.round((c / max) * 60))}px"></div>`)}</div>
+    `;
+  };
+
+  const inspectWith = async (label, fetcher) => {
+    inspectResult.innerHTML = '<p class="empty-state m-0">Loading…</p>';
+    try {
+      renderDiff(await fetcher(), label);
+    } catch (e) {
+      inspectResult.innerHTML = emptyCard(e.message, e.hint);
+    }
+  };
+  document.getElementById("btn-diff-snapshot").onclick = () =>
+    inspectWith("snapshot", () => api("/api/diff/" + encodeURIComponent(name)));
+  document.getElementById("btn-diff-golden").onclick = () =>
+    inspectWith("golden", () => api("/api/golden/" + encodeURIComponent(name) + "/diff"));
+  document.getElementById("btn-analyze-output").onclick = async () => {
+    inspectResult.innerHTML = '<p class="empty-state m-0">Analyzing…</p>';
+    try {
+      renderAnalyze(await api("/api/table/" + encodeURIComponent(name) + "/analyze"));
+    } catch (e) {
+      inspectResult.innerHTML = emptyCard(e.message, e.hint);
     }
   };
 
@@ -215,6 +370,32 @@ async function viewTable(name) {
     }
   };
 
+  document.getElementById("btn-rename-table").onclick = async () => {
+    const newName = await promptDialog(`Rename '${name}' to:`, { value: name, confirmLabel: "Rename" });
+    if (!newName || newName === name) return;
+    try {
+      const r = await api("/api/table/rename", { body: { table_name: name, new_name: newName } });
+      invalidateTableSources(); // the name -> path map just changed
+      toast(`Renamed to '${r.to}'`, "ok");
+      location.hash = "#/table/" + encodeURIComponent(r.to);
+    } catch (e) {
+      toastError(e);
+    }
+  };
+
+  document.getElementById("btn-clone-table").onclick = async () => {
+    const newName = await promptDialog(`Clone '${name}' as:`, { value: name + "_copy", confirmLabel: "Clone" });
+    if (!newName) return;
+    try {
+      const r = await api("/api/table/clone", { body: { table_name: name, new_name: newName } });
+      invalidateTableSources(); // the name -> path map just changed
+      toast(`Cloned as '${r.to}'`, "ok");
+      location.hash = "#/table/" + encodeURIComponent(r.to);
+    } catch (e) {
+      toastError(e);
+    }
+  };
+
   document.getElementById("btn-delete-table").onclick = async () => {
     try {
       const preview = await api("/api/table/delete", { body: { table_name: name } });
@@ -225,6 +406,7 @@ async function viewTable(name) {
       const ok = await confirmDialog(lines.join(" "), { danger: true, confirmLabel: "Delete" });
       if (!ok) return;
       await api("/api/table/delete", { body: { table_name: name, confirm: true } });
+      invalidateTableSources();
       toast(`'${name}' deleted (source + output)`, "ok");
       location.hash = "#/";
     } catch (e) {
@@ -233,23 +415,67 @@ async function viewTable(name) {
   };
 
   await Promise.all([
-    ensureTableSources(), loadSource(name), loadPipelineBuilder(name),
+    ensureTableSources(name), loadSource(name), loadPipelineBuilder(name),
     loadSidecarCard(name), loadHistory(name), loadGoldenSummary(name),
   ]);
 }
 
-async function hexDumpHtml(name) {
+const HEX_PAGE_SIZE = 256;
+
+// paged hex dump of a table's source, rendered via /api/view slices:
+// unlike the old one-div-per-8-bytes dump, a multi-megabyte source can
+// never freeze the tab, because only one page is in the DOM at a time
+async function renderPagedHex(el, name, offset) {
   await ensureTableSources();
-  const ir = await api("/api/view?source=" + encodeURIComponent(findSourcePath(name)));
+  const sourcePath = findSourcePath(name);
+  const ir = await api(`/api/view?source=${encodeURIComponent(sourcePath)}&offset=${offset}&limit=${HEX_PAGE_SIZE}`);
   const bytes = atob(ir.data_base64);
-  const hexLines = [];
-  for (let i = 0; i < bytes.length; i += 8) {
-    const chunk = bytes.slice(i, i + 8);
-    const hex = Array.from(chunk).map((c) => c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()).join(" ");
-    const comment = (ir.comments.find((c) => c.offset === i) || {}).text || "";
-    hexLines.push(render`<div class="hex-chunk"><span class="offset">0x${i.toString(16).padStart(4, "0").toUpperCase()}</span><span>${hex}</span><span class="text-dim">${comment}</span></div>`);
+  const hex = (n) => "0x" + n.toString(16).padStart(4, "0").toUpperCase();
+  // same layout as the Files binary viewer: a real table with an
+  // explicit header row, so the columns stay aligned for every page
+  const rows = [];
+  for (let i = 0; i < bytes.length; i += 16) {
+    const chunk = bytes.slice(i, i + 16);
+    const parts = Array.from(chunk).map((c) => c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase());
+    const g1 = parts.slice(0, 8).join(" ");
+    const g2 = parts.slice(8).join(" ");
+    const ascii = Array.from(chunk).map((c) => (c.charCodeAt(0) >= 32 && c.charCodeAt(0) <= 126 ? c : ".")).join("");
+    const comment = (ir.comments.find((c) => c.offset === offset + i) || {}).text || "";
+    rows.push(`
+      <tr>
+        <td class="hex-offset">${hex(offset + i)}</td>
+        <td class="hex-bytes"><span class="hex-group">${escapeHtml(g1)}</span><span class="hex-group">${escapeHtml(g2)}</span></td>
+        <td class="hex-ascii">${escapeHtml(ascii)}</td>
+        ${comment ? `<td class="hex-comment">${escapeHtml(comment)}</td>` : `<td class="hex-comment"></td>`}
+      </tr>`);
   }
-  return `<div class="log">${hexLines.join("") || '<span class="log-empty">empty</span>'}</div>`;
+  const pageEnd = offset + bytes.length;
+  el.innerHTML = render`
+    <div class="fs-binary-toolbar">
+      <span class="subtitle mono">${fmtBytes(ir.length)}</span>
+      <span class="flex-1"></span>
+      <span class="fs-pager">
+        <button id="hex-prev" ${offset === 0 ? "disabled" : ""} title="Previous page">${icon("up")}</button>
+        <span class="mono fs-offset-label" title="Visible byte range">${hex(offset)}–${hex(pageEnd)}</span>
+        <button id="hex-next" ${ir.has_more ? "" : "disabled"} title="Next page">${icon("down")}</button>
+      </span>
+    </div>
+    <div class="hex-table-wrap">
+      <table class="hex-table">
+        <thead><tr>
+          <th class="hex-offset">Offset</th>
+          <th class="hex-bytes-head">00 01 02 03 04 05 06 07 &nbsp;&nbsp; 08 09 0A 0B 0C 0D 0E 0F</th>
+          <th class="hex-ascii">ASCII</th>
+          <th class="hex-comment">Comment</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+  const prevBtn = document.getElementById("hex-prev");
+  const nextBtn = document.getElementById("hex-next");
+  if (prevBtn) prevBtn.onclick = () => renderPagedHex(el, name, Math.max(0, offset - HEX_PAGE_SIZE));
+  if (nextBtn) nextBtn.onclick = () => renderPagedHex(el, name, offset + HEX_PAGE_SIZE);
 }
 
 /* Source content editor directly on the page: text formats only (CSV,
@@ -260,64 +486,83 @@ async function loadSource(name) {
   const el = document.getElementById("view-result");
   try {
     const info = await api("/api/source/" + encodeURIComponent(name));
-    if (info.editable) {
-      // unsaved-changes guard: dirty until the textarea matches what's
-      // on disk (re-registering the same id replaces the previous guard,
-      // so re-renders of this card don't accumulate stale ones)
-      let originalContent = info.content;
-      registerDirtyGuard("source:" + name, {
-        message: `The source of '${name}' has unsaved changes.`,
-        isDirty: () => {
-          const ta = document.getElementById("source-editor");
-          return !!ta && ta.value !== originalContent;
+    const msg = info.truncated
+      ? "The source is larger than 1 MB: the editor opens read-only (first 1 MB) and the whole file is browsable in the hex view."
+      : (info.editable ? "" : `${info.reason} — not editable from here, browse it in the hex view.`);
+    el.innerHTML = render`
+      ${raw(msg ? `<div class="result-line">${statusPill("warn").__raw}<span>${msg}</span></div>` : "")}
+      <div class="fs-action-group">
+        <span class="fs-action-label">Source</span>
+        ${raw(info.editable
+          ? `<button class="primary" id="btn-source-edit">${iconSpan("edit")}Edit</button>`
+          : info.truncated
+            ? `<button class="primary" id="btn-source-edit">${iconSpan("edit")}Edit (read-only)</button>`
+            : "")}
+        <button id="btn-source-hex">${icon("box")}View hex</button>
+        ${raw(info.editable ? `<button id="btn-source-validate">${iconSpan("check")}Validate</button>` : "")}
+      </div>
+      <div id="source-validate-result"></div>
+      <p class="subtitle mono m-0 mt-8">${info.path}</p>
+    `;
+
+    const hexBtn = document.getElementById("btn-source-hex");
+    if (hexBtn) hexBtn.onclick = () => openTableHexModal(name);
+
+    const editBtn = document.getElementById("btn-source-edit");
+    if (editBtn && info.editable) {
+      editBtn.onclick = () => openTextEditorModal({
+        title: name,
+        subtitle: info.path,
+        initialContent: info.content,
+        guardId: "source:" + name,
+        onSave: async (content) => {
+          await api("/api/source/" + encodeURIComponent(name), { method: "PUT", body: { content } });
+          runValidate();
         },
       });
-      el.innerHTML = render`
-        <textarea id="source-editor" class="source-editor mono" spellcheck="false" rows="14">${info.content}</textarea>
-        <div class="source-editor-actions">
-          <button class="primary" id="btn-save-source">${icon("save")}Save source</button>
-          <button id="btn-validate-source">${icon("check")}Validate with default reader</button>
-          <span class="subtitle mono">${info.path}</span>
-        </div>
-        <div id="source-validate-result"></div>
-      `;
-      const runValidate = async () => {
-        const resultEl = document.getElementById("source-validate-result");
-        try {
-          const r = await api("/api/source/" + encodeURIComponent(name) + "/validate", { method: "POST" });
-          if (r.conforms) {
-            resultEl.innerHTML = render`<div class="result-line">${statusPill("ok")}<span>conforms to reader '${r.reader}'</span></div>`;
-          } else {
-            const items = r.issues.map((i) => render`<li><strong>${i.check}</strong>: ${i.detail}</li>`);
-            resultEl.innerHTML = render`<div class="result-line">${statusPill("fail")}<span>doesn't conform to reader '${r.reader}'</span><ul>${items}</ul></div>`;
-          }
-        } catch (e) {
-          toastError(e);
-        }
-      };
-      document.getElementById("btn-save-source").onclick = async () => {
-        try {
-          await api("/api/source/" + encodeURIComponent(name), { method: "PUT", body: { content: document.getElementById("source-editor").value } });
-          originalContent = document.getElementById("source-editor").value; // saved: guard turns clean
-          toast("Source saved", "ok");
-          runValidate();
-        } catch (e) {
-          toastError(e);
-        }
-      };
-      document.getElementById("btn-validate-source").onclick = runValidate;
-    } else {
-      // not editable (binary): no dirty state can exist for this card
-      removeDirtyGuard("source:" + name);
-      const hex = await hexDumpHtml(name);
-      el.innerHTML = render`
-        <div class="result-line">${statusPill("warn")}<span>${info.reason} — not editable from here, hex view only.</span></div>
-        ${raw(hex)}
-      `;
+    } else if (editBtn) {
+      // truncated (>1MB): read-only modal with the capped text
+      editBtn.onclick = () => openTextEditorModal({
+        title: name,
+        subtitle: info.path,
+        initialContent: info.content,
+        readOnly: true,
+        guardId: "source:" + name,
+        onSave: async () => {},
+      });
     }
+
+    const runValidate = async () => {
+      const resultEl = document.getElementById("source-validate-result");
+      if (!resultEl) return;
+      try {
+        const r = await api("/api/source/" + encodeURIComponent(name) + "/validate", { method: "POST" });
+        if (r.conforms) {
+          resultEl.innerHTML = render`<div class="result-line">${statusPill("ok")}<span>conforms to reader '${r.reader}'</span></div>`;
+        } else {
+          const items = r.issues.map((i) => render`<li><strong>${i.check}</strong>: ${i.detail}</li>`);
+          resultEl.innerHTML = render`<div class="result-line">${statusPill("fail")}<span>doesn't conform to reader '${r.reader}'</span><ul>${items}</ul></div>`;
+        }
+      } catch (e) {
+        toastError(e);
+      }
+    };
+    const validateBtn = document.getElementById("btn-source-validate");
+    if (validateBtn) validateBtn.onclick = runValidate;
   } catch (e) {
     el.innerHTML = render`<p class="empty-state">${e.message}</p>`;
   }
+}
+
+/* The source's content as a near-fullscreen paged hex view. */
+function openTableHexModal(name) {
+  openDialog({
+    large: true,
+    title: name,
+    body: render`<div id="source-hex"></div>`,
+    actions: [{ label: "Close" }],
+  });
+  renderPagedHex(document.getElementById("source-hex"), name, 0);
 }
 
 function _stageToRawJs(stage) {
@@ -348,8 +593,8 @@ async function loadPipelineBuilder(name) {
     ));
     let lastError = null;
 
-    function optionList(names, selected) {
-      return names.map((n) => `<option value="${escapeHtml(n)}" ${n === selected ? "selected" : ""}>${escapeHtml(n)}</option>`).join("");
+    function optionList(names, selected, disabled) {
+      return names.map((n) => `<option value="${escapeHtml(n)}" ${n === selected ? "selected" : ""}${disabled && disabled.has(n) ? " disabled" : ""}>${escapeHtml(n)}</option>`).join("");
     }
 
     function renderStages() {
@@ -359,7 +604,20 @@ async function loadPipelineBuilder(name) {
         let fields;
         if (s.type === "reader" || s.type === "writer") {
           const names = s.type === "reader" ? readerNames : writerNames;
-          fields = `<select data-field="name" data-idx="${i}">${optionList(names, s.name)}</select>`;
+          if (s.type === "writer") {
+            // a writer name must be unique WITHIN the contiguous fan-out
+            // group (two consecutive stages with the same writer would
+            // collide on the same output file): the options taken by the
+            // OTHER writers of the same group are disabled. Two writers
+            // separated by a reader are separate pairs and may repeat.
+            const run = [];
+            for (let k = i; k >= 0 && stages[k].type === "writer"; k--) run.unshift(k);
+            for (let k = i + 1; k < stages.length && stages[k].type === "writer"; k++) run.push(k);
+            const taken = new Set(run.filter((j) => j !== i).map((j) => stages[j].name));
+            fields = `<select data-field="name" data-idx="${i}">${optionList(names, s.name, taken)}</select>`;
+          } else {
+            fields = `<select data-field="name" data-idx="${i}">${optionList(names, s.name)}</select>`;
+          }
         } else {
           fields = `
             <input type="text" data-field="command" data-idx="${i}" value="${escapeHtml(s.command || "")}" placeholder="external command, e.g. objcopy {input} {output}" class="flex-1 min-w-220">
@@ -442,7 +700,15 @@ async function loadPipelineBuilder(name) {
           stages.push({ type: "exec", command: "", on_error: "fail", output_extension: "" });
         } else {
           const names = type === "reader" ? readerNames : writerNames;
-          stages.push({ type, name: names[0] || "" });
+          let name = names[0] || "";
+          if (type === "writer") {
+            // the new writer joins the trailing fan-out group (if the
+            // last stage is a writer): pick a name not used there
+            const used = new Set();
+            for (let j = stages.length - 1; j >= 0 && stages[j].type === "writer"; j--) used.add(stages[j].name);
+            name = names.find((n) => !used.has(n)) || names[0] || "";
+          }
+          stages.push({ type, name });
         }
         lastError = null;
         renderStages();
@@ -605,33 +871,84 @@ async function loadGoldenSummary(name) {
   }
 }
 
-function _snapshotItemHtml(s, name, goldenId, headId) {
+function _snapshotItemHtml(s, goldenId, headId) {
   const isGolden = s.id === goldenId;
   const isCurrent = s.id === headId;
   const isIncomplete = s.missing_outputs && s.missing_outputs.length > 0;
-  const itemClasses = ["snapshot-item", isGolden ? "is-golden" : "", isCurrent ? "is-current" : "", isIncomplete ? "is-incomplete" : ""]
+  const classes = ["snapshot-item", "snapshot-row", isGolden ? "is-golden" : "", isCurrent ? "is-current" : "", isIncomplete ? "is-incomplete" : ""]
     .filter(Boolean).join(" ");
   return render`
-    <div class="${itemClasses}">
-      <div class="snapshot-item-head">
-        <span class="snapshot-id mono">#${s.id}</span>
+    <button type="button" class="${classes}" data-snapshot="${s.id}" title="Click for details">
+      <span class="snapshot-id mono">#${s.id}</span>
+      ${raw(isCurrent ? `<span class="pill pill-current">● current</span>` : isGolden ? goldBadge() : "")}
+      <span class="snapshot-row-msg">${s.message}</span>
+      <span class="snapshot-row-time mono">${s.timestamp.slice(0, 16)}</span>
+    </button>`;
+}
+
+/* Clicking a snapshot opens a modal with its full information (build
+ * info, outputs, warnings) and the per-snapshot actions — the list
+ * itself stays compact. */
+function _openSnapshotModal(s, name, goldenId, headId) {
+  const isGolden = s.id === goldenId;
+  const isCurrent = s.id === headId;
+  const isIncomplete = s.missing_outputs && s.missing_outputs.length > 0;
+  const body = render`
+    <div class="snapshot-modal">
+      <div class="result-line">
         ${raw((isCurrent ? currentBadge() : "") + (isGolden ? goldBadge() : ""))}
+        <span class="subtitle mono">${s.timestamp}</span>
       </div>
-      <div class="snapshot-item-meta mono">${s.timestamp}</div>
-      <div class="snapshot-item-msg">${s.message}</div>
+      <p class="snapshot-modal-msg">${s.message}</p>
       ${raw(_snapshotBuildInfoHtml(s))}
-      <div class="snapshot-item-outputs mono">${s.outputs.length ? s.outputs.join(", ") : "—"}</div>
+      <p class="subtitle">Outputs</p>
+      <div class="mono snapshot-modal-outputs">${s.outputs.length ? s.outputs.join(", ") : "—"}</div>
       ${raw(isIncomplete
         ? `<div class="snapshot-warning">${iconSpan("warnTri")}incomplete pipeline — missing ${escapeHtml(s.missing_outputs.join(", "))}</div>`
         : "")}
-      <div class="table-actions">
-        ${raw(isCurrent
-          ? `<button disabled title="Already the current snapshot">Restore</button>`
-          : `<button data-restore="${s.id}">Restore</button>`)}
-        ${raw(isGolden ? "" : `<button class="ghost" data-set-golden="${s.id}">${iconSpan("star")}Golden</button>`)}
-        <a class="btn" href="/api/log/${encodeURIComponent(name)}/${s.id}/download" download>${icon("save")}Download</a>
-      </div>
-    </div>`;
+    </div>
+  `;
+  const downloadUrl = `/api/log/${encodeURIComponent(name)}/${s.id}/download`;
+  const actions = [
+    { label: "Close", value: "close", autofocus: true },
+    { label: "Download", value: "download" },
+  ];
+  if (!isGolden) actions.push({ label: "Set as golden", value: "golden" });
+  if (!isCurrent) actions.push({ label: "Restore", danger: true, value: "restore" });
+  openDialog({ title: `Snapshot #${s.id}`, body, actions }).then((action) => {
+    if (action === "restore") restoreSnapshotFlow(name, s.id);
+    else if (action === "golden") goldenSnapshotFlow(name, s.id);
+    else if (action === "download") window.location.href = downloadUrl;
+  });
+}
+
+async function restoreSnapshotFlow(name, snapshotId) {
+  try {
+    const preview = await api("/api/restore", { body: { table_name: name, snapshot_id: snapshotId } });
+    const previewLabel = preview.source || preview.sources.join(", ");
+    const ok = await confirmDialog(`Overwrite ${previewLabel} with the state of snapshot #${snapshotId}?`, { danger: true, confirmLabel: "Overwrite" });
+    if (!ok) return;
+    const r = await api("/api/restore", { body: { table_name: name, snapshot_id: snapshotId, confirm: true } });
+    const removedNote = r.removed.length ? ` — removed (weren't part of the snapshot): ${r.removed.join(", ")}` : "";
+    toast(`Restored: ${r.written.join(", ")}${removedNote}`, "ok");
+    loadSource(name);
+    loadPipelineBuilder(name);
+    loadHistory(name);
+    loadGoldenSummary(name);
+  } catch (e) {
+    toastError(e);
+  }
+}
+
+async function goldenSnapshotFlow(name, snapshotId) {
+  try {
+    await api("/api/golden/" + encodeURIComponent(name), { method: "PUT", body: { snapshot_id: snapshotId } });
+    toast(`Golden set to snapshot #${snapshotId}`, "ok");
+    loadHistory(name);
+    loadGoldenSummary(name);
+  } catch (e) {
+    toastError(e);
+  }
 }
 
 function _loadMoreButtonHtml(offset, remaining) {
@@ -656,41 +973,19 @@ async function loadHistory(name) {
       return;
     }
     const goldenId = golden.golden_snapshot_id;
-    const items = log.snapshots.map((s) => _snapshotItemHtml(s, name, goldenId, log.head_snapshot_id));
+    const items = log.snapshots.map((s) => _snapshotItemHtml(s, goldenId, log.head_snapshot_id));
+    const known = [...log.snapshots]; // accumulates load-more pages too
     el.innerHTML = render`
       <div class="snapshot-list" id="snapshot-list">${items}</div>
       ${raw(log.has_more ? _loadMoreButtonHtml(log.snapshots.length, log.total - log.snapshots.length) : "")}
     `;
 
     el.onclick = async (event) => {
-      const restoreBtn = event.target.closest("[data-restore]");
-      if (restoreBtn) {
-        const snapshotId = Number(restoreBtn.getAttribute("data-restore"));
-        const preview = await api("/api/restore", { body: { table_name: name, snapshot_id: snapshotId } });
-        const previewLabel = preview.source || preview.sources.join(", ");
-        const ok = await confirmDialog(`Overwrite ${previewLabel} with the state of snapshot #${snapshotId}?`, { danger: true, confirmLabel: "Overwrite" });
-        if (!ok) return;
-        const r = await api("/api/restore", { body: { table_name: name, snapshot_id: snapshotId, confirm: true } });
-        const removedNote = r.removed.length ? ` — removed (weren't part of the snapshot): ${r.removed.join(", ")}` : "";
-        toast(`Restored: ${r.written.join(", ")}${removedNote}`, "ok");
-        loadSource(name);
-        loadPipelineBuilder(name);
-        loadHistory(name);
-        loadGoldenSummary(name);
-        return;
-      }
-
-      const goldenBtn = event.target.closest("[data-set-golden]");
-      if (goldenBtn) {
-        const snapshotId = Number(goldenBtn.getAttribute("data-set-golden"));
-        try {
-          await api("/api/golden/" + encodeURIComponent(name), { method: "PUT", body: { snapshot_id: snapshotId } });
-          toast(`Golden set to snapshot #${snapshotId}`, "ok");
-          loadHistory(name);
-          loadGoldenSummary(name);
-        } catch (e) {
-          toastError(e);
-        }
+      // clicking a snapshot opens its detail modal (info + actions)
+      const row = event.target.closest("[data-snapshot]");
+      if (row) {
+        const snap = known.find((s) => s.id === Number(row.dataset.snapshot));
+        if (snap) _openSnapshotModal(snap, name, goldenId, log.head_snapshot_id);
         return;
       }
 
@@ -701,8 +996,9 @@ async function loadHistory(name) {
         try {
           const next = await api(`/api/log/${encodeURIComponent(name)}?limit=${HISTORY_PAGE_SIZE}&offset=${offset}`);
           const list = document.getElementById("snapshot-list");
-          const nextHtml = next.snapshots.map((s) => _snapshotItemHtml(s, name, goldenId, next.head_snapshot_id)).join("");
+          const nextHtml = next.snapshots.map((s) => _snapshotItemHtml(s, goldenId, next.head_snapshot_id)).join("");
           list.insertAdjacentHTML("beforeend", nextHtml);
+          known.push(...next.snapshots);
           const newOffset = offset + next.snapshots.length;
           if (next.has_more) {
             loadMoreBtn.outerHTML = _loadMoreButtonHtml(newOffset, next.total - newOffset);
@@ -715,6 +1011,34 @@ async function loadHistory(name) {
         }
       }
     };
+
+    // right-click on a snapshot: quick actions without opening the modal
+    el.addEventListener("contextmenu", (event) => {
+      const row = event.target.closest("[data-snapshot]");
+      if (!row) return;
+      event.preventDefault();
+      const snapId = Number(row.dataset.snapshot);
+      const isGolden = row.classList.contains("is-golden");
+      const isCurrent = row.classList.contains("is-current");
+      const items = [
+        {
+          label: "Details",
+          icon: "edit",
+          action: () => {
+            const snap = known.find((s) => s.id === snapId);
+            if (snap) _openSnapshotModal(snap, name, goldenId, log.head_snapshot_id);
+          },
+        },
+        {
+          label: "Download",
+          icon: "download",
+          action: () => { window.location.href = `/api/log/${encodeURIComponent(name)}/${snapId}/download`; },
+        },
+      ];
+      if (!isGolden) items.push({ label: "Set as golden", icon: "star", action: () => goldenSnapshotFlow(name, snapId) });
+      if (!isCurrent) items.push({ label: "Restore", icon: "refresh", danger: true, action: () => restoreSnapshotFlow(name, snapId) });
+      openContextMenu(items, event.clientX, event.clientY);
+    });
   } catch (e) {
     el.innerHTML = render`<p class="empty-state">${e.message}</p>`;
   }

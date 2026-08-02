@@ -44,7 +44,10 @@ def test_status_clean_and_dirty_states(tmp_path):
     assert dirty["example_table"] == "dirty"
 
 
-def test_status_duplicate_names_error(tmp_path):
+def test_status_duplicate_names_degrades_with_warning(tmp_path):
+    """Duplicate table names no longer fail the whole /api/status: the
+    dashboard degrades to 'healthy tables + a warning' so a project
+    broken by hand stays usable (see tests/test_web_resilience.py)."""
     root = _init_project(tmp_path)
     (root / "sub").mkdir()
     (root / "sub" / "example_table.raw").write_text("0x01\n")
@@ -52,7 +55,9 @@ def test_status_duplicate_names_error(tmp_path):
 
     r = client.get("/api/status")
 
-    assert r.status_code == 400  # DuplicateTableNameError, ConfigError -> 400
+    assert r.status_code == 200
+    assert len(r.json()["warnings"]) == 1
+    assert "duplicate table name 'example_table'" in r.json()["warnings"][0]
 
 
 def test_commit_requires_message(tmp_path):

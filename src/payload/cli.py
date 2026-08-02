@@ -9,6 +9,7 @@ import random
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import fields as dc_fields
 from pathlib import Path
 from typing import Optional
@@ -25,12 +26,16 @@ from payload.core.cache import BuildCache
 from payload.core.clusters import resolve_clusters
 from payload.core.config import (
     GLOBAL_CONFIG_FILENAME,
+    add_batch_table_source,
     create_batch_table,
+    remove_batch_table_entry,
+    remove_batch_table_source,
     create_cluster,
     delete_cluster,
     load_config,
     resolve_config_with_provenance,
     set_table_cluster,
+    set_table_meta_fields,
     set_table_tags,
     update_cluster,
 )
@@ -60,18 +65,22 @@ from payload.core.errors import (
     SourceNotFoundError,
 )
 from payload.core.golden import check_golden, clear_golden, golden_diff, set_golden
+from payload.core.activity import log_event, read_events
+from payload.core.file_ops import analyze_file, compare_files, search_files
 from payload.core.history import HistoryStore, legacy_compatible_source_blobs
 from payload.core.logging_setup import setup_logging
 from payload.core.pipeline import build, describe_table_build
 from payload.core.plugin_base import CheckStatus
 from payload.core.registry import load_plugins
 from payload.core.table_admin import (
+    clone_table,
     delete_batch_member,
     delete_table,
     import_batch_member,
     import_many_single_tables,
     import_new_batch_table,
     import_single_table,
+    rename_table,
 )
 from payload.core.table_meta import resolve_table_meta
 from payload._version import __version__
@@ -298,6 +307,7 @@ def build_cmd(
         status = "built" if was_built else "from cache"
         destinations = ", ".join(str(p) for p in out_paths)
         console.print(f"[green]✓[/] {table_name} → {destinations} ({status})")
+        log_event(Path.cwd(), "build", f"'{table_name}' → {destinations} ({status})")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -632,6 +642,7 @@ def commit(
                 history.set_golden(ref.name, snap.id)
                 suffix = " [gold1]★ golden[/]"
             console.print(f"[green]✓[/] {ref.name} → snapshot #{snap.id} ({n_out} outputs attached){suffix}")
+            log_event(root, "commit", f"'{ref.name}' → snapshot #{snap.id}{suffix.strip()}")
             if snap.missing_outputs:
                 console.print(
                     f"    [yellow]![/] incomplete pipeline: missing {', '.join(snap.missing_outputs)} "
@@ -1141,9 +1152,15 @@ def pipeline_show(
 
 
 @app.command()
-def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
+def report(
+    ctx: typer.Context,
+    root: Path = typer.Argument(Path(".")),
+    html: Optional[Path] = typer.Option(None, "--html", "-o", help="Also write a self-contained HTML report to this path (open it in a browser, 'Save as PDF' to export)"),
+):
     """Project overview: one row per table with sizes, byte_order,
-    golden status, and last history snapshot."""
+    golden status, and last history snapshot. With --html, the same
+    data (plus notes/custom properties) is written as a printable HTML
+    document — identical to the webapp's Report button."""
 
     def _run():
         require_project_root(root)
@@ -1203,6 +1220,14 @@ def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
             t.add_row(*row)
 
         console.print(t)
+
+        if html is not None:
+            from payload.core.report import render_report_html
+
+            target = html.resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(render_report_html(root), encoding="utf-8")
+            console.print(f"[green]✓[/] HTML report written to {target}")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -1270,6 +1295,7 @@ def golden_set_cmd(
         history = HistoryStore(root)
         golden_id = set_golden(history, table_name, snapshot)
         console.print(f"[gold1]★[/] golden for '{table_name}' set to snapshot #{golden_id}")
+        log_event(root, "golden", f"'{table_name}' → snapshot #{golden_id}")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -1288,6 +1314,7 @@ def golden_clear_cmd(
         history = HistoryStore(root)
         if clear_golden(history, table_name):
             console.print(f"[green]✓[/] golden for '{table_name}' removed")
+            log_event(root, "golden", f"'{table_name}' golden removed")
         else:
             console.print(f"No golden set for '{table_name}'.")
 
@@ -1608,6 +1635,105 @@ def tag_cmd(
 
         set_table_tags(root, table_name, tags)
         console.print(f"[green]✓[/] '{table_name}' tags: {', '.join(tags) if tags else '[dim]none[/]'}")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command(name="meta")
+def table_meta_cmd(
+    ctx: typer.Context,
+    table_name: str = typer.Argument(...),
+    note: Optional[str] = typer.Option(None, "--note", help="Set the notes field (empty string clears it)"),
+    prop: Optional[list[str]] = typer.Option(None, "--prop", help="Set a custom property as key=value (repeatable)"),
+    rm_prop: Optional[list[str]] = typer.Option(None, "--rm-prop", help="Remove a custom property by key (repeatable)"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Shows a table's notes and custom properties (no flags), or edits
+    them with --note/--prop/--rm-prop. Properties are free-form
+    key=value strings (e.g. address=0x8000); they are persisted in
+    [[table_meta]] and exposed to plugins at build time via
+    config['table_meta']['properties'], so a reader can forward them to
+    the writer through TableIR.extra."""
+
+    def _run():
+        require_project_root(root)
+        sources, batch_tables, base_config = discover_for_history(root)
+        _resolve_ref_or_exit(sources, batch_tables, table_name)
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
+        current = table_metas.get(table_name)
+
+        if note is None and not prop and not rm_prop:
+            props = dict(current.properties) if current else {}
+            notes = current.notes if current else ""
+            console.print(f"'{table_name}':")
+            console.print(f"  notes: {notes if notes else '[dim](none)[/]'}")
+            if props:
+                for k in sorted(props):
+                    console.print(f"  {k} = {props[k]}")
+            else:
+                console.print("  [dim](no custom properties)[/]")
+            return
+
+        props = dict(current.properties) if current else {}
+        for kv in prop or []:
+            key, _, value = kv.partition("=")
+            if not key.strip():
+                raise typer.BadParameter("--prop must be key=value")
+            props[key.strip()] = value
+        for k in rm_prop or []:
+            props.pop(k, None)
+
+        set_table_meta_fields(root, table_name, notes=note, properties=props)
+        console.print(f"[green]✓[/] '{table_name}' notes/properties updated")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command(name="batch")
+def batch_cmd(
+    ctx: typer.Context,
+    name: Optional[str] = typer.Argument(None, help="Batch table name (omit to list all)"),
+    add: Optional[list[str]] = typer.Option(None, "--add", help="Add a member file (relative path, repeatable)"),
+    remove: Optional[list[str]] = typer.Option(None, "--remove", help="Remove a member file (relative path, repeatable)"),
+    delete: bool = typer.Option(False, "--delete", help="Delete the whole batch table"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Lists the [[batch_table]] declarations, or mutates one: --add/
+    --remove a member file, --delete the whole entry. Same config the
+    webapp's Batch page edits (no hand-editing table-tool.toml)."""
+
+    def _run():
+        require_project_root(root)
+        base = load_config(root)
+        declared = {e.get("name"): e for e in base.batch_tables}
+
+        if name is None:
+            if not declared:
+                console.print("[dim]no batch table declared[/]")
+                return
+            for n, e in declared.items():
+                console.print(f"[green]{n}[/]: " + (", ".join(e.get("sources") or []) or "[dim]no members[/]"))
+            return
+
+        if delete:
+            removed = remove_batch_table_entry(root, name)
+            console.print(f"[green]✓[/] batch table '{name}' deleted" if removed else f"[yellow]![/] no batch table '{name}'")
+            return
+
+        if add or remove:
+            for source in add or []:
+                add_batch_table_source(root, name, source)
+            for source in remove or []:
+                remove_batch_table_source(root, name, source)
+            console.print(f"[green]✓[/] '{name}' members updated")
+            return
+
+        entry = declared.get(name)
+        if entry is None:
+            console.print(f"[yellow]![/] no batch table '{name}'")
+            return
+        console.print(f"'{name}': " + (", ".join(entry.get("sources") or []) or "[dim]no members[/]"))
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -2152,6 +2278,153 @@ def init(
             next_steps += "\npld build example_table.raw"
         console.print(Panel(next_steps, title="Next steps", border_style="green"))
         console.print(f"[dim]💡 {random_tip()}[/]")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command()
+def compare(
+    ctx: typer.Context,
+    path_a: Path = typer.Argument(..., help="First file"),
+    path_b: Path = typer.Argument(..., help="Second file"),
+):
+    """Byte-level comparison of two files — common prefix/suffix and the
+    runs where they differ (offsets in hex)."""
+
+    def _run():
+        for p in (path_a, path_b):
+            if not p.is_file():
+                console.print(f"[red]✗ not a file: {p}[/]")
+                raise typer.Exit(2)
+        r = compare_files(path_a, path_b)
+        if r["equal"]:
+            console.print(f"[green]✓[/] Identical ({r['a_size']} bytes)")
+        else:
+            console.print(f"[yellow]≠[/] {r['a_size']} vs {r['b_size']} bytes, {len(r['runs'])} differing run(s)")
+            for run in r["runs"]:
+                who = f"  [dim](extra in {run.get('file')})[/]" if "file" in run else ""
+                console.print(f"  {run['offset']:#x}–{run['offset'] + run['length']:#x}  {run['length']} bytes{who}")
+        if r["truncated"]:
+            console.print("[dim]comparison capped at the first 4 MiB[/]")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command(name="grep")
+def grep_cmd(
+    ctx: typer.Context,
+    pattern: str = typer.Argument(..., help="Text to search (use --hex for a byte pattern)"),
+    path: Path = typer.Option(Path("."), "--path", help="Folder to search under (default: current folder)"),
+    hex_pattern: bool = typer.Option(False, "--hex", help="Interpret the pattern as hex bytes, e.g. '0A 1B' or '0A1B'"),
+    max_results: int = typer.Option(50, "--max", min=1, max=2000, help="Stop after N matches"),
+):
+    """Search the content of every file in the project (text or byte
+    pattern) — the CLI counterpart of the Files page search."""
+
+    def _run():
+        if hex_pattern:
+            clean = pattern.replace(" ", "").replace("0x", "").replace(",", "")
+            if len(clean) % 2:
+                console.print("[red]✗ hex pattern must have an even number of digits[/]")
+                raise typer.Exit(2)
+            needle = bytes.fromhex(clean)
+        else:
+            needle = pattern.encode("utf-8")
+        r = search_files(path.resolve(), needle, max_results=max_results)
+        if not r["matches"]:
+            console.print(f"No match for {pattern!r} in {path} ({r['searched']} files scanned)")
+            return
+        for m in r["matches"]:
+            console.print(f"[bold]{m['path']}[/]:{m['offset']:#x}  [dim]{m['hex']}[/]  {m['ascii']}")
+        console.print(f"{len(r['matches'])} match(es) across {r['searched']} file(s)"
+                      + (" [yellow](truncated)[/]" if r["truncated"] else ""))
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command()
+def analyze(
+    ctx: typer.Context,
+    path: Path = typer.Argument(..., help="File to analyze"),
+):
+    """Binary analysis: entropy, printable ratio, magic candidates and
+    the most frequent bytes."""
+
+    def _run():
+        if not path.is_file():
+            console.print(f"[red]✗ not a file: {path}[/]")
+            raise typer.Exit(2)
+        r = analyze_file(path)
+        console.print(f"[bold]{path}[/]  ({r['size']} bytes)"
+                      + ("  [dim](first 4 MiB analyzed)[/]" if r["capped"] else ""))
+        console.print(f"  entropy: {r['entropy']} bits/byte  [dim](0 = constant, 8 = random)[/]")
+        console.print(f"  printable: {r['printable_ratio'] * 100:.1f}%  ASCII runs ≥4: {r['ascii_runs']}")
+        if r["magic"]:
+            console.print(f"  magic: [green]{', '.join(r['magic'])}[/]")
+        top = sorted(r["freq"], key=lambda x: -x[1])[:8]
+        if top:
+            console.print("  top bytes: " + ", ".join(f"0x{b:02X}×{c}" for b, c in top))
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command(name="activity")
+def activity_cmd(
+    ctx: typer.Context,
+    root: Path = typer.Option(Path("."), "--root"),
+    limit: int = typer.Option(50, "--limit", min=1, max=500, help="How many events to show"),
+):
+    """Recent project activity: builds, commits, golden changes and
+    file-browser operations (see the Log page in 'pld serve')."""
+
+    def _run():
+        require_project_root(root)
+        r = read_events(root, limit=limit)
+        if not r["events"]:
+            console.print("No activity recorded yet — run a build or a commit first.")
+            return
+        for e in r["events"]:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e["ts"]))
+            style = {"ok": "green", "warn": "yellow", "fail": "red"}.get(e.get("level"), "dim")
+            console.print(f"[dim]{ts}[/] [{style}]{e['kind']}[/] {e['detail']}")
+        console.print(f"[dim]{r['total']} event(s) total[/]")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command(name="rename-table")
+def rename_table_cmd(
+    ctx: typer.Context,
+    old_name: str = typer.Argument(..., help="Current table name"),
+    new_name: str = typer.Argument(..., help="New table name"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Rename a table end to end: source file, sidecar, history
+    (snapshots, golden and tags/cluster follow) and table-tool.toml."""
+
+    def _run():
+        require_project_root(root)
+        r = rename_table(root, old_name, new_name)
+        console.print(f"[green]✓[/] renamed '{r['from']}' → '{r['to']}'"
+                      + (" [dim](batch table)[/]" if r["is_batch"] else ""))
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command()
+def clone(
+    ctx: typer.Context,
+    name: str = typer.Argument(..., help="Table to duplicate"),
+    new_name: str = typer.Argument(..., help="Name for the copy"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Duplicate a single-file table (source + sidecar + tags/cluster)
+    as a new table with fresh history."""
+
+    def _run():
+        require_project_root(root)
+        r = clone_table(root, name, new_name)
+        console.print(f"[green]✓[/] cloned '{r['from']}' as '{r['to']}'")
 
     run_command(_run, ctx.obj["verbosity"])
 

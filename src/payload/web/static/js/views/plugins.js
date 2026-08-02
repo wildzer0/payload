@@ -9,6 +9,7 @@ import {
   escapeHtml, raw, render, icon, iconSpan, toast, toastError,
   confirmDialog, detailsCard, pageHeader, statusPill, metaChip,
   formatDescription, val, debounce, registerDirtyGuard, clearDirtyGuards,
+  loadCodeMirror,
 } from "../ui.js";
 import { api, apiUpload, invalidatePluginsCache } from "../api.js";
 
@@ -311,35 +312,8 @@ async function viewPluginDetail(name) {
 
 /* ---------- local plugin editor (CodeMirror 5, vendored) ---------- */
 
-/* Lazy loading: codemirror.js + mode/python (~420KB together) have no
- * reason to weigh down EVERY page, only the editor's — loaded the
- * first time they're needed, then the same resolved Promise is reused
- * (no double <script> if the editor is reopened). */
-let _cmLoadPromise = null;
-function loadCodeMirror() {
-  if (_cmLoadPromise) return _cmLoadPromise;
-  _cmLoadPromise = new Promise((resolveFn, rejectFn) => {
-    if (!document.getElementById("cm-css")) {
-      const cssLink = document.createElement("link");
-      cssLink.id = "cm-css";
-      cssLink.rel = "stylesheet";
-      cssLink.href = "/static/vendor/codemirror/codemirror.css";
-      document.head.appendChild(cssLink);
-    }
-    const coreScript = document.createElement("script");
-    coreScript.src = "/static/vendor/codemirror/codemirror.js";
-    coreScript.onload = () => {
-      const modeScript = document.createElement("script");
-      modeScript.src = "/static/vendor/codemirror/mode/python/python.js";
-      modeScript.onload = () => resolveFn(window.CodeMirror);
-      modeScript.onerror = () => rejectFn(new Error("Couldn't load the editor (Python mode)"));
-      document.body.appendChild(modeScript);
-    };
-    coreScript.onerror = () => rejectFn(new Error("Couldn't load the editor (codemirror.js)"));
-    document.body.appendChild(coreScript);
-  });
-  return _cmLoadPromise;
-}
+/* The lazy CodeMirror loader lives in ui.js (shared with the file
+ * browser's text editor). */
 
 function _renderPluginTestResults(r) {
   if (!r.loadable) {
@@ -361,7 +335,8 @@ function _renderPluginTestResults(r) {
 }
 
 async function viewLocalPluginEditor(rawFilename) {
-  const filename = decodeURIComponent(rawFilename);
+  // the router already URL-decodes route params
+  const filename = rawFilename;
   const content = document.getElementById("content");
 
   const [fileData] = await Promise.all([api("/api/local-plugins/" + encodeURIComponent(filename)), loadCodeMirror()]);
@@ -399,7 +374,9 @@ async function viewLocalPluginEditor(rawFilename) {
 
   // unsaved-changes guard: dirty until the editor content matches what
   // was loaded (both Save and Test persist it, turning the guard clean)
-  let originalContent = fileData.content;
+  // CRLF-normalized: CodeMirror's getValue() always reports LF, so a
+  // CRLF file would otherwise look "edited" from the start
+  let originalContent = fileData.content.replace(/\r\n/g, "\n");
   registerDirtyGuard("local-plugin-editor", {
     message: `'${filename}' has unsaved changes.`,
     isDirty: () => cm.getValue() !== originalContent,

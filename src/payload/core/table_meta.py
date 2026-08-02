@@ -36,6 +36,12 @@ class TableMeta:
     name: str
     cluster: str | None = None
     tags: list[str] = field(default_factory=list)
+    notes: str = ""
+    # free-form custom properties (key -> string), e.g. memory address,
+    # version, author — surfaced to plugins at build time via
+    # config["table_meta"]["properties"] (see pipeline.build) so a
+    # reader can forward them to the writer through TableIR.extra
+    properties: dict[str, str] = field(default_factory=dict)
 
 
 def resolve_table_meta(
@@ -65,5 +71,7 @@ def resolve_table_meta(
             name=name,
             cluster=cluster_name,
             tags=list(entry.get("tags") or []),
+            notes=str(entry.get("notes") or ""),
+            properties={str(k): str(v) for k, v in (entry.get("properties") or {}).items()},
         )
     return table_metas

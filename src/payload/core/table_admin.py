@@ -15,26 +15,35 @@ discussion — the location is "don't care" by choice).
 """
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from payload.core.batch_tables import BatchTable
 from payload.core.cache import BuildCache
+from payload.core.clusters import resolve_clusters
 from payload.core.config import (
+    GLOBAL_CONFIG_FILENAME,
+    SIDECAR_SUFFIX,
     add_batch_table_source,
     create_batch_table,
     remove_batch_table_entry,
     remove_batch_table_source,
     remove_table_meta_entry,
+    set_table_cluster,
+    set_table_tags,
 )
-from payload.core.discovery import TableRef
+from payload.core.discovery import TableRef, all_table_refs, discover_for_history, resolve_table_ref
 from payload.core.errors import (
     BatchTableError,
     EmptySourceError,
     InvalidImportError,
     SourceNotFoundError,
     TableAlreadyExistsError,
+    TableNotFoundError,
 )
+from payload.core.history import HistoryStore
+from payload.core.table_meta import resolve_table_meta
 
 
 def _validate_filename(raw: str) -> str:
@@ -56,6 +65,104 @@ def _validate_not_empty(filename: str, data: bytes) -> None:
     anything, same principle as the reader-side check."""
     if not data:
         raise EmptySourceError(filename)
+
+
+def _validate_table_name(raw: str) -> str:
+    """A table name for rename/clone: a plain stem, no path
+    separators, no leading dot (would become a hidden file)."""
+    if not raw or "/" in raw or "\\" in raw or raw in (".", "..") or raw.startswith("."):
+        raise InvalidImportError(raw)
+    return raw
+
+
+def _rewrite_table_name_in_config(root: Path, old_name: str, new_name: str) -> None:
+    """Rewrites `name = "<old>"` → `name = "<new>"` INSIDE
+    [[table_meta]] and [[batch_table]] blocks only — the rest of
+    table-tool.toml (comments, other sections) is preserved
+    byte-for-byte."""
+    path = root / GLOBAL_CONFIG_FILENAME
+    if not path.exists():
+        return
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    in_table_block = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_table_block = stripped in ("[[table_meta]]", "[[batch_table]]")
+            continue
+        if in_table_block:
+            lines[i] = line.replace(f'name = "{old_name}"', f'name = "{new_name}"')
+    path.write_text("".join(lines), encoding="utf-8")
+
+
+def _existing_table_names(sources: list[Path], batch_tables: list[BatchTable]) -> set[str]:
+    return {r.name for r in all_table_refs(sources, batch_tables)}
+
+
+def rename_table(root: Path, old_name: str, new_name: str) -> dict:
+    """Rename a table (single-file or batch) end to end: the source
+    file on disk, its sidecar, the table's history (manifest +
+    golden/head pointers) and the `name` in table-tool.toml. The
+    history is migrated, not lost — snapshots, golden and
+    tags/cluster follow the new name."""
+    _validate_table_name(new_name)
+    sources, batch_tables, _ = discover_for_history(root)
+    ref = resolve_table_ref(sources, batch_tables, old_name)
+    if ref is None:
+        raise TableNotFoundError(old_name)
+    if new_name == old_name:
+        raise InvalidImportError("new name must differ from the current one")
+    if new_name in _existing_table_names(sources, batch_tables):
+        raise TableAlreadyExistsError(new_name)
+
+    if not ref.is_batch:
+        old_src = ref.source_paths[0]
+        new_src = old_src.with_name(new_name + old_src.suffix)
+        if new_src.exists():
+            raise TableAlreadyExistsError(new_name)
+        old_src.rename(new_src)
+        old_sidecar = old_src.with_name(old_src.stem + SIDECAR_SUFFIX)
+        new_sidecar = old_src.with_name(new_name + SIDECAR_SUFFIX)
+        if old_sidecar.exists():
+            old_sidecar.rename(new_sidecar)
+
+    HistoryStore(root).rename_table(old_name, new_name)
+    _rewrite_table_name_in_config(root, old_name, new_name)
+    return {"from": old_name, "to": new_name, "is_batch": ref.is_batch}
+
+
+def clone_table(root: Path, name: str, new_name: str) -> dict:
+    """Duplicate a single-file table as a new one: source and sidecar
+    copied, tags/cluster copied. History starts fresh (a clone has
+    nothing committed yet)."""
+    _validate_table_name(new_name)
+    sources, batch_tables, base_config = discover_for_history(root)
+    ref = resolve_table_ref(sources, batch_tables, name)
+    if ref is None:
+        raise TableNotFoundError(name)
+    if new_name in _existing_table_names(sources, batch_tables):
+        raise TableAlreadyExistsError(new_name)
+    if ref.is_batch:
+        raise InvalidImportError("can't clone a batch table as a single file")
+
+    old_src = ref.source_paths[0]
+    new_src = old_src.with_name(new_name + old_src.suffix)
+    if new_src.exists():
+        raise TableAlreadyExistsError(new_name)
+    shutil.copy2(old_src, new_src)
+    old_sidecar = old_src.with_name(old_src.stem + SIDECAR_SUFFIX)
+    new_sidecar = old_src.with_name(new_name + SIDECAR_SUFFIX)
+    if old_sidecar.exists():
+        shutil.copy2(old_sidecar, new_sidecar)
+
+    clusters = resolve_clusters(root, base_config)
+    metas = resolve_table_meta(root, base_config, clusters)
+    meta = metas.get(name)
+    if meta is not None:
+        set_table_tags(root, new_name, meta.tags)
+        if meta.cluster:
+            set_table_cluster(root, new_name, meta.cluster)
+    return {"from": name, "to": new_name}
 
 
 @dataclass

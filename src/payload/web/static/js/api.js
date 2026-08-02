@@ -80,11 +80,23 @@ function findSourcePath(name) {
  * happen to go through /api/status (e.g. the hex fallback for
  * non-text sources): otherwise Build on an editable table (the common
  * case) would use just the table name instead of the path, and the
- * backend would respond 'file not found'. */
-async function ensureTableSources() {
-  if (_tableSources) return;
+ * backend would respond 'file not found'.
+ * Pass the table name to refetch when it's NOT in the cache: after a
+ * clone/rename/import the cached map is stale, and falling back to the
+ * bare name would produce a wrong path ('<root>/name' without the
+ * source extension). */
+async function ensureTableSources(name) {
+  if (_tableSources && (!name || _tableSources[name])) return;
   const status = await api("/api/status");
   _tableSources = Object.fromEntries(status.tables.map((t) => [t.name, t.path]));
 }
 
-export { api, apiUpload, ApiError, getPlugins, invalidatePluginsCache, ensureTableSources, findSourcePath };
+/* Any operation that can change the name -> path map (table
+ * clone/rename/delete, import, or a file-browser rename/move/copy/
+ * delete of a table source) invalidates the cache so the next page
+ * refetches it. */
+function invalidateTableSources() {
+  _tableSources = null;
+}
+
+export { api, apiUpload, ApiError, getPlugins, invalidatePluginsCache, ensureTableSources, findSourcePath, invalidateTableSources };

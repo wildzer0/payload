@@ -7,10 +7,12 @@ from __future__ import annotations
 from starlette.routing import BaseRoute
 
 from payload.web.routes import (
+    batch,
     build,
     clusters,
     config,
     docs,
+    fs,
     golden,
     history,
     local_plugin_editor,
@@ -21,6 +23,7 @@ from payload.web.routes import (
 )
 
 ROUTES: list[BaseRoute] = [
+    *batch.ROUTES,
     *build.ROUTES,
     *history.ROUTES,
     *config.ROUTES,
@@ -32,4 +35,5 @@ ROUTES: list[BaseRoute] = [
     *source_editor.ROUTES,
     *table_admin.ROUTES,
     *clusters.ROUTES,
+    *fs.ROUTES,
 ]

@@ -392,3 +392,77 @@ def test_watch_on_change_batch_uses_cluster_override(tmp_path, monkeypatch, caps
     out = capsys.readouterr().out
     assert "member of 'rows'" in out
     assert (proj / "build" / "rows.bin").exists()
+
+
+def test_meta_show_and_edit(tmp_path, monkeypatch):
+    root = _init_project(tmp_path, monkeypatch, "proj")
+    result = runner.invoke(app, ["meta", "example_table", "--root", str(root)])
+    assert result.exit_code == 0
+    assert "notes" in result.stdout
+
+    result = runner.invoke(app, ["meta", "example_table", "--note", "hello", "--prop", "address=0x8000", "--root", str(root)])
+    assert result.exit_code == 0
+
+    result = runner.invoke(app, ["meta", "example_table", "--root", str(root)])
+    assert result.exit_code == 0
+    assert "hello" in result.stdout
+    assert "address = 0x8000" in result.stdout
+
+    # update + remove a property
+    result = runner.invoke(app, ["meta", "example_table", "--prop", "address=0x9000", "--rm-prop", "address", "--root", str(root)])
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["meta", "example_table", "--root", str(root)])
+    assert "0x9000" not in result.stdout
+
+
+def test_meta_cli_rejects_bare_prop_key(tmp_path, monkeypatch):
+    root = _init_project(tmp_path, monkeypatch, "proj")
+    result = runner.invoke(app, ["meta", "example_table", "--prop", "=value", "--root", str(root)])
+    assert result.exit_code != 0
+
+
+def test_report_writes_html(tmp_path, monkeypatch):
+    root = _init_project(tmp_path, monkeypatch, "proj")
+    out = tmp_path / "my-report.html"
+    result = runner.invoke(app, ["report", "--html", str(out), str(root)])
+    assert result.exit_code == 0, result.stdout
+    assert out.exists()
+    content = out.read_text(encoding="utf-8")
+    assert "<title>Table report" in content
+    assert "example_table" in content
+
+
+def test_batch_cli_list_and_mutate(tmp_path, monkeypatch):
+    root = _init_project(tmp_path, monkeypatch, "proj")
+    (root / "a.raw").write_text("# a\n", encoding="utf-8")
+    (root / "b.raw").write_text("# b\n", encoding="utf-8")
+
+    # empty list
+    r = runner.invoke(app, ["batch", "--root", str(root)])
+    assert r.exit_code == 0 and "no batch table" in r.stdout
+
+    # create via config helper, then list
+    from payload.core.config import create_batch_table
+    create_batch_table(root, "sensors", ["a.raw"])
+    r = runner.invoke(app, ["batch", "--root", str(root)])
+    assert r.exit_code == 0 and "sensors: a.raw" in r.stdout
+
+    # add + remove members
+    r = runner.invoke(app, ["batch", "sensors", "--add", "b.raw", "--root", str(root)])
+    assert r.exit_code == 0
+    r = runner.invoke(app, ["batch", "sensors", "--root", str(root)])
+    assert "a.raw, b.raw" in r.stdout
+    r = runner.invoke(app, ["batch", "sensors", "--remove", "a.raw", "--root", str(root)])
+    assert r.exit_code == 0
+    r = runner.invoke(app, ["batch", "sensors", "--root", str(root)])
+    assert "b.raw" in r.stdout and "a.raw" not in r.stdout
+
+    # unknown name
+    r = runner.invoke(app, ["batch", "ghost", "--root", str(root)])
+    assert r.exit_code == 0 and "no batch table 'ghost'" in r.stdout
+
+    # delete
+    r = runner.invoke(app, ["batch", "sensors", "--delete", "--root", str(root)])
+    assert r.exit_code == 0
+    r = runner.invoke(app, ["batch", "--root", str(root)])
+    assert "no batch table" in r.stdout

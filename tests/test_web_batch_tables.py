@@ -308,3 +308,109 @@ def test_source_editor_rejects_batch_table(tmp_path):
     assert client.get("/api/source/rows").status_code == 400
     assert client.put("/api/source/rows", json={"content": "x"}).status_code == 400
     assert client.post("/api/source/rows/validate").status_code == 400
+
+
+def _make_batch(root, name, sources):
+    from payload.core.config import create_batch_table
+
+    create_batch_table(root, name, sources)
+    return root
+
+
+def test_batch_crud_roundtrip(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    (root / "a.raw").write_text("# a\n", encoding="utf-8")
+    (root / "b.raw").write_text("# b\n", encoding="utf-8")
+
+    # list starts empty
+    assert client.get("/api/batch").json()["batches"] == []
+
+    # create
+    r = client.post("/api/batch", json={"name": "sensors", "sources": ["a.raw", "b.raw"], "byte_order": "big"})
+    assert r.status_code == 200
+    batches = client.get("/api/batch").json()["batches"]
+    assert len(batches) == 1
+    assert batches[0]["name"] == "sensors"
+    assert batches[0]["sources"] == ["a.raw", "b.raw"]
+    assert batches[0]["byte_order"] == "big"
+
+    # update (whole-list replace + clear byte_order)
+    r = client.put("/api/batch/sensors", json={"sources": ["a.raw"], "reader": "raw_text", "byte_order": ""})
+    assert r.status_code == 200
+    batches = client.get("/api/batch").json()["batches"]
+    assert batches[0]["sources"] == ["a.raw"]
+    assert batches[0]["reader"] == "raw_text"
+    assert batches[0]["byte_order"] is None
+
+    # invalid sources rejected
+    assert client.post("/api/batch", json={"name": "bad", "sources": ["../escape"]}).status_code == 400
+    assert client.post("/api/batch", json={"name": "bad", "sources": []}).status_code == 400
+
+    # delete
+    r = client.delete("/api/batch/sensors")
+    assert r.status_code == 200
+    assert r.json()["removed"] is True
+    assert client.get("/api/batch").json()["batches"] == []
+    # deleting again is a no-op
+    assert client.delete("/api/batch/sensors").json()["removed"] is False
+
+
+def test_batch_validation_errors(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    (root / "a.raw").write_text("# a\n", encoding="utf-8")
+    assert client.post("/api/batch", json={"sources": ["a.raw"]}).status_code == 400       # missing name
+    assert client.post("/api/batch", json={"name": "x", "sources": ["a.raw"], "reader": 123}).status_code == 400  # reader not a string
+    assert client.post("/api/batch", json={"name": "x", "sources": ["a.raw"], "byte_order": 7}).status_code == 400  # byte_order not a string
+    assert client.put("/api/batch/x", json={}).status_code == 400                          # missing sources
+    assert client.post("/api/batch", json={"name": "x", "sources": [".."]}).status_code == 400  # traversal
+    assert client.post("/api/batch", json={"name": "x", "sources": ["a/../b"]}).status_code == 400  # embedded traversal
+    assert client.post("/api/batch", json={"name": "x", "sources": "a.raw"}).status_code == 400  # sources not a list
+
+
+def test_upsert_batch_table_new_name(tmp_path):
+    from payload.core.config import upsert_batch_table, load_config
+    from payload.core.batch_tables import resolve_batch_tables
+
+    root = _init_project(tmp_path)
+    (root / "a.raw").write_text("# a\n", encoding="utf-8")
+    upsert_batch_table(root, "fresh", ["a.raw"], reader="raw_text", byte_order="")
+    batches = resolve_batch_tables(root, load_config(root))
+    assert batches[0].name == "fresh"
+    assert batches[0].reader == "raw_text"
+    assert batches[0].byte_order is None
+
+
+def test_batch_rejects_non_table_sources(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    (root / "a.raw").write_text("# a\n", encoding="utf-8")
+    (root / "side.config.toml").write_text("[defaults]\n", encoding="utf-8")
+    (root / "table-tool.toml").write_text("[[batch_table]]\nname='x'\nsources=['a.raw']\n", encoding="utf-8")
+
+    # a real sidecar is not a table source
+    r = client.post("/api/batch", json={"name": "bad", "sources": ["side.config.toml"]})
+    assert r.status_code == 400
+    assert "not a table source" in str(r.json())
+
+    # missing files are refused too (they'd fail at build anyway)
+    assert client.post("/api/batch", json={"name": "bad", "sources": ["missing.raw"]}).status_code == 400
+
+    # a genuine candidate passes
+    assert client.post("/api/batch", json={"name": "ok", "sources": ["a.raw"]}).status_code == 200
+
+
+def test_batch_candidates_endpoint(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    (root / "a.raw").write_text("# a\n", encoding="utf-8")
+    (root / "b.txt").write_text("b\n", encoding="utf-8")
+    (root / "side.config.toml").write_text("[defaults]\n", encoding="utf-8")
+    (root / "build" / "out.bin").write_bytes(b"x")  # build/ already exists from init
+
+    files = client.get("/api/batch/candidates").json()["files"]
+    assert "a.raw" in files and "b.txt" in files
+    assert "side.config.toml" not in files
+    assert "build/out.bin" not in files
+    assert not any("table-tool.toml" == f for f in files)

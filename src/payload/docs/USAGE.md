@@ -44,11 +44,12 @@ environment. In order of preference:
    if the git server is reachable from the closed network.
 
 The same three methods work for installing a third-party plugin
-(`pld plugin new` generates a pip package like any other). For a
-plugin specific to a single project — the common case, since `payload`
-ships no reader/writer of its own — see "Plugins, without `pip
-install`" in [PLUGINS.md](PLUGINS.md#plugins-without-pip-install), or
-just `pld plugin install <path-or-url>`: no installation at all.
+(`pld plugin new` generates a pip package like any other, and
+`pld plugin new-local` scaffolds a single-file project plugin directly
+in `plugins/`). For a plugin specific to a single project — the common
+case, since `payload` ships no reader/writer of its own — see "Plugins,
+without `pip install`" in [PLUGINS.md](PLUGINS.md#plugins-without-pip-install),
+or just `pld plugin install <path-or-url>`: no installation at all.
 
 ## Concepts in brief
 
@@ -194,7 +195,7 @@ pld config show                # global config, no sidecar/cluster involved
 pld config show temp_table     # includes this table's cluster (if any) and sidecar (if any)
 ```
 
-### `pld cluster ...`, `pld tag`/`pld tags`
+### `pld cluster ...`, `pld tag`/`pld tags`, `pld meta`
 
 One cluster per table (shared `defaults`/`plugin` config overrides),
 plus free-form tags for search/filtering in the dashboard — see
@@ -202,10 +203,20 @@ plus free-form tags for search/filtering in the dashboard — see
 command reference (`pld cluster new/list/show/edit/delete/assign/
 unassign`, `pld tag`, `pld tags`).
 
+`pld meta` shows (no flags) or edits a table's free-form **notes** and
+**custom properties** (key=value strings, e.g. a memory address).
+Properties are persisted in `[[table_meta]]` and exposed to plugins at
+build time via `config['table_meta']['properties']` — a reader can
+forward them to the writer through `TableIR.extra`, so values that
+belong to the table itself (address, version, metadata…) reach the
+binary output without being hardcoded in the source.
+
 ```bash
 pld cluster new sensors --writer hex
 pld cluster assign temp_sensor sensors
 pld tag temp_sensor --add prod
+pld meta temp_sensor --note "calibrated at boot" --prop address=0x8000
+pld meta temp_sensor          # show notes + properties
 ```
 
 ### `pld pipeline show <table> [--root <dir>]`
@@ -219,15 +230,56 @@ valid cache checkpoint.
 pld pipeline show temp_table
 ```
 
-### `pld report [root]`
+### `pld report [root] [--html <path>]`
 
 Project overview: one line per table with source size, output size (or
 "never built"), `byte_order`, golden status, latest history snapshot.
 Useful before sharing or archiving a project, or for a general
 at-a-glance view.
 
+With `--html`, the same data (plus cluster, tags, notes, custom
+properties, and history) is written as a **self-contained HTML
+document** — open it in a browser and use "Save as PDF" to get a
+printable/archivable report. The webapp's dashboard has a "Report"
+button that opens the identical document.
+
 ```bash
 pld report
+pld report --html report.html
+```
+
+### `pld batch [name] [--add <file>]... [--remove <file>]... [--delete] [--root <dir>]`
+
+Lists the `[[batch_table]]` declarations (no name), or mutates one:
+`--add`/`--remove` a member file (relative path, repeatable) or
+`--delete` the whole entry. The same config the webapp's **Batch**
+page (`/batch`) edits — no hand-editing `table-tool.toml`.
+
+```bash
+pld batch
+pld batch sensors --add ROW2.txt
+pld batch sensors            # show members
+pld batch sensors --delete
+```
+
+### `pld clone <table> <new_name> [--root <dir>]`
+
+Duplicates a single-file table (source, sidecar, tags/cluster) as a
+new table with fresh history — the webapp's "Clone" button does the
+same thing.
+
+```bash
+pld clone example_table example_table_v2
+```
+
+### `pld rename-table <old> <new> [--root <dir>]`
+
+Renames a table end to end: the source file, its sidecar, the
+table's history (snapshots/golden) and its `[[table_meta]]` entry are
+all moved — the webapp's "Rename" button does the same thing.
+
+```bash
+pld rename-table example_table example_table_v2
 ```
 
 ### `pld export <output.zip> [--include-history] [root]`
@@ -600,6 +652,92 @@ pld -vv build sensors/temp_table.raw --to bin    # DEBUG: parse/emit timing, cac
 
 Logs go to `stderr`, never `stdout` — you can always pipe the command's
 "real" output without logs polluting it.
+
+---
+
+### `pld compare <path_a> <path_b>`
+
+Byte-level comparison of two files: whether they're identical, their
+common prefix/suffix, and the runs where they differ (offsets in hex).
+Reads are capped at the first 4 MiB.
+
+```bash
+pld compare build/temp.bin build/temp-old.bin
+```
+
+### `pld grep <pattern> [--hex] [--path <dir>] [--max N]`
+
+Search the content of every file in the project — text, or a byte
+pattern with `--hex` (e.g. `0A 1B` or `0A1B`). Skips the project's
+internal folders (output/cache/plugins and hidden entries). Prints
+`path:offset` plus the matching bytes as hex and ASCII.
+
+```bash
+pld grep 0x0A
+pld grep --hex 0A1B --path sensors --max 100
+```
+
+### `pld analyze <file>`
+
+Binary analysis: Shannon entropy (0 = constant data, 8 = random), the
+printable-byte ratio, the number of ASCII strings, magic-number
+candidates (ELF/PNG/JPEG/ZIP/GZIP/PDF/…) and the most frequent bytes.
+
+### `pld activity [--root <dir>] [--limit N]`
+
+Recent project activity, newest first: builds, commits, golden changes
+and file-browser operations. The same timeline is the "Activity" page
+of `pld serve`.
+
+---
+
+## Web interface (`pld serve`)
+
+`pld serve [root] [--host 0.0.0.0] [--port 8000]` serves the web
+interface: the same features as the CLI, plus the parts that only make
+sense in a browser. It talks to the same core, so a table built from
+the web is the same table built from the CLI.
+
+**Dashboard** (`/`): every table as a card — status (clean/dirty),
+golden state, reader/writer defaults (changeable here, saved to the
+sidecar), size, last modified, snapshot; import by drag&drop (a single
+file becomes a table, several files together offer a batch table).
+Tables and files are searchable from the command palette.
+
+**Table page** (`/table/<name>`): build form, source editor
+(CodeMirror), visual pipeline builder, sidecar overrides, tags &
+cluster, history (commit/restore/golden), and the **Inspect** actions —
+`Diff vs snapshot` and `Diff vs golden` (the CLI's `pld diff` and
+`pld golden diff`, in the browser) and `Analyze output` (entropy/magic
+of the last build).
+
+**Files** (`/files`): the whole project folder from the browser — tree
+with expand/collapse, multi-selection (Cmd/Ctrl+click, Shift+click,
+batch move/copy/delete), drag & drop (move by default, Option/Shift to
+copy; dropping OS files onto a folder uploads them there), right-click
+context menu, text editor (CodeMirror), paged hex view with ASCII and a
+Strings view, plus the file operations behind `pld compare`/`grep`/
+`analyze` as buttons (Compare with a file picker, content search,
+Analyze).
+
+Two rules keep the file browser honest with the rest of the tool:
+
+- every path it touches is checked against the served project root —
+  path traversal and symlink escapes are refused (see `web/paths.py`);
+- table names must stay unique project-wide: creating/renaming/uploading
+  a file whose name would collide with an existing table is refused
+  with a clear message, so the file browser can't break discovery.
+
+**Activity** (`/log`): the project-wide timeline (builds, commits,
+golden changes, file operations) — the same data as `pld activity`.
+
+**Command palette (Ctrl/Cmd+K)**: search tables (by name or tag),
+files, pages and actions from anywhere.
+
+Editors (source, plugin, config, files) track unsaved changes: leaving
+the page (or closing the tab) asks for confirmation. Static files are
+served with `Cache-Control: no-cache`, so a frontend update never
+shows stale code after a refresh.
 
 ---
 

@@ -308,3 +308,26 @@ def test_table_delete_cleans_up_table_meta_entry(tmp_path):
 
     r = client.get("/api/table/example_table/tags")
     assert r.json() == {"tags": []}
+
+
+def test_meta_get_put_roundtrip(tmp_path):
+    from payload.core.config import set_table_meta_fields
+
+    root = _init_project(tmp_path)
+    client = _client(root)
+    set_table_meta_fields(root, "example_table", notes="n", properties={"address": "0x8000"})
+
+    got = client.get("/api/table/example_table/meta").json()
+    assert got["notes"] == "n"
+    assert got["properties"] == {"address": "0x8000"}
+    assert got["tags"] == []
+
+    r = client.put("/api/table/example_table/meta", json={"notes": "updated", "properties": {"version": "3"}})
+    assert r.status_code == 200
+    got = client.get("/api/table/example_table/meta").json()
+    assert got["notes"] == "updated"
+    assert got["properties"] == {"version": "3"}
+
+    # invalid payloads are rejected
+    assert client.put("/api/table/example_table/meta", json={"notes": 42}).status_code == 400
+    assert client.put("/api/table/example_table/meta", json={"properties": {"a": 1}}).status_code == 400

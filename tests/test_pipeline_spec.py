@@ -277,3 +277,23 @@ def test_reader_writer_pairs_yields_all_writers_in_fan_out_group():
     pairs = list(spec.reader_writer_pairs())
     assert [w.name for _, w in pairs] == ["bin", "hex", "header"]
     assert all(r.name == "a" for r, _ in pairs)
+
+
+def test_fanout_rejects_duplicate_writers():
+    """A writer name must be unique: two stages with the same writer
+    would collide on the same output file."""
+    with pytest.raises(InvalidPipelineError):
+        PipelineSpec.from_raw_stages([
+            {"type": "reader", "name": "csv"},
+            {"type": "writer", "name": "bin"},
+            {"type": "writer", "name": "bin"},
+        ])
+
+
+def test_fanout_allows_different_writers():
+    spec = PipelineSpec.from_raw_stages([
+        {"type": "reader", "name": "csv"},
+        {"type": "writer", "name": "bin"},
+        {"type": "writer", "name": "hex"},
+    ])
+    assert len(spec.stages) == 3

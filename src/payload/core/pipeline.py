@@ -543,6 +543,21 @@ def build(
         config_dict = config.model_dump()
         if cli_opts:
             config_dict["cli_opts"] = cli_opts
+        # the table's OWN metadata (cluster/tags/notes/properties) is
+        # exposed to plugins at parse time as config["table_meta"],
+        # replacing the raw [[table_meta]] list — a reader can forward
+        # it to the writer through TableIR.extra. Included in the cache
+        # key (via config_dict), so editing notes/properties correctly
+        # invalidates builds that consumed them.
+        for entry in getattr(config, "table_meta", None) or []:
+            if entry.get("name") == table_name:
+                config_dict["table_meta"] = {
+                    "cluster": entry.get("cluster"),
+                    "tags": list(entry.get("tags") or []),
+                    "notes": str(entry.get("notes") or ""),
+                    "properties": {str(k): str(v) for k, v in (entry.get("properties") or {}).items()},
+                }
+                break
 
         if is_batch:
             source_bytes = None

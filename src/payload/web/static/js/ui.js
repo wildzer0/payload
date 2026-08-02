@@ -64,10 +64,17 @@ const ICONS = {
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 13 10 18 19 7"/></svg>',
   cross: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
   warnTri: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 3 20h18L12 4Z"/><line x1="12" y1="10" x2="12" y2="14.5"/><circle cx="12" cy="17.2" r="0.4" fill="currentColor" stroke="none"/></svg>',
+  expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
   dash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="12" x2="18" y2="12"/></svg>',
   book: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5c0-1 .8-1.5 2-1.5h6v15H6c-1.2 0-2 .5-2 1.5V5.5Z"/><path d="M20 5.5c0-1-.8-1.5-2-1.5h-6v15h6c1.2 0 2 .5 2 1.5V5.5Z"/></svg>',
+  layers: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2 9l10 6 10-6-10-6Z"/><path d="M2 15l10 6 10-6"/></svg>',
   star: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6-5.9-3.3-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8Z"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><polyline points="7 10 12 15 17 10"/><path d="M4 19h16"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>',
+  file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6V3Z"/><path d="M14 3v4h4"/></svg>',
+  upload: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V5"/><polyline points="7 10 12 5 17 10"/><path d="M4 19h16"/></svg>',
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19.5 8.5a2.1 2.1 0 0 0-3-3L5 17v3Z"/></svg>',
 };
 
 function iconSpan(name) {
@@ -130,11 +137,14 @@ function openDialog(opts) {
       `<button type="button" id="modal-action-${i}" class="${a.className || ""}"${a.autofocus ? " data-autofocus" : ""}>${escapeHtml(a.label)}</button>`
     ).join("");
     box.innerHTML = render`
-      ${opts.title ? render`<h3 class="modal-title" id="modal-title">${opts.title}</h3>` : ""}
+      ${opts.title ? raw(`<h3 class="modal-title" id="modal-title">${escapeHtml(opts.title)}</h3>`) : ""}
       ${raw(opts.body || "")}
       <div class="modal-actions">${raw(actionsHtml)}</div>
     `;
     if (opts.title) box.setAttribute("aria-labelledby", "modal-title");
+    // large: near-fullscreen modal (hex viewer, pickers) — same sizing
+    // the text editor uses
+    if (opts.large) box.classList.add("modal-large");
     overlay.hidden = false;
 
     const previouslyFocused = document.activeElement;
@@ -143,6 +153,7 @@ function openDialog(opts) {
       if (resolved) return;
       resolved = true;
       overlay.hidden = true;
+      box.classList.remove("modal-large");
       box.removeAttribute("aria-labelledby");
       document.removeEventListener("keydown", onKey);
       if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
@@ -174,6 +185,94 @@ function openDialog(opts) {
     const focusTarget = box.querySelector("[data-autofocus]") || box.querySelector("button.primary") || box.querySelector("button");
     if (focusTarget) focusTarget.focus();
     if (opts.onOpen) opts.onOpen(box);
+  });
+}
+
+
+function openTextEditorModal(opts) {
+  const overlay = document.getElementById("modal-overlay");
+  const box = document.getElementById("modal-box");
+  const norm = (s) => String(s).replace(/\r\n/g, "\n");
+  const originalText = norm(opts.initialContent || "");
+  const guardId = opts.guardId || "editor";
+  let cm = null;
+
+  box.classList.add("modal-large");
+  box.innerHTML = render`
+    <h3 class="modal-title">${opts.title || "Edit"}</h3>
+    ${opts.subtitle ? raw(`<p class="subtitle mb-14">${escapeHtml(opts.subtitle)}</p>`) : ""}
+    ${opts.readOnly ? `<div class="result-line">${icon("warnTri")}<span class="subtitle">Read-only preview — saving is disabled (file too large).</span></div>` : ""}
+    <div class="modal-editor-wrap">
+      <textarea id="modal-editor" class="source-editor mono" spellcheck="false" rows="20">${opts.initialContent || ""}</textarea>
+    </div>
+    <div class="modal-actions">
+      <span class="subtitle mono flex-1" id="modal-editor-hint">${opts.readOnly ? "read-only" : "unsaved changes are discarded on close"}</span>
+      <button type="button" class="ghost" id="modal-editor-cancel">Cancel</button>
+      <button type="button" class="primary" id="modal-editor-save" ${opts.readOnly ? "disabled" : ""}>${icon("save")}Save</button>
+    </div>
+  `;
+  overlay.hidden = false;
+
+  const textarea = document.getElementById("modal-editor");
+  const saveBtn = document.getElementById("modal-editor-save");
+  const cancelBtn = document.getElementById("modal-editor-cancel");
+
+  const close = () => {
+    overlay.hidden = true;
+    box.classList.remove("modal-large");
+    box.innerHTML = "";
+    removeDirtyGuard(guardId);
+    document.removeEventListener("keydown", onKey);
+  };
+
+  const onKey = (ev) => {
+    if (ev.key === "Escape") { ev.preventDefault(); void finish(false); }
+  };
+  document.addEventListener("keydown", onKey);
+
+  const dirty = () => !!cm && norm(cm.getValue()) !== originalText;
+  registerDirtyGuard(guardId, {
+    message: `${opts.title || "The file"} has unsaved changes.`,
+    isDirty: dirty,
+  });
+
+  const finish = async (saved) => {
+    if (!saved && dirty()) {
+      const ok = await confirmDialog("Discard unsaved changes?", { danger: true, confirmLabel: "Discard" });
+      if (!ok) return;
+    }
+    close();
+  };
+
+  cancelBtn.onclick = () => void finish(false);
+  saveBtn.onclick = async () => {
+    if (!cm) return;
+    saveBtn.disabled = true;
+    try {
+      await opts.onSave(cm.getValue());
+      toast(`${opts.title || "File"} saved`, "ok");
+      close();
+    } catch (e) {
+      toastError(e);
+      saveBtn.disabled = false;
+    }
+  };
+
+  // CM must not block the modal (lazy ~420KB load): the textarea shows
+  // immediately, CM replaces it when ready
+  loadCodeMirror().then((CM) => {
+    if (!document.getElementById("modal-editor")) return; // already closed
+    cm = CM.fromTextArea(textarea, {
+      mode: (opts.title || "").endsWith(".py") ? "python" : null,
+      theme: "payload",
+      lineNumbers: true,
+      indentUnit: 4,
+      tabSize: 4,
+      viewportMargin: Infinity,
+      readOnly: opts.readOnly ? "nocursor" : false,
+      extraKeys: { Tab: (instance) => instance.replaceSelection("    ") },
+    });
+    if (!opts.readOnly) cm.focus();
   });
 }
 
@@ -233,6 +332,57 @@ function infoDialog(bodyHtml) {
     cancelValue: undefined,
     actions: [{ label: "OK", className: "primary", autofocus: true }],
   });
+}
+
+/* ---------- context menu (right-click, desktop-style) ---------- */
+
+/* items: [{ label, icon, danger, action }]. Closes on outside click,
+ * Escape, or window blur; ArrowUp/Down navigate, Enter activates.
+ * The caller must preventDefault() on the 'contextmenu' event. */
+function openContextMenu(items, x, y) {
+  const prev = document.querySelector(".context-menu");
+  if (prev) prev.remove();
+  const menu = document.createElement("div");
+  menu.className = "context-menu";
+  menu.setAttribute("role", "menu");
+  menu.innerHTML = items.map((it, i) => `
+    <button type="button" class="context-item${it.danger ? " danger" : ""}" data-idx="${i}" role="menuitem">
+      ${it.icon ? iconSpan(it.icon) : ""}<span>${escapeHtml(it.label)}</span>
+    </button>`).join("");
+  document.body.appendChild(menu);
+
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = Math.max(4, Math.min(x, window.innerWidth - rect.width - 4)) + "px";
+  menu.style.top = Math.max(4, Math.min(y, window.innerHeight - rect.height - 4)) + "px";
+
+  const buttons = Array.from(menu.querySelectorAll(".context-item"));
+  const close = () => {
+    if (!menu.isConnected) return;
+    menu.remove();
+    document.removeEventListener("click", close);
+    document.removeEventListener("keydown", onKey);
+    window.removeEventListener("blur", close);
+  };
+  const onKey = (ev) => {
+    if (ev.key === "Escape") { ev.preventDefault(); close(); return; }
+    const idx = buttons.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+      ev.preventDefault();
+      const next = buttons[(idx + (ev.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length];
+      if (next) next.focus();
+    } else if (ev.key === "Enter" && idx >= 0) {
+      ev.preventDefault();
+      items[idx].action();
+      close();
+    }
+  };
+  buttons.forEach((btn, i) => {
+    btn.addEventListener("click", () => { items[i].action(); close(); });
+  });
+  document.addEventListener("click", close);
+  document.addEventListener("keydown", onKey);
+  window.addEventListener("blur", close);
+  if (buttons[0]) buttons[0].focus();
 }
 
 /* ---------- unsaved-changes guards ---------- */
@@ -520,13 +670,53 @@ function _animateDetailsToggle(details) {
   });
 }
 
+/* ---------- CodeMirror (vendored, lazy-loaded) ---------- */
+
+/* Lazy loading: codemirror.js + mode/python (~420KB together) have no
+ * reason to weigh down EVERY page, only the editors' — loaded the first
+ * time they're needed, then the same resolved Promise is reused. Used
+ * by both the local-plugin editor (plugins.js) and the file browser's
+ * text editor (files.js). */
+let _cmLoadPromise = null;
+function loadCodeMirror() {
+  if (_cmLoadPromise) return _cmLoadPromise;
+  // fast path: already present (e.g. another editor loaded it) — don't
+  // re-inject the <script> tags
+  if (window.CodeMirror) {
+    _cmLoadPromise = Promise.resolve(window.CodeMirror);
+    return _cmLoadPromise;
+  }
+  _cmLoadPromise = new Promise((resolveFn, rejectFn) => {
+    if (!document.getElementById("cm-css")) {
+      const cssLink = document.createElement("link");
+      cssLink.id = "cm-css";
+      cssLink.rel = "stylesheet";
+      cssLink.href = "/static/vendor/codemirror/codemirror.css";
+      document.head.appendChild(cssLink);
+    }
+    const coreScript = document.createElement("script");
+    coreScript.src = "/static/vendor/codemirror/codemirror.js";
+    coreScript.onload = () => {
+      const modeScript = document.createElement("script");
+      modeScript.src = "/static/vendor/codemirror/mode/python/python.js";
+      modeScript.onload = () => resolveFn(window.CodeMirror);
+      modeScript.onerror = () => rejectFn(new Error("Couldn't load the editor (Python mode)"));
+      document.body.appendChild(modeScript);
+    };
+    coreScript.onerror = () => rejectFn(new Error("Couldn't load the editor (codemirror.js)"));
+    document.body.appendChild(coreScript);
+  });
+  return _cmLoadPromise;
+}
+
 export {
   initTheme, toggleTheme,
   escapeHtml, raw, render, ICONS, iconSpan, icon,
   toast, toastError, openDialog, confirmDialog, promptDialog, infoDialog,
+  openContextMenu, loadCodeMirror,
   registerDirtyGuard, removeDirtyGuard, clearDirtyGuards, dirtyGuardActive,
   statusPill, baseName, fmtBytes, debounce, attachAutocomplete,
-  pageHeader, skeletonLoading, emptyCard, formatDescription, metaChip,
+  pageHeader, skeletonLoading, emptyCard, formatDescription, metaChip, openTextEditorModal,
   detailsCard, pinnedCard, fmtShortTimestamp, goldBadge, currentBadge,
   val, chk, _animateDetailsToggle,
 };

@@ -5,11 +5,15 @@
  * only wires them together. */
 "use strict";
 
-import { initTheme, toggleTheme, _animateDetailsToggle, skeletonLoading, emptyCard, toastError, confirmDialog, clearDirtyGuards, dirtyGuardActive } from "./js/ui.js";
+import { initTheme, toggleTheme, _animateDetailsToggle, emptyCard, toastError, confirmDialog, openDialog, clearDirtyGuards, dirtyGuardActive } from "./js/ui.js";
 import { api } from "./js/api.js";
 import { viewDashboard } from "./js/views/dashboard.js";
 import { viewTable } from "./js/views/table.js";
 import { viewBuildAll } from "./js/views/build_all.js";
+import { viewFiles } from "./js/views/files.js";
+import { viewBatch } from "./js/views/batch.js";
+import { viewLog } from "./js/views/log.js";
+import { openPalette } from "./js/palette.js";
 import { viewPlugins, viewPluginDetail, viewLocalPluginEditor } from "./js/views/plugins.js";
 import { viewClusters } from "./js/views/clusters.js";
 import { viewDoctor } from "./js/views/doctor.js";
@@ -23,6 +27,9 @@ const ROUTES = [
   [/^\/$/, viewDashboard],
   [/^\/table\/([^/]+)$/, viewTable],
   [/^\/build-all$/, viewBuildAll],
+  [/^\/files(?:\/(.+))?$/, viewFiles],
+  [/^\/batch$/, viewBatch],
+  [/^\/log$/, viewLog],
   [/^\/plugins$/, viewPlugins],
   [/^\/plugin\/([^/]+)$/, viewPluginDetail],
   [/^\/clusters$/, viewClusters],
@@ -38,6 +45,13 @@ async function router() {
   // every navigation renders a fresh page: guards registered by the
   // previous page (its editors are gone) must not linger
   clearDirtyGuards();
+  // close any open modal (e.g. the full-screen text editor) and drop
+  // its "large" sizing — a navigation supersedes whatever dialog the
+  // previous page left open
+  const modalOverlay = document.getElementById("modal-overlay");
+  if (modalOverlay) modalOverlay.hidden = true;
+  const modalBox = document.getElementById("modal-box");
+  if (modalBox) modalBox.classList.remove("modal-large");
   const path = (location.hash || "#/").slice(1) || "/";
   document.querySelectorAll(".nav a").forEach((a) => {
     a.classList.toggle("active", a.getAttribute("data-route") === "/" + path.split("/")[1] || (path === "/" && a.getAttribute("data-route") === "/"));
@@ -46,21 +60,35 @@ async function router() {
     const m = path.match(pattern);
     if (m) {
       const content = document.getElementById("content");
-      content.innerHTML = skeletonLoading();
+      // no skeleton, no fade, no "loading": each view renders its own
+      // content directly when it's ready — the previous page stays
+      // until then, so navigation never flashes a loading state
       try {
-        await handler(...m.slice(1));
+        // route params come URL-encoded (location.hash keeps the %XX);
+        // decode them here so every handler gets the real name ("Un'altra
+        // tabella", not "Un%27altra%20tabella") — re-encoded on the API
+        // calls with encodeURIComponent
+        await handler(...m.slice(1).map((p) => decodeURIComponent(p)));
       } catch (e) {
         content.innerHTML = emptyCard(e.message, e.hint);
         toastError(e);
         return;
       }
-      content.classList.remove("route-fade");
-      void content.offsetWidth; // restarts the CSS animation even on repeated routes
-      content.classList.add("route-fade");
       return;
     }
   }
   document.getElementById("content").innerHTML = '<p class="empty-state">Page not found.</p>';
+}
+
+// navigation is serialized: a route change started while the previous
+// view is still loading must not interleave with it, otherwise the
+// SLOW view finishing last would overwrite the NEW page with its own
+// content (e.g. the dashboard's report/clusters rendering clobbering a
+// table page you just navigated to). The latest navigation always
+// renders last.
+let navigation = Promise.resolve();
+function navigate() {
+  navigation = navigation.then(() => router()).catch(() => {});
 }
 
 // the hash the app is currently showing — the dirty-guard wrapper
@@ -82,7 +110,7 @@ window.addEventListener("hashchange", async () => {
     }
   }
   lastHash = target;
-  router();
+  navigate();
 });
 
 // covers close/refresh (hashchange can't), for the browsers that show
@@ -98,7 +126,64 @@ window.addEventListener("beforeunload", (e) => {
 
 initTheme();
 
+/* global keyboard shortcuts:
+ *   /  -> command palette       ?  -> this list
+ *   g <key> -> jump (two-key navigation): g d dashboard, g f files,
+ *   g l log, g b build-all, g t batch, g p plugins, g c clusters,
+ *   g o doctor, g x config, g e export & clean, g h docs
+ * Ignored while typing in an input/textarea/select/contenteditable. */
+const NAV_SHORTCUTS = {
+  d: "#/", f: "#/files", l: "#/log", b: "#/build-all", t: "#/batch",
+  p: "#/plugins", c: "#/clusters", o: "#/doctor", x: "#/config", e: "#/tools", h: "#/docs",
+};
+const _isTypingTarget = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
+
+function openShortcutsHelp() {
+  const rows = [
+    ["/", "Command palette"], ["?", "This help"],
+    ["g d", "Dashboard"], ["g f", "Files"], ["g l", "Activity"],
+    ["g b", "Build all"], ["g t", "Batch tables"], ["g p", "Plugins"],
+    ["g c", "Clusters"], ["g o", "Doctor"], ["g x", "Configuration"],
+    ["g e", "Export & clean"], ["g h", "Documentation"],
+  ];
+  openDialog({
+    title: "Keyboard shortcuts",
+    body: `<div class="kbd-table">${rows.map(([k, label]) => `<div class="kbd-row"><span class="kbd">${k}</span><span>${label}</span></div>`).join("")}</div>`,
+    actions: [{ label: "Close", autofocus: true }],
+  });
+}
+
+document.addEventListener("keydown", (ev) => {
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k") {
+    ev.preventDefault();
+    openPalette();
+    return;
+  }
+  if (ev.key === "/" && !_isTypingTarget(ev.target)) {
+    ev.preventDefault();
+    openPalette();
+    return;
+  }
+  if (ev.key === "?" && !_isTypingTarget(ev.target)) {
+    ev.preventDefault();
+    openShortcutsHelp();
+    return;
+  }
+  // two-key navigation: "g" arms, the next key jumps
+  if (ev.key === "g" && !ev.metaKey && !ev.ctrlKey && !ev.altKey && !_isTypingTarget(ev.target)) {
+    window.__gNavArmed = true;
+    setTimeout(() => { window.__gNavArmed = false; }, 1500);
+    return;
+  }
+  if (window.__gNavArmed && NAV_SHORTCUTS[ev.key]) {
+    ev.preventDefault();
+    window.__gNavArmed = false;
+    location.hash = NAV_SHORTCUTS[ev.key];
+  }
+});
+
 document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
+document.getElementById("palette-trigger").addEventListener("click", () => openPalette());
 
 document.getElementById("content").addEventListener("click", (e) => {
   const summary = e.target.closest("summary");
@@ -111,6 +196,8 @@ document.getElementById("content").addEventListener("click", (e) => {
 api("/api/health").then((r) => {
   document.getElementById("root-path").textContent = r.root;
   document.getElementById("root-path").title = r.root;
+  const versionEl = document.getElementById("app-version");
+  if (versionEl && r.version) versionEl.textContent = `payload v${r.version}`;
 }).catch(() => {});
 
-router();
+navigate();

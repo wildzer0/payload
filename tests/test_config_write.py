@@ -475,3 +475,114 @@ def test_cluster_and_table_meta_crud_round_trip_via_resolve(tmp_path):
     assert metas["t1"].cluster == "sensors"
     assert metas["t1"].tags == ["prod"]
     assert clusters["sensors"].defaults == {"writer": "hex"}
+
+
+
+
+def _init_project(tmp_path):
+    from typer.testing import CliRunner
+
+    from payload.cli import app as cli_app
+
+    runner = CliRunner()
+    root = tmp_path / "proj"
+    result = runner.invoke(cli_app, ["init", str(root)])
+    assert result.exit_code == 0, result.stdout
+    return root
+
+
+def test_meta_notes_and_properties_roundtrip(tmp_path):
+    from payload.core.config import set_table_meta_fields, set_table_tags
+    from payload.core.config import load_config
+    from payload.core.table_meta import resolve_table_meta
+
+    root = _init_project(tmp_path)
+    # notes + properties, alongside existing tags
+    set_table_tags(root, "example_table", ["raw"])
+    set_table_meta_fields(root, "example_table", notes="calibrated at boot", properties={"address": "0x8000", "version": "2"})
+
+    base = load_config(root)
+    meta = resolve_table_meta(root, base)
+    assert meta["example_table"].notes == "calibrated at boot"
+    assert meta["example_table"].properties == {"address": "0x8000", "version": "2"}
+    assert meta["example_table"].tags == ["raw"]
+
+    # clearing everything drops the [[table_meta]] entry entirely
+    set_table_meta_fields(root, "example_table", notes="", properties={})
+    set_table_tags(root, "example_table", [])
+    base = load_config(root)
+    assert resolve_table_meta(root, base) == {}
+    raw = (root / "table-tool.toml").read_text(encoding="utf-8")
+    assert "example_table" not in raw
+
+
+def test_meta_properties_are_injected_into_reader_config(tmp_path):
+    from payload.core.config import set_table_meta_fields
+    from payload.core.config import load_config
+    from payload.core.ir import TableIR
+    from payload.core.registry import load_plugins
+    from payload.core.pipeline import build
+
+    root = _init_project(tmp_path)
+    set_table_meta_fields(root, "example_table", notes="n", properties={"address": "0x8000"})
+
+    source_path = root / "example_table.raw"
+    config = load_config(root)
+    out_dir = root / "build"
+    out_dir.mkdir(exist_ok=True)
+    registry = load_plugins(project_root=root)
+
+    captured = {}
+
+    class FakeReader:
+        name = "fake_reader"
+        extensions = [".raw"]
+        api_version = "1.0"
+        default_writer = None
+        compatible_readers = None
+
+        def __init__(self):  # pragma: no cover - test helper
+            pass
+
+        def sniff(self, path):  # pragma: no cover - test helper
+            return False
+
+        def parse(self, path, cfg):
+            captured["cfg"] = cfg
+            return TableIR(name="example_table", data=b"x", source_path=path, source_format="raw_text")
+
+    registry.register_reader(FakeReader())
+
+    build(
+        [source_path], registry, config, out_dir,
+        reader_name="fake_reader", writer_name=None, force=True, table_name="example_table",
+    )
+    assert captured["cfg"]["table_meta"]["notes"] == "n"
+    assert captured["cfg"]["table_meta"]["properties"] == {"address": "0x8000"}
+    assert captured["cfg"]["table_meta"]["cluster"] is None
+
+
+def test_meta_properties_must_be_dict_of_strings(tmp_path):
+    from payload.core.config import load_config
+
+    root = _init_project(tmp_path)
+    (root / "table-tool.toml").write_text(
+        '[[table_meta]]\nname = "example_table"\nproperties = { bad = 1 }\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(Exception) as exc:
+        load_config(root)
+    assert "dict of strings" in str(exc.value)
+
+
+
+
+def test_report_html_includes_warnings(tmp_path):
+    from payload.core.report import render_report_html
+
+    root = _init_project(tmp_path)
+    # two files with the same stem → duplicate-stem problem warning
+    (root / "dupe.raw").write_text("# a\n", encoding="utf-8")
+    (root / "dupe.txt").write_text("# b\n", encoding="utf-8")
+    body = render_report_html(root)
+    assert "Project needs attention" in body

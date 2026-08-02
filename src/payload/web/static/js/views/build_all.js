@@ -1,6 +1,5 @@
 /* Build-all view (route "/build-all"): the SSE live log for a batch
- * build of every table (see routes/build.py). Split out of the former
- * single-file app.js — no behavior change. */
+ * build of every table (see routes/build.py). */
 "use strict";
 
 import { render, raw, pageHeader, icon, iconSpan, val, chk, attachAutocomplete } from "../ui.js";
@@ -8,14 +7,31 @@ import { getPlugins } from "../api.js";
 
 const MAX_BUILD_ALL_JOBS = 32;
 
+function _fmtSummary(d) {
+  const parts = [`${d.built} built`, `${d.cached} from cache`];
+  if (d.golden_mismatch) parts.push(`${d.golden_mismatch} golden mismatch`);
+  if (d.errors) parts.push(`${d.errors} errors`);
+  return parts.join(" · ");
+}
+
 function viewBuildAll() {
   document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Build all", "Builds every table discovered under the project root."))}
+    ${raw(pageHeader("Build all", "Build every table discovered under the project root."))}
     <div class="card">
+      <h2 class="card-title">Configuration</h2>
       <div class="field-row">
-        <div class="field"><label>Writer (--to)</label><div class="autocomplete-wrap"><input type="text" id="ba-to" placeholder="bin"></div></div>
-        <div class="field"><label>Filter glob</label><input type="text" id="ba-filter" placeholder="sensors/**"></div>
-        <div class="field"><label>Jobs (max ${MAX_BUILD_ALL_JOBS})</label><input type="number" id="ba-jobs" value="1" min="1" max="${MAX_BUILD_ALL_JOBS}" class="w-80"></div>
+        <div class="field">
+          <label>Writer</label>
+          <div class="autocomplete-wrap"><input type="text" id="ba-to" placeholder="default"></div>
+        </div>
+        <div class="field">
+          <label>Filter (glob)</label>
+          <input type="text" id="ba-filter" placeholder="sensors/**">
+        </div>
+        <div class="field">
+          <label>Jobs (1–${MAX_BUILD_ALL_JOBS})</label>
+          <input type="number" id="ba-jobs" value="1" min="1" max="${MAX_BUILD_ALL_JOBS}" class="w-80">
+        </div>
       </div>
       <div class="toggle-chip-row">
         <label class="toggle-chip"><input type="checkbox" id="ba-force"><span>--force</span></label>
@@ -23,8 +39,11 @@ function viewBuildAll() {
       </div>
       <div class="build-actions">
         <button class="primary" id="ba-start">${icon("play")}Start build-all</button>
+        <span class="subtitle" id="ba-status">Idle — the log below shows live progress.</span>
       </div>
-      <h2>Log</h2>
+    </div>
+    <div class="card">
+      <h2 class="card-title">Log</h2>
       <div class="log" id="ba-log"><span class="log-empty">Waiting…</span></div>
     </div>
   `;
@@ -41,6 +60,9 @@ function viewBuildAll() {
   };
   jobsInput.addEventListener("change", clampJobs);
 
+  const statusEl = document.getElementById("ba-status");
+  const setStatus = (html) => { statusEl.innerHTML = html; };
+
   document.getElementById("ba-start").onclick = () => {
     clampJobs();
     const log = document.getElementById("ba-log");
@@ -54,28 +76,31 @@ function viewBuildAll() {
 
     const btn = document.getElementById("ba-start");
     btn.disabled = true;
+    setStatus(`Running…`);
     const es = new EventSource("/api/build-all/stream?" + params.toString());
-    const appendLine = (text) => {
+    const appendLine = (text, cls) => {
       const line = document.createElement("div");
-      line.className = "log-line";
+      line.className = "log-line" + (cls ? " log-line-" + cls : "");
       line.textContent = text;
       log.appendChild(line);
       log.scrollTop = log.scrollHeight;
     };
     es.addEventListener("progress", (ev) => {
       const d = JSON.parse(ev.data);
-      appendLine(`${d.status === "ok" ? "✓" : "✗"} ${d.source}`);
+      appendLine(`${d.status === "ok" ? "✓" : "✗"} ${d.source}`, d.status === "ok" ? "ok" : "fail");
     });
     es.addEventListener("summary", (ev) => {
       const d = JSON.parse(ev.data);
-      appendLine(`— done: ${d.built} built, ${d.cached} from cache, ${d.golden_mismatch} golden mismatch, ${d.errors} errors`);
+      appendLine(`— done: ${_fmtSummary(d)}`);
+      setStatus(`Done — ${_fmtSummary(d)}`);
       es.close();
       btn.disabled = false;
     });
     es.addEventListener("error", (ev) => {
       if (ev.data) {
         const d = JSON.parse(ev.data);
-        appendLine(`✗ ${d.message}`);
+        appendLine(`✗ ${d.message}`, "fail");
+        setStatus(`Failed: ${d.message}`);
       }
       es.close();
       btn.disabled = false;

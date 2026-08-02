@@ -11,17 +11,20 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from payload.core.cache import BuildCache
+from payload.core.activity import log_event
 from payload.core.clusters import resolve_clusters
 from payload.core.discovery import discover_for_history, resolve_table_config, resolve_table_ref
 from payload.core.errors import SourceNotFoundError, TableNotFoundError
 from payload.core.history import HistoryStore
 from payload.core.table_admin import (
+    clone_table,
     delete_batch_member,
     delete_table,
     import_batch_member,
     import_many_single_tables,
     import_new_batch_table,
     import_single_table,
+    rename_table,
 )
 from payload.core.table_meta import resolve_table_meta
 from payload.web.errors import InvalidRequestError
@@ -151,7 +154,45 @@ async def import_route(request: Request) -> JSONResponse:
     return JSONResponse(await anyio.to_thread.run_sync(_run))
 
 
+async def rename_table_route(request: Request) -> JSONResponse:
+    """Rename a table end to end (source, sidecar, history, config) —
+    see core/table_admin.rename_table. Records an activity event."""
+    body = await request.json()
+    table_name = body.get("table_name")
+    new_name = body.get("new_name")
+    if not table_name or not new_name:
+        raise InvalidRequestError("missing 'table_name'/'new_name' parameter")
+    root = request.app.state.root
+
+    def _run():
+        r = rename_table(root, table_name, new_name)
+        log_event(root, "table", f"renamed '{r['from']}' → '{r['to']}'")
+        return r
+
+    return JSONResponse(await anyio.to_thread.run_sync(_run))
+
+
+async def clone_table_route(request: Request) -> JSONResponse:
+    """Duplicate a single-file table (source, sidecar, tags/cluster) as
+    a new table with fresh history. Records an activity event."""
+    body = await request.json()
+    table_name = body.get("table_name")
+    new_name = body.get("new_name")
+    if not table_name or not new_name:
+        raise InvalidRequestError("missing 'table_name'/'new_name' parameter")
+    root = request.app.state.root
+
+    def _run():
+        r = clone_table(root, table_name, new_name)
+        log_event(root, "table", f"cloned '{r['from']}' as '{r['to']}'")
+        return r
+
+    return JSONResponse(await anyio.to_thread.run_sync(_run))
+
+
 ROUTES = [
     Route("/api/table/delete", delete_table_route, methods=["POST"]),
+    Route("/api/table/rename", rename_table_route, methods=["POST"]),
+    Route("/api/table/clone", clone_table_route, methods=["POST"]),
     Route("/api/table/import", import_route, methods=["POST"]),
 ]

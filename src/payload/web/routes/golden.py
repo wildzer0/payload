@@ -14,6 +14,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from payload.core.activity import log_event
 from payload.core.clusters import resolve_clusters
 from payload.core.discovery import discover_for_history, resolve_table_config, resolve_table_ref
 from payload.core.errors import TableNotFoundError
@@ -68,6 +69,7 @@ async def golden_set_route(request: Request) -> JSONResponse:
         _find_ref(sources, batch_tables, table)  # validates that the table exists
         history = HistoryStore(root)
         golden_id = set_golden(history, table, snapshot_id)
+        log_event(root, "golden", f"'{table}' → snapshot #{golden_id}")
         return {"table": table, "golden_snapshot_id": golden_id}
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
@@ -80,6 +82,8 @@ async def golden_clear_route(request: Request) -> JSONResponse:
     def _run():
         history = HistoryStore(root)
         cleared = clear_golden(history, table)
+        if cleared:
+            log_event(root, "golden", f"'{table}' golden removed")
         return {"table": table, "status": "cleared" if cleared else "not_set"}
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))

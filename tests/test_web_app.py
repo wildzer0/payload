@@ -37,10 +37,10 @@ def test_health_reports_configured_root(tmp_path):
     client = TestClient(create_app(tmp_path))
     r = client.get("/api/health")
     assert r.status_code == 200
-    assert r.json() == {
-        "status": "ok", "root": str(tmp_path),
-        "project_name": tmp_path.name, "project_description": "",
-    }
+    body = r.json()
+    assert body["status"] == "ok" and body["root"] == str(tmp_path)
+    assert body["project_name"] == tmp_path.name and body["project_description"] == ""
+    assert "version" in body
 
 
 def test_health_reports_project_name_from_config(tmp_path):
@@ -64,6 +64,18 @@ def test_static_files_are_served(tmp_path):
     client = TestClient(create_app(tmp_path))
     r = client.get("/static/index.html")
     assert r.status_code == 200
+
+
+def test_static_and_index_always_revalidate(tmp_path):
+    """The webapp has no versioned asset URLs — without
+    Cache-Control: no-cache a browser's heuristic caching serves STALE
+    modules after a frontend update (confusing half-fixed behavior).
+    Static files and the index shell must revalidate on every load."""
+    client = TestClient(create_app(tmp_path))
+    for path in ["/", "/static/app.js", "/static/style.css"]:
+        r = client.get(path)
+        assert r.status_code == 200
+        assert "no-cache" in r.headers["cache-control"], path
 
 
 def test_not_found_error_maps_to_404():
@@ -127,3 +139,12 @@ def test_unexpected_exception_becomes_generic_500():
     body = r.json()
     assert body["error"] == "InternalError"
     assert "internal bug" not in body["message"]  # no internal details exposed to the client
+
+
+def test_health_reports_version(tmp_path):
+    from importlib.metadata import version as dist_version
+
+    client = TestClient(create_app(tmp_path))
+    body = client.get("/api/health").json()
+    assert body["status"] == "ok"
+    assert body["version"] == dist_version("payload")

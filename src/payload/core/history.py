@@ -114,6 +114,23 @@ class HistoryStore:
     def _manifest_path(self, table_name: str) -> Path:
         return self.tables_dir / f"{table_name}.json"
 
+    def rename_table(self, old_name: str, new_name: str) -> None:
+        """Migrate a table's history after a rename: the per-table
+        manifest file and the golden/head pointers. The blob store is
+        content-addressed and shared, so it needs no move."""
+        old_manifest = self._manifest_path(old_name)
+        new_manifest = self._manifest_path(new_name)
+        if old_manifest.exists() and not new_manifest.exists():
+            old_manifest.rename(new_manifest)
+        golden = self._load_golden_map()
+        if old_name in golden:
+            golden[new_name] = golden.pop(old_name)
+            self._save_golden_map(golden)
+        head = self._load_head_map()
+        if old_name in head:
+            head[new_name] = head.pop(old_name)
+            self._save_head_map(head)
+
     def _load_manifest(self, table_name: str) -> list[SnapshotMeta]:
         path = self._manifest_path(table_name)
         if not path.exists():

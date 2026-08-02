@@ -17,6 +17,7 @@ from starlette.routing import Route
 
 from payload.core.batch import run_batch_build
 from payload.core.batch_tables import effective_config, resolve_batch_tables
+from payload.core.activity import log_event
 from payload.core.cache import BuildCache
 from payload.core.clusters import resolve_clusters
 from payload.core.config import load_config
@@ -92,6 +93,8 @@ async def build_route(request: Request) -> JSONResponse:
             table_name=table_name,
         )
         cache.save()
+
+        log_event(root, "build", f"'{table_name}' → {', '.join(str(p) for p in out_paths)} ({'built' if was_built else 'from cache'})")
 
         golden_status = None
         if body.get("check_golden") and not body.get("dry_run"):
