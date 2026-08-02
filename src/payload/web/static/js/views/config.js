@@ -4,7 +4,7 @@
  * single-file app.js — no behavior change. */
 "use strict";
 
-import { escapeHtml, raw, render, pageHeader, statusPill, icon, val, toast, toastError } from "../ui.js";
+import { escapeHtml, raw, render, pageHeader, statusPill, icon, val, toast, toastError, registerDirtyGuard } from "../ui.js";
 import { api } from "../api.js";
 
 function _cfgFieldId(section, key) { return `cfg-${section}-${key}`; }
@@ -124,11 +124,11 @@ async function viewConfig() {
     </div>
     <details class="section-collapse">
       <summary>TOML preview</summary>
-      <div class="card" style="margin-top:10px"><pre class="settings-preview" id="cfg-preview"></pre></div>
+      <div class="card mt-10"><pre class="settings-preview" id="cfg-preview"></pre></div>
     </details>
     <details class="section-collapse">
       <summary>Detailed resolution (default → global → sidecar)</summary>
-      <div class="card" style="margin-top:10px">
+      <div class="card mt-10">
         <div class="table-scroll">
           <table><thead><tr><th>Field</th><th>Value</th><th>Origin</th></tr></thead><tbody>${rows}</tbody></table>
         </div>
@@ -140,6 +140,14 @@ async function viewConfig() {
   const preview = document.getElementById("cfg-preview");
   const dirtyStatus = document.getElementById("cfg-dirty-status");
   const saveBtn = document.getElementById("cfg-save");
+
+  // unsaved-changes guard: dirty while the form differs from disk
+  // (refresh() keeps unsavedCount in sync with what it computes)
+  let unsavedCount = 0;
+  registerDirtyGuard("config-page", {
+    message: "The project configuration has unsaved changes.",
+    isDirty: () => unsavedCount > 0,
+  });
 
   const fieldOriginal = (section, key) => originalValues.defaults[key];
 
@@ -156,6 +164,7 @@ async function viewConfig() {
       row.querySelector(".settings-row-dirty-note").hidden = !changed;
       if (changed) changedCount += 1;
     });
+    unsavedCount = changedCount;
 
     dirtyStatus.textContent = changedCount ? `${changedCount} unsaved changes` : "No changes";
     dirtyStatus.className = "settings-toolbar-status" + (changedCount ? " settings-toolbar-status-dirty" : "");

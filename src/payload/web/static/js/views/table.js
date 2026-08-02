@@ -8,6 +8,7 @@ import {
   escapeHtml, raw, render, icon, iconSpan, ICONS, toast, toastError,
   confirmDialog, statusPill, pageHeader, detailsCard, pinnedCard,
   goldBadge, currentBadge, baseName, val, chk, attachAutocomplete,
+  registerDirtyGuard, removeDirtyGuard,
 } from "../ui.js";
 import { api, getPlugins, ensureTableSources, findSourcePath } from "../api.js";
 
@@ -34,7 +35,7 @@ async function viewTable(name) {
   `;
 
   const historyBody = `
-    <div id="golden-summary" style="margin-bottom:14px"></div>
+    <div id="golden-summary" class="mb-14"></div>
     <div class="field">
       <label>Commit message</label>
       <textarea id="commit-message" class="commit-message-input mono" rows="3" maxlength="${COMMIT_MESSAGE_MAX_LENGTH}" placeholder="Describe what changed…"></textarea>
@@ -57,12 +58,12 @@ async function viewTable(name) {
   const tagsClusterBody = `
     <div class="field">
       <label>Cluster</label>
-      <select id="tc-cluster" class="inline-select" style="width:100%;max-width:none"><option value="">— none —</option></select>
+      <select id="tc-cluster" class="inline-select w-full max-w-none"><option value="">— none —</option></select>
     </div>
     <div class="field">
       <label>Tags</label>
       <div id="tc-tag-chips" class="table-summary-tags"></div>
-      <input type="text" id="tc-tag-input" placeholder="Add a tag, press Enter" style="margin-top:8px">
+      <input type="text" id="tc-tag-input" placeholder="Add a tag, press Enter" class="mt-8">
     </div>
   `;
 
@@ -103,7 +104,7 @@ async function viewTable(name) {
     const chips = tcTags.map((tag) => `
       <span class="pill pill-dim">${escapeHtml(tag)} <button type="button" class="chip-remove" data-remove-tag="${escapeHtml(tag)}" aria-label="Remove tag">×</button></span>
     `).join("");
-    document.getElementById("tc-tag-chips").innerHTML = chips || '<span class="empty-state" style="margin:0">No tag</span>';
+    document.getElementById("tc-tag-chips").innerHTML = chips || '<span class="empty-state m-0">No tag</span>';
     document.querySelectorAll("[data-remove-tag]").forEach((btn) => {
       btn.onclick = async () => {
         tcTags = tcTags.filter((t) => t !== btn.dataset.removeTag);
@@ -246,7 +247,7 @@ async function hexDumpHtml(name) {
     const chunk = bytes.slice(i, i + 8);
     const hex = Array.from(chunk).map((c) => c.charCodeAt(0).toString(16).padStart(2, "0").toUpperCase()).join(" ");
     const comment = (ir.comments.find((c) => c.offset === i) || {}).text || "";
-    hexLines.push(render`<div class="hex-chunk"><span class="offset">0x${i.toString(16).padStart(4, "0").toUpperCase()}</span><span>${hex}</span><span style="color:var(--text-dim)">${comment}</span></div>`);
+    hexLines.push(render`<div class="hex-chunk"><span class="offset">0x${i.toString(16).padStart(4, "0").toUpperCase()}</span><span>${hex}</span><span class="text-dim">${comment}</span></div>`);
   }
   return `<div class="log">${hexLines.join("") || '<span class="log-empty">empty</span>'}</div>`;
 }
@@ -260,6 +261,17 @@ async function loadSource(name) {
   try {
     const info = await api("/api/source/" + encodeURIComponent(name));
     if (info.editable) {
+      // unsaved-changes guard: dirty until the textarea matches what's
+      // on disk (re-registering the same id replaces the previous guard,
+      // so re-renders of this card don't accumulate stale ones)
+      let originalContent = info.content;
+      registerDirtyGuard("source:" + name, {
+        message: `The source of '${name}' has unsaved changes.`,
+        isDirty: () => {
+          const ta = document.getElementById("source-editor");
+          return !!ta && ta.value !== originalContent;
+        },
+      });
       el.innerHTML = render`
         <textarea id="source-editor" class="source-editor mono" spellcheck="false" rows="14">${info.content}</textarea>
         <div class="source-editor-actions">
@@ -286,6 +298,7 @@ async function loadSource(name) {
       document.getElementById("btn-save-source").onclick = async () => {
         try {
           await api("/api/source/" + encodeURIComponent(name), { method: "PUT", body: { content: document.getElementById("source-editor").value } });
+          originalContent = document.getElementById("source-editor").value; // saved: guard turns clean
           toast("Source saved", "ok");
           runValidate();
         } catch (e) {
@@ -294,6 +307,8 @@ async function loadSource(name) {
       };
       document.getElementById("btn-validate-source").onclick = runValidate;
     } else {
+      // not editable (binary): no dirty state can exist for this card
+      removeDirtyGuard("source:" + name);
       const hex = await hexDumpHtml(name);
       el.innerHTML = render`
         <div class="result-line">${statusPill("warn")}<span>${info.reason} — not editable from here, hex view only.</span></div>
@@ -347,12 +362,12 @@ async function loadPipelineBuilder(name) {
           fields = `<select data-field="name" data-idx="${i}">${optionList(names, s.name)}</select>`;
         } else {
           fields = `
-            <input type="text" data-field="command" data-idx="${i}" value="${escapeHtml(s.command || "")}" placeholder="external command, e.g. objcopy {input} {output}" style="flex:1;min-width:220px">
+            <input type="text" data-field="command" data-idx="${i}" value="${escapeHtml(s.command || "")}" placeholder="external command, e.g. objcopy {input} {output}" class="flex-1 min-w-220">
             <select data-field="on_error" data-idx="${i}">
               <option value="fail" ${s.on_error !== "warn" ? "selected" : ""}>on_error: fail</option>
               <option value="warn" ${s.on_error === "warn" ? "selected" : ""}>on_error: warn</option>
             </select>
-            <input type="text" data-field="output_extension" data-idx="${i}" value="${escapeHtml(s.output_extension || "")}" placeholder="extension if final, e.g. .signed.bin" style="width:200px">
+            <input type="text" data-field="output_extension" data-idx="${i}" value="${escapeHtml(s.output_extension || "")}" placeholder="extension if final, e.g. .signed.bin" class="w-200">
           `;
         }
         return `
@@ -378,7 +393,7 @@ async function loadPipelineBuilder(name) {
             <option value="exec">exec</option>
           </select>
           <button type="button" id="pb-add"><span class="icon">${ICONS.plus}</span>Add stage</button>
-          <span style="flex:1"></span>
+          <span class="flex-1"></span>
           <button type="button" id="pb-reset">${iconSpan("refresh")}Restore implicit</button>
           <button type="button" class="primary" id="pb-save">${iconSpan("save")}Save pipeline</button>
         </div>
@@ -495,9 +510,9 @@ async function loadSidecarCard(name) {
 
     el.innerHTML = `
       <p class="subtitle">Only the selected fields override the global config for this table.</p>
-      <h2 style="margin-top:16px">Defaults</h2>
+      <h2 class="mt-16">Defaults</h2>
       ${defaultsRows}
-      <div class="toolbar" style="margin-top:14px">
+      <div class="toolbar mt-14">
         <button type="button" class="primary" id="sc-save">${iconSpan("save")}Save sidecar</button>
         <button type="button" class="danger" id="sc-delete" ${hasSidecar ? "" : "disabled"}>${iconSpan("trash")}Delete sidecar</button>
       </div>

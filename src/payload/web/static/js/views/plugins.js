@@ -8,7 +8,7 @@
 import {
   escapeHtml, raw, render, icon, iconSpan, toast, toastError,
   confirmDialog, detailsCard, pageHeader, statusPill, metaChip,
-  formatDescription, val, debounce,
+  formatDescription, val, debounce, registerDirtyGuard, clearDirtyGuards,
 } from "../ui.js";
 import { api, apiUpload, invalidatePluginsCache } from "../api.js";
 
@@ -54,7 +54,7 @@ function _pluginToolbarHtml(plugins) {
     </button>`;
   return `
     <div class="plugin-toolbar">
-      <div class="toggle-chip-row" id="plugin-kind-filters" style="margin:0">
+      <div class="toggle-chip-row m-0" id="plugin-kind-filters">
         ${chip("", "All")}
         ${Object.entries(PLUGIN_KIND_META).map(([kind, meta]) => chip(kind, meta.title)).join("")}
       </div>
@@ -99,7 +99,7 @@ async function viewPlugins() {
         <span>Drag a .py plugin file here, or click to choose</span>
       </label>
       <input type="file" id="plugin-install-file-input" accept=".py" multiple hidden>
-      <div class="field-row" style="margin-top:14px">
+      <div class="field-row mt-14">
         <div class="field"><label>Local path or http(s):// URL</label><input type="text" id="pi-source" placeholder="examples/plugins/raw_text.py"></div>
         <div class="field"><label>Install as (optional)</label><input type="text" id="pi-as-name" placeholder="my_reader.py"></div>
       </div>
@@ -370,15 +370,15 @@ async function viewLocalPluginEditor(rawFilename) {
     <div class="breadcrumb"><a class="link" href="#/plugins">← Plugins</a></div>
     ${raw(pageHeader(filename, "Plugin editor — edit, check syntax, and test conformance directly from here."))}
     <div class="card">
-      <div class="field-row" style="align-items:center">
-        <div class="field" style="flex:2;min-width:220px"><label>Sample file for the test (reader only, optional)</label><input type="text" id="lpe-sample" placeholder="example.raw"></div>
-        <div class="field" style="flex:0 0 auto"><label>Syntax</label><span class="pill pill-dim" id="lpe-syntax-status">checking…</span></div>
+      <div class="field-row align-center">
+        <div class="field flex-2 min-w-220"><label>Sample file for the test (reader only, optional)</label><input type="text" id="lpe-sample" placeholder="example.raw"></div>
+        <div class="field flex-none"><label>Syntax</label><span class="pill pill-dim" id="lpe-syntax-status">checking…</span></div>
       </div>
       <textarea id="lpe-editor"></textarea>
-      <div class="toolbar" style="margin-top:12px">
+      <div class="toolbar mt-12">
         <button class="primary" id="lpe-save">${icon("save")}Save</button>
         <button id="lpe-test">Test plugin</button>
-        <button class="danger" id="lpe-delete" style="margin-left:auto">${icon("trash")}Delete plugin</button>
+        <button class="danger ml-auto" id="lpe-delete">${icon("trash")}Delete plugin</button>
       </div>
       <div id="lpe-result"></div>
     </div>
@@ -395,6 +395,14 @@ async function viewLocalPluginEditor(rawFilename) {
     indentWithTabs: false,
     viewportMargin: Infinity,
     extraKeys: { Tab: (instance) => instance.replaceSelection("    ") },
+  });
+
+  // unsaved-changes guard: dirty until the editor content matches what
+  // was loaded (both Save and Test persist it, turning the guard clean)
+  let originalContent = fileData.content;
+  registerDirtyGuard("local-plugin-editor", {
+    message: `'${filename}' has unsaved changes.`,
+    isDirty: () => cm.getValue() !== originalContent,
   });
 
   let errorLine = null;
@@ -426,6 +434,7 @@ async function viewLocalPluginEditor(rawFilename) {
   document.getElementById("lpe-save").onclick = async () => {
     try {
       await api("/api/local-plugins/" + encodeURIComponent(filename), { method: "PUT", body: { content: cm.getValue() } });
+      originalContent = cm.getValue(); // saved: guard turns clean
       invalidatePluginsCache();
       toast("Saved", "ok");
     } catch (e) {
@@ -437,6 +446,7 @@ async function viewLocalPluginEditor(rawFilename) {
     const resultEl = document.getElementById("lpe-result");
     try {
       await api("/api/local-plugins/" + encodeURIComponent(filename), { method: "PUT", body: { content: cm.getValue() } });
+      originalContent = cm.getValue(); // Test also persists the content
       invalidatePluginsCache();
       const sample = val("lpe-sample");
       const r = await api("/api/local-plugins/" + encodeURIComponent(filename) + "/test", { body: { sample: sample || undefined } });
@@ -446,7 +456,7 @@ async function viewLocalPluginEditor(rawFilename) {
     }
   };
 
-  document.getElementById("lpe-delete").onclick = () => deleteLocalPlugin(filename, () => { location.hash = "#/plugins"; });
+  document.getElementById("lpe-delete").onclick = () => deleteLocalPlugin(filename, () => { clearDirtyGuards(); location.hash = "#/plugins"; });
 }
 
 export { viewPlugins, viewPluginDetail, viewLocalPluginEditor };

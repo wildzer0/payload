@@ -107,25 +107,88 @@ function toastError(e) {
   toast(e.message || String(e), "error", e.hint);
 }
 
-/* ---------- confirmation modal (replaces native confirm()) ---------- */
+/* ---------- modal (single primitive behind every dialog) ---------- */
+
+/* Core modal. Renders the overlay/box, manages focus (trap + restore),
+ * Escape-to-close, overlay-click-to-close, and resolves the promise
+ * exactly once. opts:
+ *   body         trusted HTML for the box body (callers escape first)
+ *   title        optional heading (aria-labelledby when set)
+ *   actions      [{ label, className, value, autofocus }] — the promise
+ *                resolves with action.value; a function value is called
+ *                at click time; value === undefined resolves as "cancel"
+ *   cancelValue  value for Cancel/overlay/Escape (default null)
+ *   onOpen(box)  called after rendering (custom focus setup)
+ */
+function openDialog(opts) {
+  const overlay = document.getElementById("modal-overlay");
+  const box = document.getElementById("modal-box");
+  const cancelValue = opts.cancelValue !== undefined ? opts.cancelValue : null;
+  return new Promise((resolveFn) => {
+    const actions = opts.actions || [];
+    const actionsHtml = actions.map((a, i) =>
+      `<button type="button" id="modal-action-${i}" class="${a.className || ""}"${a.autofocus ? " data-autofocus" : ""}>${escapeHtml(a.label)}</button>`
+    ).join("");
+    box.innerHTML = render`
+      ${opts.title ? render`<h3 class="modal-title" id="modal-title">${opts.title}</h3>` : ""}
+      ${raw(opts.body || "")}
+      <div class="modal-actions">${raw(actionsHtml)}</div>
+    `;
+    if (opts.title) box.setAttribute("aria-labelledby", "modal-title");
+    overlay.hidden = false;
+
+    const previouslyFocused = document.activeElement;
+    let resolved = false;
+    const finish = (result) => {
+      if (resolved) return;
+      resolved = true;
+      overlay.hidden = true;
+      box.removeAttribute("aria-labelledby");
+      document.removeEventListener("keydown", onKey);
+      if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
+      resolveFn(result);
+    };
+    const onKey = (ev) => {
+      if (ev.key === "Escape") { ev.preventDefault(); finish(cancelValue); return; }
+      if (ev.key === "Tab") {
+        // focus trap: keep Tab/Shift+Tab cycling inside the box
+        const focusables = Array.from(box.querySelectorAll(
+          "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href]"
+        ));
+        if (!focusables.length) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+        else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    overlay.onclick = (ev) => { if (ev.target === overlay) finish(cancelValue); };
+    box.querySelectorAll("[id^='modal-action-']").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const action = actions[Number(btn.id.slice("modal-action-".length))];
+        const value = typeof action.value === "function" ? action.value() : action.value;
+        finish(value === undefined ? cancelValue : value);
+      });
+    });
+    const focusTarget = box.querySelector("[data-autofocus]") || box.querySelector("button.primary") || box.querySelector("button");
+    if (focusTarget) focusTarget.focus();
+    if (opts.onOpen) opts.onOpen(box);
+  });
+}
 
 function confirmDialog(message, opts) {
   opts = opts || {};
-  const overlay = document.getElementById("modal-overlay");
-  const box = document.getElementById("modal-box");
-  return new Promise((resolveFn) => {
-    box.innerHTML = render`
-      <p>${message}</p>
-      <div class="modal-actions">
-        <button type="button" id="modal-cancel">Cancel</button>
-        <button type="button" class="${opts.danger ? "danger" : "primary"}" id="modal-confirm">${opts.confirmLabel || "Confirm"}</button>
-      </div>
-    `;
-    overlay.hidden = false;
-    const cleanup = (result) => { overlay.hidden = true; resolveFn(result); };
-    box.querySelector("#modal-cancel").onclick = () => cleanup(false);
-    box.querySelector("#modal-confirm").onclick = () => cleanup(true);
-    overlay.onclick = (ev) => { if (ev.target === overlay) cleanup(false); };
+  return openDialog({
+    title: opts.title,
+    body: render`<p>${message}</p>`,
+    cancelValue: false,
+    // on a destructive confirmation the dangerous button must NOT be
+    // the one pre-focused: the first Tab lands on Cancel instead.
+    actions: [
+      { label: "Cancel", value: false, autofocus: !!opts.danger },
+      { label: opts.confirmLabel || "Confirm", className: opts.danger ? "danger" : "primary", value: true, autofocus: !opts.danger },
+    ],
   });
 }
 
@@ -134,26 +197,29 @@ function confirmDialog(message, opts) {
  * entered text, or null if cancelled/empty. */
 function promptDialog(message, opts) {
   opts = opts || {};
-  const overlay = document.getElementById("modal-overlay");
-  const box = document.getElementById("modal-box");
-  return new Promise((resolveFn) => {
-    box.innerHTML = render`
+  return openDialog({
+    title: opts.title,
+    body: render`
       <p>${message}</p>
       <div class="field"><input type="text" id="modal-prompt-input" value="${opts.value || ""}" placeholder="${opts.placeholder || ""}"></div>
-      <div class="modal-actions">
-        <button type="button" id="modal-cancel">Cancel</button>
-        <button type="button" class="primary" id="modal-confirm">${opts.confirmLabel || "Confirm"}</button>
-      </div>
-    `;
-    overlay.hidden = false;
-    const input = box.querySelector("#modal-prompt-input");
-    input.focus();
-    input.select();
-    const cleanup = (result) => { overlay.hidden = true; resolveFn(result); };
-    box.querySelector("#modal-cancel").onclick = () => cleanup(null);
-    box.querySelector("#modal-confirm").onclick = () => cleanup(input.value.trim() || null);
-    input.addEventListener("keydown", (ev) => { if (ev.key === "Enter") cleanup(input.value.trim() || null); });
-    overlay.onclick = (ev) => { if (ev.target === overlay) cleanup(null); };
+    `,
+    cancelValue: null,
+    actions: [
+      { label: "Cancel", value: null },
+      {
+        label: opts.confirmLabel || "Confirm",
+        className: "primary",
+        value: () => { const input = document.getElementById("modal-prompt-input"); return input ? input.value.trim() || null : null; },
+      },
+    ],
+    onOpen: (box) => {
+      const input = box.querySelector("#modal-prompt-input");
+      input.focus();
+      input.select();
+      input.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") { ev.preventDefault(); const primary = box.querySelector("button.primary"); if (primary) primary.click(); }
+      });
+    },
   });
 }
 
@@ -162,20 +228,30 @@ function promptDialog(message, opts) {
  * of files and some may have been skipped (not a hard failure, see
  * import_many_single_tables in core/table_admin.py). */
 function infoDialog(bodyHtml) {
-  const overlay = document.getElementById("modal-overlay");
-  const box = document.getElementById("modal-box");
-  return new Promise((resolveFn) => {
-    box.innerHTML = render`
-      ${raw(bodyHtml)}
-      <div class="modal-actions">
-        <button type="button" class="primary" id="modal-ok">OK</button>
-      </div>
-    `;
-    overlay.hidden = false;
-    const cleanup = () => { overlay.hidden = true; resolveFn(); };
-    box.querySelector("#modal-ok").onclick = cleanup;
-    overlay.onclick = (ev) => { if (ev.target === overlay) cleanup(); };
+  return openDialog({
+    body: bodyHtml,
+    cancelValue: undefined,
+    actions: [{ label: "OK", className: "primary", autofocus: true }],
   });
+}
+
+/* ---------- unsaved-changes guards ---------- */
+
+/* A view registers a guard while it owns editable content (source
+ * editor, plugin editor, config form). The router checks them before
+ * navigating away (and beforeunload covers close/refresh). Keyed by id:
+ * re-registering the same id replaces the previous guard, so repeated
+ * in-page reloads (e.g. loadSource after a restore) don't accumulate.
+ * router() calls clearDirtyGuards() at the start of every navigation. */
+const _dirtyGuards = new Map();
+function registerDirtyGuard(id, guard) { _dirtyGuards.set(id, guard); }
+function removeDirtyGuard(id) { _dirtyGuards.delete(id); }
+function clearDirtyGuards() { _dirtyGuards.clear(); }
+function dirtyGuardActive() {
+  for (const guard of _dirtyGuards.values()) {
+    if (guard.isDirty()) return guard;
+  }
+  return null;
 }
 
 function statusPill(status) {
@@ -292,7 +368,7 @@ function skeletonLoading() {
 }
 
 function emptyCard(message, hint) {
-  return render`<div class="card empty-state">${icon("alert")}<div>${message}</div>${raw(hint ? render`<div class="subtitle" style="margin-top:6px">${hint}</div>` : "")}</div>`;
+  return render`<div class="card empty-state">${icon("alert")}<div>${message}</div>${raw(hint ? render`<div class="subtitle mt-6">${hint}</div>` : "")}</div>`;
 }
 
 /* Lightweight formatter for plugin docstrings: paragraphs separated by
@@ -309,7 +385,7 @@ function emptyCard(message, hint) {
  * prose and would still lose the example's line breaks. */
 function formatDescription(text) {
   if (!text || !text.trim()) {
-    return '<p class="empty-state" style="padding:12px 0">This plugin doesn\'t provide a description.</p>';
+    return '<p class="empty-state py-12">This plugin doesn\'t provide a description.</p>';
   }
   const allLines = text.replace(/\r\n/g, "\n").split("\n");
   while (allLines.length && allLines[0].trim() === "") allLines.shift();
@@ -374,7 +450,7 @@ function detailsCard(title, bodyHtml, opts) {
 function pinnedCard(title, bodyHtml) {
   return `
     <div class="card">
-      <h2 style="margin:0 0 16px">${escapeHtml(title)}</h2>
+      <h2 class="card-title">${escapeHtml(title)}</h2>
       ${bodyHtml}
     </div>
   `;
@@ -447,7 +523,8 @@ function _animateDetailsToggle(details) {
 export {
   initTheme, toggleTheme,
   escapeHtml, raw, render, ICONS, iconSpan, icon,
-  toast, toastError, confirmDialog, promptDialog, infoDialog,
+  toast, toastError, openDialog, confirmDialog, promptDialog, infoDialog,
+  registerDirtyGuard, removeDirtyGuard, clearDirtyGuards, dirtyGuardActive,
   statusPill, baseName, fmtBytes, debounce, attachAutocomplete,
   pageHeader, skeletonLoading, emptyCard, formatDescription, metaChip,
   detailsCard, pinnedCard, fmtShortTimestamp, goldBadge, currentBadge,

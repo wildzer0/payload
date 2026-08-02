@@ -6,7 +6,7 @@
 
 import {
   escapeHtml, raw, render, icon, iconSpan, toast, toastError,
-  confirmDialog, promptDialog, infoDialog, statusPill, pageHeader,
+  confirmDialog, promptDialog, infoDialog, openDialog, statusPill, pageHeader,
   goldBadge, fmtBytes, fmtShortTimestamp, debounce,
 } from "../ui.js";
 import { api, apiUpload, getPlugins } from "../api.js";
@@ -332,25 +332,22 @@ async function viewDashboard() {
  * of 'pld import' in cli.py import_cmd). Resolves to
  * { mode: "batch" | "each", overwrite } or null if cancelled. */
 function _chooseImportMode(count) {
-  const overlay = document.getElementById("modal-overlay");
-  const box = document.getElementById("modal-box");
-  return new Promise((resolveFn) => {
-    box.innerHTML = render`
+  return openDialog({
+    title: "Import mode",
+    body: render`
       <p>${count} files dropped together. Create ONE batch table made of all of them, or import each as its own, independent table?</p>
       <label class="toggle-chip"><input type="checkbox" id="modal-each-overwrite"><span>Overwrite tables that already exist</span></label>
-      <div class="modal-actions">
-        <button type="button" id="modal-cancel">Cancel</button>
-        <button type="button" id="modal-mode-batch">One batch table</button>
-        <button type="button" class="primary" id="modal-mode-each">${count} separate tables</button>
-      </div>
-    `;
-    overlay.hidden = false;
-    const overwriteBox = box.querySelector("#modal-each-overwrite");
-    const cleanup = (result) => { overlay.hidden = true; resolveFn(result); };
-    box.querySelector("#modal-cancel").onclick = () => cleanup(null);
-    box.querySelector("#modal-mode-batch").onclick = () => cleanup({ mode: "batch", overwrite: false });
-    box.querySelector("#modal-mode-each").onclick = () => cleanup({ mode: "each", overwrite: overwriteBox.checked });
-    overlay.onclick = (ev) => { if (ev.target === overlay) cleanup(null); };
+    `,
+    cancelValue: null,
+    actions: [
+      { label: "Cancel", value: null },
+      { label: "One batch table", value: { mode: "batch", overwrite: false } },
+      {
+        label: `${count} separate tables`,
+        className: "primary",
+        value: () => ({ mode: "each", overwrite: document.getElementById("modal-each-overwrite").checked }),
+      },
+    ],
   });
 }
 

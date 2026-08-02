@@ -20,7 +20,7 @@ function _clusterCardHtml(c) {
         <strong>${escapeHtml(c.name)}</strong>
         <span class="pill pill-current">${c.member_count} table${c.member_count === 1 ? "" : "s"}</span>
       </div>
-      <div class="cluster-card-overrides">${overrideParts.join("") || '<span class="empty-state" style="margin:0">No override</span>'}</div>
+      <div class="cluster-card-overrides">${overrideParts.join("") || '<span class="empty-state m-0">No override</span>'}</div>
       ${c.members.length ? `<div class="cluster-card-members">Members: ${c.members.map((m) => escapeHtml(m)).join(", ")}</div>` : ""}
       <div class="cluster-card-actions">
         <button class="icon-only" data-edit-cluster="${escapeHtml(c.name)}" title="Edit">${iconSpan("save")}</button>

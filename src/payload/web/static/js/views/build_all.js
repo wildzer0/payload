@@ -15,7 +15,7 @@ function viewBuildAll() {
       <div class="field-row">
         <div class="field"><label>Writer (--to)</label><div class="autocomplete-wrap"><input type="text" id="ba-to" placeholder="bin"></div></div>
         <div class="field"><label>Filter glob</label><input type="text" id="ba-filter" placeholder="sensors/**"></div>
-        <div class="field"><label>Jobs (max ${MAX_BUILD_ALL_JOBS})</label><input type="number" id="ba-jobs" value="1" min="1" max="${MAX_BUILD_ALL_JOBS}" style="width:80px"></div>
+        <div class="field"><label>Jobs (max ${MAX_BUILD_ALL_JOBS})</label><input type="number" id="ba-jobs" value="1" min="1" max="${MAX_BUILD_ALL_JOBS}" class="w-80"></div>
       </div>
       <div class="toggle-chip-row">
         <label class="toggle-chip"><input type="checkbox" id="ba-force"><span>--force</span></label>

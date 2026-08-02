@@ -5,7 +5,7 @@
  * only wires them together. */
 "use strict";
 
-import { initTheme, toggleTheme, _animateDetailsToggle, skeletonLoading, emptyCard, toastError } from "./js/ui.js";
+import { initTheme, toggleTheme, _animateDetailsToggle, skeletonLoading, emptyCard, toastError, confirmDialog, clearDirtyGuards, dirtyGuardActive } from "./js/ui.js";
 import { api } from "./js/api.js";
 import { viewDashboard } from "./js/views/dashboard.js";
 import { viewTable } from "./js/views/table.js";
@@ -35,6 +35,9 @@ const ROUTES = [
 ];
 
 async function router() {
+  // every navigation renders a fresh page: guards registered by the
+  // previous page (its editors are gone) must not linger
+  clearDirtyGuards();
   const path = (location.hash || "#/").slice(1) || "/";
   document.querySelectorAll(".nav a").forEach((a) => {
     a.classList.toggle("active", a.getAttribute("data-route") === "/" + path.split("/")[1] || (path === "/" && a.getAttribute("data-route") === "/"));
@@ -60,7 +63,36 @@ async function router() {
   document.getElementById("content").innerHTML = '<p class="empty-state">Page not found.</p>';
 }
 
-window.addEventListener("hashchange", router);
+// the hash the app is currently showing — the dirty-guard wrapper
+// reverts to it when the user declines "leave anyway"
+let lastHash = location.hash || "#/";
+
+window.addEventListener("hashchange", async () => {
+  const target = location.hash || "#/";
+  // same hash = a revert after a declined "leave anyway" (or a
+  // same-route link, which normally doesn't even fire this): nothing
+  // to do, the current page is still rendered
+  if (target === lastHash) return;
+  const guard = dirtyGuardActive();
+  if (guard) {
+    const ok = await confirmDialog(guard.message || "You have unsaved changes. Leave anyway?", { danger: true, confirmLabel: "Leave anyway" });
+    if (!ok) {
+      location.hash = lastHash; // the resulting hashchange hits the early-return branch above
+      return;
+    }
+  }
+  lastHash = target;
+  router();
+});
+
+// covers close/refresh (hashchange can't), for the browsers that show
+// the native prompt on a non-empty returnValue
+window.addEventListener("beforeunload", (e) => {
+  if (dirtyGuardActive()) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
+});
 
 /* ---------- bootstrap ---------- */
 
