@@ -54,6 +54,7 @@ where = ["src"]
 "payload.templates" = ["init/*", "plugin_scaffold/**/*"]
 "payload.web" = [
     "static/*.html", "static/*.js", "static/*.css",
+    "static/js/*.js", "static/js/views/*.js",
     "static/vendor/codemirror/*.js", "static/vendor/codemirror/*.css",
     "static/vendor/codemirror/LICENSE", "static/vendor/codemirror/mode/python/*.js",
 ]

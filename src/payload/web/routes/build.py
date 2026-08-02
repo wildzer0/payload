@@ -47,9 +47,9 @@ from payload.web.sse import sse_format
 # ThreadPoolExecutor(max_workers=jobs) has no cap of its own — an
 # absurd value (e.g. typed by mistake, or passed on purpose) could
 # blow up thread creation. Same number also on the JS side
-# (MAX_BUILD_ALL_JOBS in app.js) for the numeric field's cap, but
-# that's just a courtesy for the user: this is the check that actually
-# matters, a client must not be able to bypass it.
+# (MAX_BUILD_ALL_JOBS in js/views/build_all.js) for the numeric
+# field's cap, but that's just a courtesy for the user: this is the
+# check that actually matters, a client must not be able to bypass it.
 MAX_BUILD_ALL_JOBS = 32
 
 

@@ -7,7 +7,7 @@
 import {
   escapeHtml, raw, render, icon, iconSpan, ICONS, toast, toastError,
   confirmDialog, statusPill, pageHeader, detailsCard, pinnedCard,
-  goldBadge, currentBadge, baseName, val, chk,
+  goldBadge, currentBadge, baseName, val, chk, attachAutocomplete,
 } from "../ui.js";
 import { api, getPlugins, ensureTableSources, findSourcePath } from "../api.js";
 
