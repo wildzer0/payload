@@ -26,7 +26,7 @@ def test_init_wizard_yes_uses_all_defaults(tmp_path, monkeypatch):
     assert result.exit_code == 0
     proj = tmp_path / "wizproj"
     assert (proj / "table-tool.toml").exists()
-    assert (proj / "local_plugins").is_dir()
+    assert (proj / "plugins").is_dir()
     assert (proj / "example_table.raw").exists()
     assert not (proj / ".git").exists()  # do_git_init default False
 
@@ -35,8 +35,8 @@ def test_init_local_plugins_created_by_default(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["init", "proj"])
     assert result.exit_code == 0
-    assert (tmp_path / "proj" / "local_plugins").is_dir()
-    assert (tmp_path / "proj" / "local_plugins" / "README.md").exists()
+    assert (tmp_path / "proj" / "plugins").is_dir()
+    assert (tmp_path / "proj" / "plugins" / "README.md").exists()
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="requires git")
@@ -78,7 +78,7 @@ def test_local_plugin_with_requires_reported_in_status(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     runner.invoke(app, ["init", "proj"])
     proj = tmp_path / "proj"
-    (proj / "local_plugins" / "needs_fake.py").write_text(
+    (proj / "plugins" / "needs_fake.py").write_text(
         'REQUIRES = ["nonexistent_library_xyz"]\n'
     )
     monkeypatch.chdir(proj)
@@ -209,7 +209,7 @@ def test_doctor_survives_unimplemented_local_doctor_check(tmp_path, monkeypatch)
     proj = tmp_path / "proj"
     from payload.plugin_scaffold import scaffold_local_plugin
 
-    scaffold_local_plugin("new_check", "doctor-check", proj / "local_plugins")
+    scaffold_local_plugin("new_check", "doctor-check", proj / "plugins")
     monkeypatch.chdir(proj)
 
     result = runner.invoke(app, ["doctor"])

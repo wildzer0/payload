@@ -23,25 +23,31 @@ from typing import Callable
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from payload.core.discovery import is_table_candidate
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DEBOUNCE_SECONDS = 0.3
 
 
 class _DebouncedTableHandler(FileSystemEventHandler):
-    """Filters events by known extensions, excludes output_dir, and
-    groups events happening close together on the same file with a
-    per-file timer."""
+    """Filters events with the same rule as normal discovery (see
+    core/discovery.py's is_table_candidate — NOT gated on a reader
+    recognizing the extension, a table can sit unbuildable until a
+    plugin is installed for it), and groups events happening close
+    together on the same file with a per-file timer."""
 
     def __init__(
         self,
-        known_extensions: set[str],
+        root: Path,
         output_dir: Path,
+        cache_dir: Path | None,
         on_change: Callable[[Path], None],
         debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
     ):
-        self._known_extensions = known_extensions
-        self._output_dir = output_dir.resolve()
+        self._root = root
+        self._output_dir = output_dir
+        self._cache_dir = cache_dir
         self._on_change = on_change
         self._debounce_seconds = debounce_seconds
         self._timers: dict[Path, threading.Timer] = {}
@@ -49,13 +55,8 @@ class _DebouncedTableHandler(FileSystemEventHandler):
 
     def _should_handle(self, path_str: str) -> Path | None:
         path = Path(path_str)
-        if path.suffix not in self._known_extensions:
+        if not is_table_candidate(path, self._root, self._output_dir, self._cache_dir):
             return None
-        try:
-            if self._output_dir in path.resolve().parents:
-                return None
-        except OSError:
-            pass
         return path
 
     def _schedule(self, path: Path) -> None:
@@ -86,9 +87,9 @@ class _DebouncedTableHandler(FileSystemEventHandler):
 
 def watch(
     root: Path,
-    known_extensions: set[str],
     output_dir: Path,
     on_change: Callable[[Path], None],
+    cache_dir: Path | None = None,
     debounce_seconds: float = DEFAULT_DEBOUNCE_SECONDS,
 ) -> None:
     """Blocks until Ctrl+C. on_change(path) is invoked (on a debounce
@@ -101,7 +102,7 @@ def watch(
             # a build error must never kill the watch
             logger.error("Error while rebuilding %s: %s", path.name, e)
 
-    handler = _DebouncedTableHandler(known_extensions, output_dir, _safe_on_change, debounce_seconds)
+    handler = _DebouncedTableHandler(root, output_dir, cache_dir, _safe_on_change, debounce_seconds)
     observer = Observer()
     observer.schedule(handler, str(root), recursive=True)
     observer.start()

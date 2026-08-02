@@ -9,19 +9,73 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from payload.core.batch_tables import BatchTable, resolve_batch_tables
-from payload.core.config import load_config
+from payload.core.batch_tables import BatchTable, effective_config, resolve_batch_tables
+from payload.core.config import GLOBAL_CONFIG_FILENAME, SIDECAR_SUFFIX, load_config
 from payload.core.errors import DuplicateTableNameError
-from payload.core.registry import load_plugins
+from payload.core.local_plugins import PLUGINS_DIRNAME
 
 if TYPE_CHECKING:
+    from payload.core.clusters import Cluster
     from payload.core.config import PayloadConfig
+    from payload.core.table_meta import TableMeta
+
+
+def _resolve_or_self(p: Path) -> Path:
+    try:
+        return p.resolve()
+    except OSError:  # pragma: no cover - defensive, matches the previous behavior
+        return p
+
+
+def _resolve_against_root(root: Path, p: Path) -> Path:
+    # A relative output_dir/cache_dir (the common case — "build",
+    # ".payload_cache") means "relative to the served project's root",
+    # NEVER the calling process's cwd: 'pld serve /other/project' from
+    # a different folder is a legitimate case (see web/paths.py), and
+    # so is 'pld status --root /other/project' from the CLI. Resolving
+    # bare Path(cfg.output_dir) against cwd silently produced a
+    # nonexistent path in both cases — the output/cache dir exclusion
+    # below would then never match anything.
+    p = Path(p)
+    return p if p.is_absolute() else root / p
+
+
+def is_table_candidate(path: Path, root: Path, output_dir: Path, cache_dir: Path | None = None) -> bool:
+    """Whether 'path' could be a table source — deliberately NOT
+    gated on any reader recognizing its extension (a project starts
+    with zero readers installed, see the no-bundled-plugins refactor:
+    gating discovery on an installed reader made every imported file
+    invisible until a matching plugin existed, defeating the whole
+    "import now, install a reader later" model). What IS excluded is
+    project infrastructure that's obviously never a table: the global
+    config, sidecars, the output/cache dirs, the plugins/ folder, and
+    any hidden file/dir (dotfiles, .git, editor swap files, ...)."""
+    if not path.is_file():
+        return False
+    if path.name == GLOBAL_CONFIG_FILENAME or path.name.endswith(SIDECAR_SUFFIX):
+        return False
+    resolved_root = _resolve_or_self(root)
+    try:
+        rel_parts = path.resolve().relative_to(resolved_root).parts
+    except (OSError, ValueError):
+        rel_parts = path.parts
+    if any(part.startswith(".") for part in rel_parts):
+        return False
+    if rel_parts and rel_parts[0] == PLUGINS_DIRNAME:
+        return False
+
+    resolved = _resolve_or_self(path)
+    if _resolve_or_self(_resolve_against_root(root, output_dir)) in resolved.parents:
+        return False
+    if cache_dir is not None and _resolve_or_self(_resolve_against_root(root, cache_dir)) in resolved.parents:
+        return False
+    return True
 
 
 def discover_table_sources(
     root: Path,
-    known_extensions: set[str],
     output_dir: Path,
+    cache_dir: Path | None = None,
     filter_glob: str | None = None,
 ) -> list[Path]:
     pattern = filter_glob or "**/*"
@@ -30,21 +84,8 @@ def discover_table_sources(
         # but counterintuitive pathlib.glob behavior), not the files
         # inside it — we normalize so the intuitive usage works.
         pattern = pattern + "/*"
-    try:
-        resolved_output = output_dir.resolve()
-    except OSError:
-        resolved_output = output_dir
 
-    sources = []
-    for p in root.glob(pattern):
-        if not p.is_file() or p.suffix not in known_extensions:
-            continue
-        try:
-            if resolved_output in p.resolve().parents:
-                continue
-        except OSError:
-            pass
-        sources.append(p)
+    sources = [p for p in root.glob(pattern) if is_table_candidate(p, root, output_dir, cache_dir)]
     return sorted(sources)
 
 
@@ -89,10 +130,8 @@ def discover_for_history(root: Path) -> tuple[list[Path], list[BatchTable], "Pay
     tables (single files + batch tables declared in [[batch_table]])
     that build-all would see, so 'pld status'/'pld commit' and the web
     dashboard never disagree about what exists."""
-    registry = load_plugins(project_root=root)
     config = load_config(root)
-    known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
-    sources = discover_table_sources(root, known_ext, Path(config.defaults.output_dir))
+    sources = discover_table_sources(root, Path(config.defaults.output_dir), Path(config.defaults.cache_dir))
 
     duplicates = find_duplicate_stems(sources)
     if duplicates:
@@ -144,3 +183,26 @@ def all_table_refs(sources: list[Path], batch_tables: list[BatchTable]) -> list[
     refs = [TableRef(name=s.stem, source_paths=[s], is_batch=False) for s in sources]
     refs += [TableRef(name=bt.name, source_paths=bt.source_paths, is_batch=True, batch=bt) for bt in batch_tables]
     return refs
+
+
+def resolve_table_config(
+    root: Path,
+    base_config: "PayloadConfig",
+    ref: TableRef,
+    clusters: dict[str, "Cluster"],
+    table_metas: dict[str, "TableMeta"],
+) -> "PayloadConfig":
+    """The one call every report/status/build/config-show call site
+    needs instead of hand-rolling 'effective_config(...) if ref.is_batch
+    else load_config(...)' (duplicated at ~10 call sites) — resolves
+    ref's full config, cluster override included, for either a
+    single-file or a batch table. clusters/table_metas are resolved
+    ONCE by the caller (e.g. once per /api/report request, once per
+    run_batch_build call) — resolving them fresh per ref would be
+    redundant TOML re-parsing, multiplied by run_batch_build's thread
+    pool when jobs>1."""
+    meta = table_metas.get(ref.name)
+    cluster = clusters.get(meta.cluster) if meta and meta.cluster else None
+    if ref.is_batch:
+        return effective_config(base_config, ref.batch, cluster=cluster)
+    return load_config(root, source_path=ref.source_paths[0], table_name=ref.name)

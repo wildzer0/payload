@@ -10,20 +10,20 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from payload.core.batch_tables import effective_config
 from payload.core.cache import BuildCache
-from payload.core.config import load_config
-from payload.core.discovery import discover_for_history, resolve_table_ref
+from payload.core.clusters import resolve_clusters
+from payload.core.discovery import discover_for_history, resolve_table_config, resolve_table_ref
 from payload.core.errors import SourceNotFoundError, TableNotFoundError
 from payload.core.history import HistoryStore
-from payload.core.registry import load_plugins
 from payload.core.table_admin import (
     delete_batch_member,
     delete_table,
     import_batch_member,
+    import_many_single_tables,
     import_new_batch_table,
     import_single_table,
 )
+from payload.core.table_meta import resolve_table_meta
 from payload.web.errors import InvalidRequestError
 from payload.web.paths import resolve
 
@@ -51,7 +51,9 @@ async def delete_table_route(request: Request) -> JSONResponse:
     def _run():
         sources, batch_tables, config = discover_for_history(root)
         ref = _find_ref(sources, batch_tables, table_name)
-        table_config = effective_config(config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+        clusters = resolve_clusters(root, config)
+        table_metas = resolve_table_meta(root, config, clusters)
+        table_config = resolve_table_config(root, config, ref, clusters, table_metas)
         output_dir = resolve(root, table_config.defaults.output_dir)
         cache = BuildCache(resolve(root, table_config.defaults.cache_dir))
         history = HistoryStore(root)
@@ -90,9 +92,10 @@ async def delete_table_route(request: Request) -> JSONResponse:
 
 async def import_route(request: Request) -> JSONResponse:
     """multipart/form-data: one or more 'file' fields (more than one
-    only together with 'new_batch'), plus the optional fields
-    'as_name', 'batch', 'new_batch', 'overwrite' — same logic as 'pld
-    import', see core/table_admin.py for the detail of each case."""
+    only together with 'new_batch' or 'each'), plus the optional
+    fields 'as_name', 'batch', 'new_batch', 'each', 'overwrite' — same
+    logic as 'pld import', see core/table_admin.py for the detail of
+    each case."""
     root = request.app.state.root
     form = await request.form()
     uploads = form.getlist("file")
@@ -102,21 +105,34 @@ async def import_route(request: Request) -> JSONResponse:
     as_name = (form.get("as_name") or "").strip() or None
     batch = (form.get("batch") or "").strip() or None
     new_batch = (form.get("new_batch") or "").strip() or None
+    each = form.get("each") == "true"
     overwrite = form.get("overwrite") == "true"
+
+    if sum(bool(x) for x in (batch, new_batch, each)) > 1:
+        raise InvalidRequestError("'batch', 'new_batch' and 'each' are mutually exclusive")
 
     files = [(u.filename, await u.read()) for u in uploads]
 
     def _run():
-        registry = load_plugins(project_root=root)
         sources, batch_tables, _ = discover_for_history(root)
+
+        if each:
+            data_by_name = {name: data for name, data in files}
+            result = import_many_single_tables(root, data_by_name, sources, batch_tables, overwrite=overwrite)
+            return {
+                "status": "created" if not result.skipped else "partial",
+                "kind": "bulk",
+                "imported": [{"path": str(r.path), "created": r.created} for r in result.imported],
+                "skipped": [{"filename": s.filename, "reason": s.reason} for s in result.skipped],
+            }
 
         if new_batch:
             data_by_name = {name: data for name, data in files}
-            bt = import_new_batch_table(root, registry, data_by_name, new_batch, sources, batch_tables)
+            bt = import_new_batch_table(root, data_by_name, new_batch, sources, batch_tables)
             return {"status": "created", "kind": "batch", "name": bt.name, "sources": [str(p) for p in bt.source_paths]}
 
         if len(files) != 1:
-            raise InvalidRequestError("one file at a time — use 'new_batch' to import more than one together")
+            raise InvalidRequestError("one file at a time — use 'new_batch' (one table from several files) or 'each' (several independent tables)")
         filename, data = files[0]
 
         if batch:
@@ -124,12 +140,12 @@ async def import_route(request: Request) -> JSONResponse:
             if bt is None:
                 raise TableNotFoundError(batch)
             target_filename = f"{as_name}{Path(filename).suffix}" if as_name else filename
-            target = import_batch_member(root, registry, data, target_filename, bt)
+            target = import_batch_member(root, data, target_filename, bt)
             return {"status": "added", "kind": "batch_member", "batch": batch, "path": str(target)}
 
         name = as_name or Path(filename).stem
         target_filename = f"{name}{Path(filename).suffix}"
-        result = import_single_table(root, registry, data, target_filename, sources, batch_tables, overwrite=overwrite)
+        result = import_single_table(root, data, target_filename, sources, batch_tables, overwrite=overwrite)
         return {"status": "created" if result.created else "updated", "kind": "single", "path": str(result.path)}
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))

@@ -18,14 +18,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
-from payload.core.batch_tables import effective_config
 from payload.core.cache import BuildCache
+from payload.core.clusters import resolve_clusters
 from payload.core.config import load_config
+from payload.core.discovery import resolve_table_config
 from payload.core.errors import PayloadError
 from payload.core.golden import check_golden
 from payload.core.history import HistoryStore
 from payload.core.pipeline import build
 from payload.core.registry import PluginRegistry
+from payload.core.table_meta import resolve_table_meta
 
 if TYPE_CHECKING:
     from payload.core.discovery import TableRef
@@ -69,15 +71,20 @@ def run_batch_build(
     lock = threading.Lock()
     history = HistoryStore(root)  # read-only here (check_golden), safe to share across threads
 
+    # Resolved ONCE for the whole batch, not per table: every ref's
+    # cluster lookup is a plain dict read from here on, instead of
+    # every thread in the pool below re-parsing table-tool.toml's
+    # [[cluster]]/[[table_meta]] on its own.
+    base_config = load_config(root)
+    clusters = resolve_clusters(root, base_config)
+    table_metas = resolve_table_meta(root, base_config, clusters)
+
     def _build_one(ref: "TableRef"):
         """Runs in a pool thread. Always returns, never raises: errors
         are caught here so they don't crash the executor and so all
         failures accumulate, not just the first one."""
         try:
-            if ref.is_batch:
-                per_table_config = effective_config(load_config(root), ref.batch)
-            else:
-                per_table_config = load_config(root, source_path=ref.source_paths[0])
+            per_table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
             out_paths, was_built = build(
                 ref.source_paths, registry, per_table_config, out_dir, cache=cache,
                 writer_name=writer_name, force=force, dry_run=dry_run,

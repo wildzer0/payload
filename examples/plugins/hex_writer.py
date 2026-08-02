@@ -70,3 +70,6 @@ class HexWriter:
 
         out_path.write_text("\n".join(lines) + "\n")
         return out_path
+
+
+WRITER = HexWriter

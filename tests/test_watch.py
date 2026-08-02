@@ -11,7 +11,7 @@ from payload.cli import app
 runner = CliRunner()
 
 
-def _noop_watch_loop(root, known_ext, out, on_change):
+def _noop_watch_loop(root, out, on_change, cache_dir=None):
     return
 
 
@@ -40,7 +40,7 @@ def test_watch_proceeds_when_initial_build_fails(tmp_path, monkeypatch):
     called = []
     monkeypatch.setattr(
         "payload.cli.watch_loop",
-        lambda root, known_ext, out, on_change: called.append(True),
+        lambda root, out, on_change, cache_dir=None: called.append(True),
     )
     monkeypatch.chdir(proj)
 

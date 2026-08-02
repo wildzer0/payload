@@ -10,15 +10,15 @@ def test_default_call_uses_static_template_with_bin(tmp_path):
     assert config.defaults.writer == "bin"  # historical behavior, on purpose
 
 
-def test_local_plugins_dir_created_by_default(tmp_path):
+def test_plugins_dir_created_by_default(tmp_path):
     init_project(tmp_path)
-    assert (tmp_path / "local_plugins").is_dir()
-    assert (tmp_path / "local_plugins" / "README.md").exists()
+    assert (tmp_path / "plugins").is_dir()
+    assert (tmp_path / "plugins" / "README.md").exists()
 
 
-def test_local_plugins_dir_can_be_disabled(tmp_path):
-    init_project(tmp_path, include_local_plugins=False)
-    assert not (tmp_path / "local_plugins").exists()
+def test_plugins_dir_can_be_disabled(tmp_path):
+    init_project(tmp_path, include_plugins=False)
+    assert not (tmp_path / "plugins").exists()
 
 
 def test_example_table_can_be_disabled(tmp_path):
@@ -42,18 +42,31 @@ def test_explicit_none_writer_is_respected_not_defaulted_to_bin(tmp_path):
     assert config.defaults.writer is None
 
 
-def test_force_overwrites_existing_local_plugins_readme(tmp_path):
+def test_generated_config_has_no_toolchain_section(tmp_path):
+    """[toolchain] isn't part of the core schema anymore — see
+    core/config.py. Compiler/objcopy settings now live under
+    [plugin.<name>], owned by whichever plugin needs them."""
     init_project(tmp_path)
-    readme = tmp_path / "local_plugins" / "README.md"
+    content = (tmp_path / "table-tool.toml").read_text()
+    assert "[toolchain]" not in content
+
+    init_project(tmp_path, force=True, writer="hex", byte_order="big")
+    content = (tmp_path / "table-tool.toml").read_text()
+    assert "[toolchain]" not in content
+
+
+def test_force_overwrites_existing_plugins_readme(tmp_path):
+    init_project(tmp_path)
+    readme = tmp_path / "plugins" / "README.md"
     readme.write_text("modified by hand")
 
     init_project(tmp_path, force=True)
     assert readme.read_text() != "modified by hand"
 
 
-def test_no_force_does_not_overwrite_local_plugins_readme(tmp_path):
+def test_no_force_does_not_overwrite_plugins_readme(tmp_path):
     init_project(tmp_path)
-    readme = tmp_path / "local_plugins" / "README.md"
+    readme = tmp_path / "plugins" / "README.md"
     readme.write_text("modified by hand")
 
     init_project(tmp_path, force=False)

@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from payload.core.batch_tables import BatchTable, _natural_sort_key, effective_config, resolve_batch_tables
+from payload.core.clusters import Cluster
 from payload.core.config import PayloadConfig, load_config
 from payload.core.errors import BatchTableError
 
@@ -185,3 +186,67 @@ def test_effective_config_falls_back_to_base_pipeline_stages_when_batch_has_none
     cfg = effective_config(base, bt)
 
     assert cfg.pipeline_stages == base_stages
+
+
+def test_effective_config_no_cluster_leaves_config_unchanged():
+    base = PayloadConfig()
+    bt = BatchTable(name="rows", source_paths=[Path("a.txt")])
+
+    cfg = effective_config(base, bt, cluster=None)
+
+    assert cfg.defaults.writer is None
+    assert cfg.plugin == {}
+
+
+def test_effective_config_cluster_defaults_applied_before_batch_override():
+    base = PayloadConfig()
+    cluster = Cluster(name="sensors", defaults={"writer": "hex", "output_dir": "build/sensors"})
+    bt = BatchTable(name="rows", source_paths=[Path("a.txt")])  # no inline override
+
+    cfg = effective_config(base, bt, cluster=cluster)
+
+    assert cfg.defaults.writer == "hex"
+    assert cfg.defaults.output_dir == "build/sensors"
+
+
+def test_effective_config_batch_inline_override_wins_over_cluster():
+    base = PayloadConfig()
+    cluster = Cluster(name="sensors", defaults={"writer": "hex"})
+    bt = BatchTable(name="rows", source_paths=[Path("a.txt")], writer="bin")
+
+    cfg = effective_config(base, bt, cluster=cluster)
+
+    assert cfg.defaults.writer == "bin"
+
+
+def test_effective_config_cluster_plugin_merged_into_base():
+    base = PayloadConfig()
+    cluster = Cluster(name="sensors", plugin={"c_source": {"compiler": "gcc"}})
+    bt = BatchTable(name="rows", source_paths=[Path("a.txt")])
+
+    cfg = effective_config(base, bt, cluster=cluster)
+
+    assert cfg.plugin == {"c_source": {"compiler": "gcc"}}
+
+
+def test_effective_config_cluster_plugin_deep_merges_with_existing_base_plugin():
+    from dataclasses import replace as dc_replace
+
+    base = dc_replace(PayloadConfig(), plugin={"c_source": {"compiler": "old"}, "obj": {"target": "elf"}})
+    cluster = Cluster(name="sensors", plugin={"c_source": {"compiler": "new"}})
+    bt = BatchTable(name="rows", source_paths=[Path("a.txt")])
+
+    cfg = effective_config(base, bt, cluster=cluster)
+
+    assert cfg.plugin == {"c_source": {"compiler": "new"}, "obj": {"target": "elf"}}
+
+
+def test_effective_config_empty_cluster_object_is_noop():
+    base = PayloadConfig()
+    cluster = Cluster(name="sensors")  # declares nothing
+    bt = BatchTable(name="rows", source_paths=[Path("a.txt")])
+
+    cfg = effective_config(base, bt, cluster=cluster)
+
+    assert cfg.defaults.writer is None
+    assert cfg.plugin == {}

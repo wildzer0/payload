@@ -19,6 +19,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from payload.core.clusters import Cluster, cluster_override_raw
+from payload.core.config import deep_merge
 from payload.core.errors import BatchTableError
 
 if TYPE_CHECKING:
@@ -106,14 +108,29 @@ def resolve_batch_tables(project_root: Path, config: "PayloadConfig") -> list[Ba
     return tables
 
 
-def effective_config(base_config: "PayloadConfig", batch: BatchTable) -> "PayloadConfig":
-    """Overlays a [[batch_table]]'s inline overrides
-    (reader/writer/byte_order/stages) on top of the global config — a
-    batch table has no source_path to resolve a sidecar from, so the
-    overrides live directly in the [[batch_table]] block. The result is
-    a 'normal' PayloadConfig as far as
-    resolve_pipeline_spec()/describe_table_build() are concerned: no
-    duplicated resolution logic for the batch case."""
+def effective_config(
+    base_config: "PayloadConfig", batch: BatchTable, cluster: Cluster | None = None,
+) -> "PayloadConfig":
+    """Overlays, in order: the batch's cluster (if it belongs to one —
+    a batch table has no source_path to trigger the sidecar-merge path
+    in resolve_config_with_provenance, so the caller resolves and
+    passes the Cluster itself, see core/discovery.py's
+    resolve_table_config), then the [[batch_table]]'s own inline
+    overrides (reader/writer/byte_order/stages) — the batch's inline
+    overrides play the same role a sidecar plays for a single-file
+    table, so they apply AFTER (win over) the cluster, same precedence
+    as the single-file path. The result is a 'normal' PayloadConfig as
+    far as resolve_pipeline_spec()/describe_table_build() are
+    concerned: no duplicated resolution logic for the batch case."""
+    cluster_raw = cluster_override_raw(cluster)
+    if cluster_raw:
+        cluster_defaults = cluster_raw.get("defaults", {})
+        base_config = replace(
+            base_config,
+            defaults=replace(base_config.defaults, **cluster_defaults) if cluster_defaults else base_config.defaults,
+            plugin=deep_merge(base_config.plugin, cluster_raw["plugin"]) if "plugin" in cluster_raw else base_config.plugin,
+        )
+
     defaults = replace(
         base_config.defaults,
         reader=batch.reader or base_config.defaults.reader,

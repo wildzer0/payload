@@ -499,21 +499,91 @@ def test_discover_table_sources_excludes_output_dir(tmp_path):
     out_dir.mkdir()
     (out_dir / "t1.bin").write_bytes(b"x")  # must not show up among sources
 
-    sources = discover_table_sources(tmp_path, {".raw"}, out_dir)
+    sources = discover_table_sources(tmp_path, out_dir)
     assert [s.name for s in sources] == ["t1.raw"]
 
 
 def test_discover_table_sources_excludes_matching_extension_inside_output_dir(tmp_path):
-    """A file INSIDE output_dir with a known extension (not just a
-    different extension, like in the test above) must still be
-    excluded — otherwise a build that regenerates a .raw inside build/
-    (edge case but possible) would get picked back up as a source."""
+    """A file INSIDE output_dir (not just a different one, like in the
+    test above) must still be excluded — otherwise a build that
+    regenerates a .raw inside build/ (edge case but possible) would
+    get picked back up as a source."""
     (tmp_path / "t1.raw").write_text("x")
     out_dir = tmp_path / "build"
     out_dir.mkdir()
     (out_dir / "regenerated.raw").write_text("x")
 
-    sources = discover_table_sources(tmp_path, {".raw"}, out_dir)
+    sources = discover_table_sources(tmp_path, out_dir)
+    assert [s.name for s in sources] == ["t1.raw"]
+
+
+def test_discover_table_sources_excludes_cache_dir(tmp_path):
+    (tmp_path / "t1.raw").write_text("x")
+    cache_dir = tmp_path / "my_cache"
+    cache_dir.mkdir()
+    (cache_dir / "entry.raw").write_text("x")
+
+    sources = discover_table_sources(tmp_path, tmp_path / "build", cache_dir)
+    assert [s.name for s in sources] == ["t1.raw"]
+
+
+def test_discover_table_sources_ignores_no_reader_for_extension(tmp_path):
+    """Regression: discovery must NOT require an installed reader for
+    the file's extension — a fresh project starts with zero readers
+    (see the no-bundled-plugins refactor), gating discovery on one
+    made every imported file invisible until a matching plugin was
+    installed, which broke 'pld status'/the dashboard for any project
+    that hadn't installed a reader yet (even pld init's own
+    example_table.raw)."""
+    (tmp_path / "mystery.unknownext").write_text("x")
+
+    sources = discover_table_sources(tmp_path, tmp_path / "build")
+    assert [s.name for s in sources] == ["mystery.unknownext"]
+
+
+def test_discover_table_sources_excludes_global_config_and_sidecars(tmp_path):
+    (tmp_path / "t1.raw").write_text("x")
+    (tmp_path / "table-tool.toml").write_text("")
+    (tmp_path / "t1.config.toml").write_text("")
+
+    sources = discover_table_sources(tmp_path, tmp_path / "build")
+    assert [s.name for s in sources] == ["t1.raw"]
+
+
+def test_discover_table_sources_excludes_hidden_files_and_dirs(tmp_path):
+    (tmp_path / "t1.raw").write_text("x")
+    (tmp_path / ".hidden.raw").write_text("x")
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("x")
+
+    sources = discover_table_sources(tmp_path, tmp_path / "build")
+    assert [s.name for s in sources] == ["t1.raw"]
+
+
+def test_discover_table_sources_excludes_plugins_dir(tmp_path):
+    (tmp_path / "t1.raw").write_text("x")
+    (tmp_path / "plugins").mkdir()
+    (tmp_path / "plugins" / "not_a_table.raw").write_text("x")
+
+    sources = discover_table_sources(tmp_path, tmp_path / "build")
+    assert [s.name for s in sources] == ["t1.raw"]
+
+
+def test_discover_table_sources_output_dir_relative_to_root_not_cwd(tmp_path, monkeypatch):
+    """A relative output_dir must resolve against 'root', never the
+    calling process's cwd — 'pld serve /other/project' (or 'pld status
+    --root ...') from a different folder is a legitimate case. A bare
+    Path(output_dir) resolved against cwd would silently exclude
+    nothing, letting the build output leak back in as a fake table."""
+    (tmp_path / "t1.raw").write_text("x")
+    out_dir = tmp_path / "build"
+    out_dir.mkdir()
+    (out_dir / "t1.bin").write_bytes(b"x")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    sources = discover_table_sources(tmp_path, Path("build"))
     assert [s.name for s in sources] == ["t1.raw"]
 
 
@@ -523,7 +593,7 @@ def test_discover_table_sources_respects_filter_glob(tmp_path):
     (tmp_path / "other").mkdir()
     (tmp_path / "other" / "t2.raw").write_text("x")
 
-    sources = discover_table_sources(tmp_path, {".raw"}, tmp_path / "build", filter_glob="sensors/**")
+    sources = discover_table_sources(tmp_path, tmp_path / "build", filter_glob="sensors/**")
     assert [s.name for s in sources] == ["t1.raw"]
 
 
@@ -541,7 +611,7 @@ def test_discover_table_sources_tolerates_unresolvable_output_dir(tmp_path):
         return real_resolve(self, *a, **kw)
 
     with patch.object(Path, "resolve", fake_resolve):
-        sources = discover_table_sources(tmp_path, {".raw"}, out_dir)
+        sources = discover_table_sources(tmp_path, out_dir)
 
     assert [s.name for s in sources] == ["t1.raw"]
 
@@ -561,7 +631,7 @@ def test_discover_table_sources_tolerates_unresolvable_source(tmp_path):
         return real_resolve(self, *a, **kw)
 
     with patch.object(Path, "resolve", fake_resolve):
-        sources = discover_table_sources(tmp_path, {".raw"}, tmp_path / "build")
+        sources = discover_table_sources(tmp_path, tmp_path / "build")
 
     assert [s.name for s in sources] == ["t1.raw"]
 

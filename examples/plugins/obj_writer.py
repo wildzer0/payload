@@ -9,10 +9,10 @@ a valid C identifier — no need for a custom linker script or to
 generate those symbols here (documented in the GNU ld manual, "orphan
 sections" section).
 
-Requires 'toolchain.objcopy_target' (your MCU's bfd target, e.g.
-'elf32-littlearm' for ARM) and 'toolchain.objcopy_arch' (e.g. 'arm')
-in table-tool.toml — 'objcopy -I binary' has no universal default, it
-depends on the target."""
+Requires 'objcopy_target' (your MCU's bfd target, e.g.
+'elf32-littlearm' for ARM) and 'objcopy_arch' (e.g. 'arm') under
+[plugin.obj] in table-tool.toml — 'objcopy -I binary' has no universal
+default, it depends on the target."""
 from __future__ import annotations
 
 import re
@@ -20,6 +20,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from payload.core.doctor import ToolchainCheck
 from payload.core.errors import ToolchainExecutionError, WriterEmitError
 from payload.core.ir import PLUGIN_API_VERSION, TableIR
 
@@ -47,15 +48,15 @@ class ObjWriter:
     api_version = PLUGIN_API_VERSION
 
     def emit(self, ir: TableIR, out_path: Path, config: dict) -> Path:
-        toolchain = config.get("toolchain", {})
-        objcopy = toolchain.get("objcopy", "objcopy")
-        target = toolchain.get("objcopy_target") or ""
-        arch = toolchain.get("objcopy_arch") or ""
+        plugin_cfg = config.get("plugin", {}).get("obj", {})
+        objcopy = plugin_cfg.get("objcopy", "objcopy")
+        target = plugin_cfg.get("objcopy_target") or ""
+        arch = plugin_cfg.get("objcopy_arch") or ""
 
         if not target or not arch:
             raise WriterEmitError(
                 self.name,
-                "requires 'toolchain.objcopy_target' and 'toolchain.objcopy_arch' in "
+                "requires 'objcopy_target' and 'objcopy_arch' under [plugin.obj] in "
                 'table-tool.toml (e.g. objcopy_target = "elf32-littlearm", objcopy_arch = "arm")',
             )
 
@@ -86,3 +87,22 @@ class ObjWriter:
             shutil.rmtree(tmp, ignore_errors=True)
 
         return out_path
+
+
+class _ObjToolchainCheck(ToolchainCheck):
+    """DOCTOR_CHECK must be a bare zero-arg-constructible class (same
+    convention as READER/WRITER, see core/local_plugins.py) — this
+    wraps ToolchainCheck's 3 required constructor args so the loader
+    can instantiate it with none. 'name' is overridden so it doesn't
+    collide with c_source.py's own ToolchainCheck-based DOCTOR_CHECK
+    when both are registered together (PluginRegistry keys doctor
+    checks by name)."""
+
+    name = "toolchain_obj"
+
+    def __init__(self):
+        super().__init__("objcopy", "objcopy", "obj")
+
+
+WRITER = ObjWriter
+DOCTOR_CHECK = _ObjToolchainCheck

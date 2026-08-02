@@ -1,10 +1,13 @@
 """
-Three-tier config, increasing precedence:
+Four-tier config, increasing precedence:
   1. global table-tool.toml (project root)
-  2. per-table sidecar (<name>.config.toml next to the source)
-  3. CLI flags
+  2. the table's cluster, if it belongs to one (see core/clusters.py) —
+     [[cluster]].defaults/[[cluster]].plugin
+  3. per-table sidecar (<name>.config.toml next to the source), or a
+     batch table's own inline overrides (core/batch_tables.py)
+  4. CLI flags
 
-The merge is "deep": the sidecar only overwrites the keys it declares,
+The merge is "deep": each tier only overwrites the keys it declares,
 not the whole section.
 
 Validation done by hand with stdlib dataclasses, deliberately without
@@ -23,7 +26,9 @@ from pathlib import Path
 
 import tomli_w
 
-from payload.core.errors import BatchTableError, InvalidConfigError
+from payload.core.clusters import cluster_override_raw, resolve_clusters
+from payload.core.errors import BatchTableError, ClusterError, InvalidConfigError
+from payload.core.table_meta import resolve_table_meta
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +39,6 @@ else:  # pragma: no cover
 
 GLOBAL_CONFIG_FILENAME = "table-tool.toml"
 SIDECAR_SUFFIX = ".config.toml"
-
-
-@dataclass
-class ToolchainConfig:
-    compiler: str = "gcc"
-    compiler_flags: list[str] = field(default_factory=list)
-    objcopy: str = "objcopy"
-    # only required by the 'obj' writer (objcopy -I binary has no
-    # universal default): e.g. objcopy_target="elf32-littlearm",
-    # objcopy_arch="arm" for an ARM Cortex-M target
-    objcopy_target: str = ""
-    objcopy_arch: str = ""
 
 
 @dataclass
@@ -72,7 +65,6 @@ class DefaultsConfig:
 class PayloadConfig:
     project: ProjectConfig = field(default_factory=ProjectConfig)
     defaults: DefaultsConfig = field(default_factory=DefaultsConfig)
-    toolchain: ToolchainConfig = field(default_factory=ToolchainConfig)
     # Plugin territory, not the core's: [plugin.<name>] in
     # table-tool.toml/sidecar ends up here with no schema validation —
     # the core has no way to know what a third-party plugin needs. A
@@ -94,6 +86,21 @@ class PayloadConfig:
     # core/batch_tables.py's territory, not the core config's — same
     # boundary already drawn for pipeline_stages/pipeline_spec.py.
     batch_tables: list = field(default_factory=list)
+    # [[cluster]] — raw list of dicts, a named bundle of
+    # defaults/plugin overrides a table can opt into (see
+    # src/payload/docs/CLUSTERS.md). Only structurally validated here;
+    # duplicate-name checking is core/clusters.py's territory, same
+    # boundary as batch_tables.
+    clusters: list = field(default_factory=list)
+    # [[table_meta]] — raw list of dicts: per-table 'cluster'
+    # assignment (at most one) and free-form 'tags', keyed by table
+    # name. Pure organizational metadata, not build config — doesn't
+    # declare a table's existence (unlike [[batch_table]]) or override
+    # its build config directly (unlike a sidecar); it only points at
+    # a [[cluster]] which does. Only structurally validated here;
+    # duplicate-name/dangling-cluster-reference checking is
+    # core/table_meta.py's territory.
+    table_meta: list = field(default_factory=list)
 
     def model_dump(self) -> dict:
         """Method name deliberately kept the same as pydantic v2: no
@@ -104,11 +111,11 @@ class PayloadConfig:
 
 _PROJECT_STR_FIELDS = ("name", "description")
 _DEFAULTS_STR_FIELDS = ("writer", "reader", "output_dir", "cache_dir", "byte_order")
-_TOOLCHAIN_STR_FIELDS = ("compiler", "objcopy", "objcopy_target", "objcopy_arch")
-_TOOLCHAIN_LIST_STR_FIELDS = ("compiler_flags",)
 _VALID_BYTE_ORDERS = ("little", "big")
 _BATCH_TABLE_STR_FIELDS = ("name", "reader", "writer", "byte_order")
 _BATCH_TABLE_LIST_STR_FIELDS = ("sources",)
+_TABLE_META_STR_FIELDS = ("name", "cluster")
+_TABLE_META_LIST_STR_FIELDS = ("tags",)
 
 
 def _load_toml(path: Path) -> dict:
@@ -118,11 +125,14 @@ def _load_toml(path: Path) -> dict:
         raise InvalidConfigError(path, field="<root>", reason=str(e)) from e
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
+def deep_merge(base: dict, override: dict) -> dict:
+    """Not prefixed with '_': core/clusters.py and core/batch_tables.py
+    reuse this instead of reimplementing dict-merge for a cluster's
+    [plugin.*] override."""
     result = dict(base)
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _deep_merge(result[key], value)
+            result[key] = deep_merge(result[key], value)
         else:
             result[key] = value
     return result
@@ -163,47 +173,96 @@ def _validate_batch_table_entry(entry: dict, index: int, path: Path) -> None:
         raise InvalidConfigError(path, field=f"{field_prefix}.stages", reason="must be a list of stages")
 
 
+def _validate_cluster_entry(entry: dict, index: int, path: Path) -> None:
+    field_prefix = f"cluster[{index}]"
+    if not isinstance(entry, dict):
+        raise InvalidConfigError(path, field=field_prefix, reason="must be a TOML table, e.g. \\[\\[cluster]]")
+    if not entry.get("name"):
+        raise InvalidConfigError(path, field=f"{field_prefix}.name", reason="required, can't be empty")
+
+    unknown = set(entry.keys()) - {"name", "defaults", "plugin"}
+    if unknown:
+        raise InvalidConfigError(path, field=f"{field_prefix}.{next(iter(unknown))}", reason="unknown field")
+
+    cluster_defaults = entry.get("defaults", {})
+    if not isinstance(cluster_defaults, dict):
+        raise InvalidConfigError(path, field=f"{field_prefix}.defaults", reason="must be a TOML table")
+    _validate_section(cluster_defaults, f"{field_prefix}.defaults", _DEFAULTS_STR_FIELDS, (), path)
+    byte_order = cluster_defaults.get("byte_order")
+    if byte_order is not None and byte_order not in _VALID_BYTE_ORDERS:
+        raise InvalidConfigError(
+            path, field=f"{field_prefix}.defaults.byte_order",
+            reason=f"must be 'little' or 'big', got '{byte_order}'",
+        )
+
+    # [plugin.*] is deliberately NOT validated, same as the top-level
+    # [plugin.*] — plugin territory, the core has no way to know which
+    # keys are legitimate.
+    cluster_plugin = entry.get("plugin", {})
+    if not isinstance(cluster_plugin, dict):
+        raise InvalidConfigError(path, field=f"{field_prefix}.plugin", reason="must be a TOML table")
+
+
+def _validate_table_meta_entry(entry: dict, index: int, path: Path) -> None:
+    field_prefix = f"table_meta[{index}]"
+    if not isinstance(entry, dict):
+        raise InvalidConfigError(path, field=field_prefix, reason="must be a TOML table, e.g. \\[\\[table_meta]]")
+    if not entry.get("name"):
+        raise InvalidConfigError(path, field=f"{field_prefix}.name", reason="required, can't be empty")
+    _validate_section(entry, field_prefix, _TABLE_META_STR_FIELDS, _TABLE_META_LIST_STR_FIELDS, path)
+
+
 def _build_config(merged: dict, path: Path) -> PayloadConfig:
     project_dict = merged.get("project", {})
     defaults_dict = merged.get("defaults", {})
-    toolchain_dict = merged.get("toolchain", {})
     plugin_dict = merged.get("plugin", {})
     pipeline_dict = merged.get("pipeline", {})
     batch_table_list = merged.get("batch_table", [])
+    cluster_list = merged.get("cluster", [])
+    table_meta_list = merged.get("table_meta", [])
 
     if not isinstance(project_dict, dict):
         raise InvalidConfigError(path, field="project", reason="must be a TOML table, e.g. [project]")
     if not isinstance(defaults_dict, dict):
         raise InvalidConfigError(path, field="defaults", reason="must be a TOML table, e.g. [defaults]")
-    if not isinstance(toolchain_dict, dict):
-        raise InvalidConfigError(path, field="toolchain", reason="must be a TOML table, e.g. [toolchain]")
     if not isinstance(plugin_dict, dict):
         raise InvalidConfigError(path, field="plugin", reason="must be a TOML table, e.g. [plugin.plugin_name]")
     if not isinstance(pipeline_dict, dict):
         raise InvalidConfigError(path, field="pipeline", reason="must be a TOML table, e.g. [pipeline]")
     if not isinstance(batch_table_list, list):
         raise InvalidConfigError(path, field="batch_table", reason="must be a list of [[batch_table]] tables")
+    if not isinstance(cluster_list, list):
+        raise InvalidConfigError(path, field="cluster", reason="must be a list of \\[\\[cluster]] tables")
+    if not isinstance(table_meta_list, list):
+        raise InvalidConfigError(path, field="table_meta", reason="must be a list of \\[\\[table_meta]] tables")
 
     pipeline_stages = pipeline_dict.get("stages", [])
     if not isinstance(pipeline_stages, list):
         raise InvalidConfigError(path, field="pipeline.stages", reason="must be a list of stages")
 
-    unknown_top = set(merged.keys()) - {"project", "defaults", "toolchain", "plugin", "pipeline", "batch_table"}
+    unknown_top = set(merged.keys()) - {
+        "project", "defaults", "plugin", "pipeline", "batch_table", "cluster", "table_meta",
+    }
     if unknown_top:
         raise InvalidConfigError(path, field=next(iter(unknown_top)), reason="unknown section")
 
     _validate_section(project_dict, "project", _PROJECT_STR_FIELDS, (), path)
     _validate_section(defaults_dict, "defaults", _DEFAULTS_STR_FIELDS, (), path)
-    _validate_section(toolchain_dict, "toolchain", _TOOLCHAIN_STR_FIELDS, _TOOLCHAIN_LIST_STR_FIELDS, path)
     # [plugin.*] is deliberately NOT validated here: it's plugin
     # territory, the core has no way to know which keys are legitimate.
     # [pipeline.stages] is deliberately validated only structurally
     # (list yes/no): the reader/writer/exec alternation rules are
     # core/pipeline_spec.py's territory, not the core config's. Same
-    # boundary for [[batch_table]]: only structure/known fields here,
-    # not the expansion of the 'sources' globs (core/batch_tables.py).
+    # boundary for [[batch_table]]/[[cluster]]/[[table_meta]]: only
+    # structure/known fields here, not deep validation (duplicate
+    # names, dangling references — core/batch_tables.py,
+    # core/clusters.py, core/table_meta.py respectively).
     for i, entry in enumerate(batch_table_list):
         _validate_batch_table_entry(entry, i, path)
+    for i, entry in enumerate(cluster_list):
+        _validate_cluster_entry(entry, i, path)
+    for i, entry in enumerate(table_meta_list):
+        _validate_table_meta_entry(entry, i, path)
 
     byte_order = defaults_dict.get("byte_order", "little")
     if byte_order not in _VALID_BYTE_ORDERS:
@@ -215,17 +274,23 @@ def _build_config(merged: dict, path: Path) -> PayloadConfig:
     return PayloadConfig(
         project=ProjectConfig(**project_dict),
         defaults=DefaultsConfig(**defaults_dict),
-        toolchain=ToolchainConfig(**toolchain_dict),
         plugin=plugin_dict,
         pipeline_stages=pipeline_stages,
         batch_tables=batch_table_list,
+        clusters=cluster_list,
+        table_meta=table_meta_list,
     )
 
 
-def load_config(project_root: Path, source_path: Path | None = None) -> PayloadConfig:
-    """Loads the global config, applies the specific table's sidecar
-    on top if source_path is given, validates the result."""
-    config, _ = resolve_config_with_provenance(project_root, source_path)
+def load_config(
+    project_root: Path, source_path: Path | None = None, table_name: str | None = None,
+) -> PayloadConfig:
+    """Loads the global config, applies the table's cluster (if any)
+    and then its sidecar on top if source_path is given, validates the
+    result. table_name identifies which table's cluster to look up —
+    if omitted but source_path is given, it defaults to
+    source_path.stem (the table's name for every single-file table)."""
+    config, _ = resolve_config_with_provenance(project_root, source_path, table_name)
     return config
 
 
@@ -241,11 +306,12 @@ def _flatten_keys(data: dict, prefix: str = "") -> list[str]:
 
 
 def resolve_config_with_provenance(
-    project_root: Path, source_path: Path | None = None
+    project_root: Path, source_path: Path | None = None, table_name: str | None = None,
 ) -> tuple[PayloadConfig, dict[str, str]]:
     """Like load_config, but also returns where each value comes from
-    ('default' | 'global (table-tool.toml)' | 'sidecar (<file>)') —
-    used by 'pld config show' to debug the 3-tier resolution."""
+    ('default' | 'global (table-tool.toml)' | 'cluster (<name>)' |
+    'sidecar (<file>)') — used by 'pld config show' to debug the
+    four-tier resolution."""
     merged: dict = {}
     provenance: dict[str, str] = {}
 
@@ -259,6 +325,28 @@ def resolve_config_with_provenance(
     else:
         logger.debug("No global config at %s, using defaults", global_path)
 
+    # Cluster resolution only happens when a specific table is being
+    # resolved (there's nothing to look up otherwise) — same
+    # "shallow-parsed here always, deep-resolved only when actually
+    # needed" boundary [[batch_table]] already has (resolve_batch_tables
+    # isn't called by every load_config either). Always resolved from
+    # the GLOBAL data only, never from a sidecar: cluster membership is
+    # a project-wide concept, a single table's sidecar has no business
+    # defining or reassigning it.
+    resolved_name = table_name if table_name is not None else (source_path.stem if source_path else None)
+    if resolved_name is not None:
+        global_config = _build_config(merged, global_path)
+        clusters = resolve_clusters(project_root, global_config)
+        table_metas = resolve_table_meta(project_root, global_config, clusters)
+        meta = table_metas.get(resolved_name)
+        cluster = clusters.get(meta.cluster) if meta and meta.cluster else None
+        cluster_raw = cluster_override_raw(cluster)
+        if cluster_raw:
+            logger.debug("Cluster '%s' applied for %s", cluster.name, resolved_name)
+            merged = deep_merge(merged, cluster_raw)
+            for key in _flatten_keys(cluster_raw):
+                provenance[key] = f"cluster ({cluster.name})"
+
     if source_path is not None:
         sidecar_path = source_path.parent / f"{source_path.stem}{SIDECAR_SUFFIX}"
         if sidecar_path.exists():
@@ -267,36 +355,38 @@ def resolve_config_with_provenance(
                 "Sidecar applied for %s: %s (keys: %s)",
                 source_path.name, sidecar_path.name, list(sidecar_data.keys()),
             )
-            merged = _deep_merge(merged, sidecar_data)
+            merged = deep_merge(merged, sidecar_data)
             for key in _flatten_keys(sidecar_data):
                 provenance[key] = f"sidecar ({sidecar_path.name})"
 
     config = _build_config(merged, global_path)
 
     # every field untouched by global/sidecar comes from the dataclass default
-    for section_name, section_obj in (("defaults", config.defaults), ("toolchain", config.toolchain)):
+    for section_name, section_obj in (("defaults", config.defaults),):
         for f in fields(section_obj):
             key = f"{section_name}.{f.name}"
             provenance.setdefault(key, "default")
 
     logger.debug(
-        "Config resolved for %s: writer=%s toolchain=%s",
+        "Config resolved for %s: writer=%s",
         source_path.name if source_path else "<global>",
-        config.defaults.writer, config.toolchain.compiler,
+        config.defaults.writer,
     )
     return config, provenance
 
 
 def config_schema() -> dict:
-    """Schema of the editable 'defaults'/'toolchain' fields, in the
-    dataclasses' declaration order — used by the web UI to generate the
-    config form without duplicating the field list on the JS side."""
+    """Schema of the editable 'defaults' fields, in the dataclass's
+    declaration order — used by the web UI to generate the config form
+    without duplicating the field list on the JS side. Anything a
+    plugin needs (e.g. a compiler/toolchain path) lives in
+    [plugin.<name>] instead, which the core deliberately doesn't
+    validate or expose a form for (see PayloadConfig.plugin)."""
     def _section(cls, list_fields: tuple) -> list[dict]:
         return [{"key": f.name, "type": "list" if f.name in list_fields else "string"} for f in fields(cls)]
 
     return {
         "defaults": _section(DefaultsConfig, ()),
-        "toolchain": _section(ToolchainConfig, _TOOLCHAIN_LIST_STR_FIELDS),
     }
 
 
@@ -309,15 +399,14 @@ def _drop_none_values(section: dict) -> dict:
     return {k: v for k, v in section.items() if v is not None}
 
 
-def write_global_config(project_root: Path, defaults: dict, toolchain: dict) -> Path:
-    """Writes/overwrites the [defaults]/[toolchain] sections of
-    table-tool.toml, preserving any existing [plugin.*]/[pipeline] as
-    is. Validates BEFORE writing: a config that wouldn't pass
-    load_config() never ends up on disk."""
+def write_global_config(project_root: Path, defaults: dict) -> Path:
+    """Writes/overwrites the [defaults] section of table-tool.toml,
+    preserving any existing [plugin.*]/[pipeline] as is. Validates
+    BEFORE writing: a config that wouldn't pass load_config() never
+    ends up on disk."""
     path = project_root / GLOBAL_CONFIG_FILENAME
     merged = dict(_load_toml(path)) if path.exists() else {}
     merged["defaults"] = _drop_none_values(defaults)
-    merged["toolchain"] = _drop_none_values(toolchain)
 
     _build_config(merged, path)
 
@@ -339,7 +428,6 @@ def read_raw_sidecar(source_path: Path) -> dict:
 def write_sidecar_config(
     source_path: Path,
     defaults: dict | None = None,
-    toolchain: dict | None = None,
     pipeline_stages: list | None = None,
 ) -> Path:
     """Updates source_path's sidecar one piece at a time: each None
@@ -357,25 +445,18 @@ def write_sidecar_config(
             merged["defaults"] = defaults
         else:
             merged.pop("defaults", None)
-    if toolchain is not None:
-        toolchain = _drop_none_values(toolchain)
-        if toolchain:
-            merged["toolchain"] = toolchain
-        else:
-            merged.pop("toolchain", None)
     if pipeline_stages is not None:
         if pipeline_stages:
             merged["pipeline"] = {**merged.get("pipeline", {}), "stages": pipeline_stages}
         else:
             merged.pop("pipeline", None)
 
-    # Same structural validation as _build_config for defaults/toolchain
+    # Same structural validation as _build_config for defaults
     # (pipeline.stages has already been validated by the caller with
     # PipelineSpec.from_raw_stages before getting here — the
     # reader/writer/exec alternation rules aren't this module's
     # territory).
     _validate_section(merged.get("defaults", {}), "defaults", _DEFAULTS_STR_FIELDS, (), sidecar_path)
-    _validate_section(merged.get("toolchain", {}), "toolchain", _TOOLCHAIN_STR_FIELDS, _TOOLCHAIN_LIST_STR_FIELDS, sidecar_path)
     byte_order = merged.get("defaults", {}).get("byte_order")
     if byte_order is not None and byte_order not in _VALID_BYTE_ORDERS:
         raise InvalidConfigError(
@@ -415,15 +496,23 @@ def delete_sidecar_config(source_path: Path) -> bool:
 # writing (a config that wouldn't pass load_config() never ends up on
 # disk), rewrites everything else unchanged.
 
+def _read_full_config(path: Path) -> dict:
+    return dict(_load_toml(path)) if path.exists() else {}
+
+
+def _write_full_config(path: Path, merged: dict) -> None:
+    _build_config(merged, path)
+    path.write_text(tomli_w.dumps(merged))
+
+
 def _read_batch_table_list(path: Path) -> tuple[dict, list[dict]]:
-    merged = dict(_load_toml(path)) if path.exists() else {}
+    merged = _read_full_config(path)
     return merged, list(merged.get("batch_table", []))
 
 
 def _write_batch_table_list(path: Path, merged: dict, batch_table_list: list[dict]) -> None:
     merged["batch_table"] = batch_table_list
-    _build_config(merged, path)
-    path.write_text(tomli_w.dumps(merged))
+    _write_full_config(path, merged)
 
 
 def create_batch_table(
@@ -507,4 +596,201 @@ def remove_batch_table_entry(project_root: Path, name: str) -> bool:
 
     _write_batch_table_list(path, merged, new_list)
     logger.debug("[[batch_table]] '%s' removed", name)
+    return True
+
+
+# --- programmatic mutation of [[cluster]] / [[table_meta]] ------------------
+#
+# Same load-mutate-validate-write pattern as [[batch_table]] above.
+
+def _read_cluster_list(path: Path) -> tuple[dict, list[dict]]:
+    merged = _read_full_config(path)
+    return merged, list(merged.get("cluster", []))
+
+
+def _write_cluster_list(path: Path, merged: dict, cluster_list: list[dict]) -> None:
+    merged["cluster"] = cluster_list
+    _write_full_config(path, merged)
+
+
+def _read_table_meta_list(path: Path) -> tuple[dict, list[dict]]:
+    merged = _read_full_config(path)
+    return merged, list(merged.get("table_meta", []))
+
+
+def _write_table_meta_list(path: Path, merged: dict, table_meta_list: list[dict]) -> None:
+    merged["table_meta"] = table_meta_list
+    _write_full_config(path, merged)
+
+
+def create_cluster(
+    project_root: Path, name: str, defaults: dict | None = None, plugin: dict | None = None,
+) -> Path:
+    """Adds a new [[cluster]] to table-tool.toml. Fails if a
+    [[cluster]] with this name already exists."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    merged, cluster_list = _read_cluster_list(path)
+    if any(e.get("name") == name for e in cluster_list):
+        raise ClusterError(name, "a \\[\\[cluster]] with this name already exists")
+
+    entry: dict = {"name": name}
+    defaults = _drop_none_values(defaults) if defaults else {}
+    if defaults:
+        entry["defaults"] = defaults
+    if plugin:
+        entry["plugin"] = plugin
+
+    cluster_list.append(entry)
+    _write_cluster_list(path, merged, cluster_list)
+    logger.debug("[[cluster]] '%s' created in %s", name, path)
+    return path
+
+
+def update_cluster(
+    project_root: Path, name: str, defaults: dict | None = None, plugin: dict | None = None,
+) -> Path:
+    """Replaces an existing [[cluster]]'s 'defaults'/'plugin' section
+    wholesale — None leaves that section untouched, an empty dict (or
+    one that becomes empty after dropping None values) clears it, same
+    convention as write_sidecar_config. Raises ClusterError if no
+    [[cluster]] with this name exists."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    merged, cluster_list = _read_cluster_list(path)
+    entry = next((e for e in cluster_list if e.get("name") == name), None)
+    if entry is None:
+        raise ClusterError(name, "no \\[\\[cluster]] with this name")
+
+    if defaults is not None:
+        defaults = _drop_none_values(defaults)
+        if defaults:
+            entry["defaults"] = defaults
+        else:
+            entry.pop("defaults", None)
+    if plugin is not None:
+        if plugin:
+            entry["plugin"] = plugin
+        else:
+            entry.pop("plugin", None)
+
+    _write_cluster_list(path, merged, cluster_list)
+    logger.debug("[[cluster]] '%s' updated", name)
+    return path
+
+
+def delete_cluster(project_root: Path, name: str, *, force: bool = False) -> bool:
+    """Removes a [[cluster]]. If any [[table_meta]] entry still
+    references it, refuses with ClusterError unless force=True, in
+    which case those entries have their 'cluster' field cleared (tags
+    kept — the entry itself is only dropped if it ends up with neither
+    a cluster nor tags, same rule set_table_cluster/set_table_tags
+    already follow). True if a cluster was actually removed."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    if not path.exists():
+        return False
+    merged = _read_full_config(path)
+    cluster_list = list(merged.get("cluster", []))
+    if not any(e.get("name") == name for e in cluster_list):
+        return False
+
+    table_meta_list = list(merged.get("table_meta", []))
+    members = [e.get("name") for e in table_meta_list if e.get("cluster") == name]
+    if members and not force:
+        raise ClusterError(name, f"still has {len(members)} member table(s): {', '.join(members)}")
+
+    new_table_meta_list = []
+    for e in table_meta_list:
+        if e.get("cluster") == name:
+            e = dict(e)
+            e.pop("cluster", None)
+            if not e.get("tags"):
+                continue  # nothing left to declare about this table
+        new_table_meta_list.append(e)
+
+    merged["cluster"] = [e for e in cluster_list if e.get("name") != name]
+    merged["table_meta"] = new_table_meta_list
+    _write_full_config(path, merged)
+    logger.debug("[[cluster]] '%s' removed (force=%s, %d member(s) cleared)", name, force, len(members))
+    return True
+
+
+def _upsert_table_meta(table_meta_list: list[dict], name: str) -> dict:
+    """Returns the [[table_meta]] entry for 'name', creating (and
+    appending) an empty one if it doesn't exist yet — mutates
+    table_meta_list in place."""
+    entry = next((e for e in table_meta_list if e.get("name") == name), None)
+    if entry is None:
+        entry = {"name": name}
+        table_meta_list.append(entry)
+    return entry
+
+
+def _drop_table_meta_if_empty(table_meta_list: list[dict], entry: dict) -> list[dict]:
+    if not entry.get("cluster") and not entry.get("tags"):
+        return [e for e in table_meta_list if e is not entry]
+    return table_meta_list
+
+
+def set_table_cluster(project_root: Path, table_name: str, cluster: str | None) -> Path:
+    """Sets (cluster=str) or clears (cluster=None) table_name's
+    cluster, creating its [[table_meta]] entry if missing, removing it
+    again if the result has neither a cluster nor tags. Validates the
+    target cluster exists BEFORE writing (ClusterError otherwise)."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    merged, table_meta_list = _read_table_meta_list(path)
+
+    if cluster is not None:
+        cluster_list = list(merged.get("cluster", []))
+        if not any(e.get("name") == cluster for e in cluster_list):
+            raise ClusterError(cluster, "no \\[\\[cluster]] with this name")
+
+    entry = _upsert_table_meta(table_meta_list, table_name)
+    if cluster:
+        entry["cluster"] = cluster
+    else:
+        entry.pop("cluster", None)
+    table_meta_list = _drop_table_meta_if_empty(table_meta_list, entry)
+
+    _write_table_meta_list(path, merged, table_meta_list)
+    logger.debug("[[table_meta]] '%s': cluster set to %r", table_name, cluster)
+    return path
+
+
+def set_table_tags(project_root: Path, table_name: str, tags: list[str]) -> Path:
+    """Whole-list replace (empty list clears all tags) — de-duplicates
+    while preserving order. Creates/removes the [[table_meta]] entry
+    the same way set_table_cluster does. This is the SOLE tag-mutation
+    primitive: the CLI's --add/--remove and the web tag editor both
+    read the table's current tags first and call this with the full
+    computed list, rather than having separate add/remove-at-the-
+    config-layer helpers with subtly different idempotency semantics."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    merged, table_meta_list = _read_table_meta_list(path)
+    deduped = list(dict.fromkeys(tags))
+
+    entry = _upsert_table_meta(table_meta_list, table_name)
+    if deduped:
+        entry["tags"] = deduped
+    else:
+        entry.pop("tags", None)
+    table_meta_list = _drop_table_meta_if_empty(table_meta_list, entry)
+
+    _write_table_meta_list(path, merged, table_meta_list)
+    logger.debug("[[table_meta]] '%s': tags set to %s", table_name, deduped)
+    return path
+
+
+def remove_table_meta_entry(project_root: Path, table_name: str) -> bool:
+    """Removes a table's entire [[table_meta]] entry — used by
+    core/table_admin.py when a table is deleted, mirroring
+    remove_batch_table_entry. Idempotent."""
+    path = project_root / GLOBAL_CONFIG_FILENAME
+    if not path.exists():
+        return False
+    merged, table_meta_list = _read_table_meta_list(path)
+    new_list = [e for e in table_meta_list if e.get("name") != table_name]
+    if len(new_list) == len(table_meta_list):
+        return False
+
+    _write_table_meta_list(path, merged, new_list)
+    logger.debug("[[table_meta]] '%s' removed", table_name)
     return True

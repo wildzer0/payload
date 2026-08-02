@@ -156,6 +156,11 @@ stages = [
 ]
 ```
 
+(reader/writer names throughout this doc — `csv`, `bin`, `hex`,
+`header`, `c_source`, `raw_text`, `obj` — are example plugins, not
+bundled with `payload`; `pld plugin install examples/plugins/<file>.py`
+installs the ones you need, see [PLUGINS.md](PLUGINS.md).)
+
 If a table has a `[pipeline]` in its own sidecar, that one wins —
 `--from`/`--to` from the CLI are ignored for that build (with a
 warning, not a silent error: an explicit pipeline already declares

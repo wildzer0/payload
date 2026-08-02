@@ -23,35 +23,35 @@ from payload.core.registry import PluginRegistry
 # --- ToolchainCheck ---------------------------------------------------------
 
 def test_toolchain_check_warns_when_not_configured():
-    result = ToolchainCheck("compiler", "compiler").run({})
+    result = ToolchainCheck("compiler", "compiler", "c_source").run({})
     assert result.status == CheckStatus.WARN
     assert "not configured" in result.message
 
 
 def test_toolchain_check_fails_when_binary_not_in_path():
-    config = {"toolchain": {"compiler": "this_binary_definitely_does_not_exist_xyz"}}
-    result = ToolchainCheck("compiler", "compiler").run(config)
+    config = {"plugin": {"c_source": {"compiler": "this_binary_definitely_does_not_exist_xyz"}}}
+    result = ToolchainCheck("compiler", "compiler", "c_source").run(config)
     assert result.status == CheckStatus.FAIL
 
 
 def test_toolchain_check_ok_when_binary_found_and_responds():
-    config = {"toolchain": {"compiler": "python3"}}
-    result = ToolchainCheck("compiler", "compiler").run(config)
+    config = {"plugin": {"c_source": {"compiler": "python3"}}}
+    result = ToolchainCheck("compiler", "compiler", "c_source").run(config)
     assert result.status == CheckStatus.OK
 
 
 def test_toolchain_check_warns_on_timeout():
-    config = {"toolchain": {"compiler": "python3"}}
+    config = {"plugin": {"c_source": {"compiler": "python3"}}}
     with patch("payload.core.doctor.subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="x", timeout=5)):
-        result = ToolchainCheck("compiler", "compiler").run(config)
+        result = ToolchainCheck("compiler", "compiler", "c_source").run(config)
     assert result.status == CheckStatus.WARN
     assert "not responding" in result.message
 
 
 def test_toolchain_check_fails_on_oserror():
-    config = {"toolchain": {"compiler": "python3"}}
+    config = {"plugin": {"c_source": {"compiler": "python3"}}}
     with patch("payload.core.doctor.subprocess.run", side_effect=OSError("permission denied")):
-        result = ToolchainCheck("compiler", "compiler").run(config)
+        result = ToolchainCheck("compiler", "compiler", "c_source").run(config)
     assert result.status == CheckStatus.FAIL
     assert "not executable" in result.message
 
@@ -65,7 +65,7 @@ def test_plugin_load_check_ok_with_no_local_plugins(tmp_path):
 
 
 def test_plugin_load_check_fails_on_broken_local_plugin(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "crashes.py").write_text('raise RuntimeError("boom")\n')
 
@@ -212,7 +212,7 @@ def test_table_name_uniqueness_check_fails_on_duplicates(tmp_path):
 # --- LocalPluginDepsCheck (branches not covered in test_doctor_new_checks.py) --
 
 def test_local_plugin_deps_check_ignores_underscore_prefixed_files(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "_helper.py").write_text('REQUIRES = ["nonexistent_library_xyz"]\n')
 
@@ -222,7 +222,7 @@ def test_local_plugin_deps_check_ignores_underscore_prefixed_files(tmp_path):
 
 
 def test_local_plugin_deps_check_ignores_files_without_requires(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "no_requires.py").write_text("class X:\n    pass\n")
 
@@ -241,7 +241,7 @@ def test_local_plugin_stub_check_ok_with_no_local_plugins(tmp_path):
 def test_local_plugin_stub_check_warns_on_scaffold(tmp_path):
     from payload.plugin_scaffold import scaffold_local_plugin
 
-    scaffold_local_plugin("my_reader", "reader", tmp_path / "local_plugins")
+    scaffold_local_plugin("my_reader", "reader", tmp_path / "plugins")
 
     result = LocalPluginStubCheck().run({"_project_root": str(tmp_path)})
 
@@ -251,7 +251,7 @@ def test_local_plugin_stub_check_warns_on_scaffold(tmp_path):
 
 
 def test_local_plugin_stub_check_ok_for_implemented_plugin(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "upper.py").write_text(
         "class X:\n"
@@ -270,7 +270,7 @@ def test_local_plugin_stub_check_ok_for_implemented_plugin(tmp_path):
 
 
 def test_local_plugin_stub_check_ignores_underscore_prefixed_files(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "_helper.py").write_text(
         "class X:\n"
@@ -344,10 +344,11 @@ def test_builtin_checks_returns_all_expected_checks():
     checks = builtin_checks()
     names = {c.name for c in checks}
     assert names == {
-        "toolchain", "plugins", "config", "table_names",
+        "plugins", "config", "table_names",
         "local_plugin_deps", "local_plugin_stubs", "git", "pipeline_exec",
         "directories", "cache",
     }
+    assert "toolchain" not in names  # no longer core: see examples/plugins/c_source.py, obj_writer.py
 
 
 def test_run_doctor_runs_all_builtin_checks(tmp_path, monkeypatch):

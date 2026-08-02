@@ -3,15 +3,17 @@ from pathlib import Path
 import pytest
 
 from payload.core.ir import TableIR
-from payload.readers.csv_reader import CsvReader
-from payload.readers.raw_text import RawTextReader
-from payload.writers.bin_writer import BinWriter
-from payload.writers.header_writer import HeaderWriter
-from payload.writers.hex_writer import HexWriter
 from payload.testing import assert_reader_conforms, assert_writer_conforms
+from tests.example_plugins_helper import load_example_plugin
+
+CsvReader = load_example_plugin("csv_reader.py").CsvReader
+RawTextReader = load_example_plugin("raw_text.py").RawTextReader
+BinWriter = load_example_plugin("bin_writer.py").BinWriter
+HeaderWriter = load_example_plugin("header_writer.py").HeaderWriter
+HexWriter = load_example_plugin("hex_writer.py").HexWriter
 
 
-# The builtin plugins must always pass their own conformance suite —
+# The example plugins must always pass their own conformance suite —
 # if one of these fails, it's a regression in the core.
 
 def test_raw_text_reader_conforms(tmp_path):

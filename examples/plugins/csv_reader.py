@@ -18,6 +18,10 @@ Serves as a second, more realistic example than raw_text.py, to show:
 
 Without a 'width' column, every value is treated as a single byte (as
 before) — backward compatible with CSVs written before this extension.
+
+Not installed by default — copy this file (or 'pld plugin install
+examples/plugins/csv_reader.py') into a project's plugins/ folder to
+use it, see src/payload/docs/PLUGINS.md.
 """
 from __future__ import annotations
 
@@ -122,3 +126,6 @@ class CsvReader:
             comments=comments,
             extra={"fields": fields},
         )
+
+
+READER = CsvReader

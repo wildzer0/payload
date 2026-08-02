@@ -8,6 +8,7 @@ from starlette.routing import BaseRoute
 
 from payload.web.routes import (
     build,
+    clusters,
     config,
     docs,
     golden,
@@ -30,4 +31,5 @@ ROUTES: list[BaseRoute] = [
     *local_plugin_editor.ROUTES,
     *source_editor.ROUTES,
     *table_admin.ROUTES,
+    *clusters.ROUTES,
 ]

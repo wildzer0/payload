@@ -420,6 +420,7 @@ const ROUTES = [
   [/^\/build-all$/, viewBuildAll],
   [/^\/plugins$/, viewPlugins],
   [/^\/plugin\/([^/]+)$/, viewPluginDetail],
+  [/^\/clusters$/, viewClusters],
   [/^\/local-plugin\/([^/]+)$/, viewLocalPluginEditor],
   [/^\/doctor$/, viewDoctor],
   [/^\/config$/, viewConfig],
@@ -544,23 +545,8 @@ function _orphanedTablesHtml(names) {
     </div>`;
 }
 
-async function viewDashboard() {
-  const [report, status, plugins, tracked, health] = await Promise.all([
-    api("/api/report"), api("/api/status"), getPlugins(), api("/api/log"), api("/api/health"),
-  ]);
-  const stateByName = Object.fromEntries(status.tables.map((t) => [t.name, t.state]));
-  const readerNames = plugins.plugins.filter((x) => x.kind === "reader").map((x) => x.name);
-  const writerNames = plugins.plugins.filter((x) => x.kind === "writer").map((x) => x.name);
-  const liveNames = new Set(report.tables.map((t) => t.name));
-  const orphanedNames = tracked.tables.filter((n) => !liveNames.has(n));
-
-  const pathByName = Object.fromEntries(status.tables.map((t) => [t.name, t.path]));
-  const total = report.tables.length;
-  const synced = report.tables.filter((t) => stateByName[t.name] === "clean").length;
-  const mismatches = report.tables.filter((t) => t.golden_status === "mismatch" || t.golden_status === "stale").length;
-  const dirty = report.tables.filter((t) => stateByName[t.name] === "dirty").length;
-
-  const cards = report.tables.map((t) => render`
+function _tableCardHtml(t, stateByName) {
+  return render`
     <div class="table-summary-card">
       <div class="table-summary-head">
         <a class="link table-summary-name" href="#/table/${t.name}">${t.name}</a>
@@ -571,6 +557,7 @@ async function viewDashboard() {
             ${raw(t.golden_snapshot_id ? goldBadge() : "")}
             ${raw(t.pipeline_explicit ? '<span class="pill pill-warn" title="Explicit pipeline configured: overrides default reader/writer">pipeline</span>' : "")}
             ${raw(t.has_sidecar ? '<span class="pill pill-dim" title="Sidecar (<name>.config.toml) active for this table">override</span>' : "")}
+            ${raw(t.cluster ? `<span class="pill pill-current" title="Cluster">${escapeHtml(t.cluster)}</span>` : "")}
           </div>
           ${raw(t.output_size != null
             ? `<a class="btn icon-only" href="/api/table/${encodeURIComponent(t.name)}/download" title="Download the last built output" download>${iconSpan("download")}</a>`
@@ -579,14 +566,145 @@ async function viewDashboard() {
         </div>
       </div>
       <div class="table-summary-meta">
-        <span class="meta-chip meta-chip-control"><strong>Reader</strong>${raw(_defaultSelectHtml("reader", t.name, readerNames, t.reader_override, t.resolved_reader, t.pipeline_explicit))}</span>
-        <span class="meta-chip meta-chip-control"><strong>Writer</strong>${raw(_defaultSelectHtml("writer", t.name, writerNames, t.writer_override, t.resolved_writer, t.pipeline_explicit))}</span>
+        <span class="meta-chip meta-chip-control"><strong>Reader</strong>${raw(_defaultSelectHtml("reader", t.name, _dashReaderNames, t.reader_override, t.resolved_reader, t.pipeline_explicit))}</span>
+        <span class="meta-chip meta-chip-control"><strong>Writer</strong>${raw(_defaultSelectHtml("writer", t.name, _dashWriterNames, t.writer_override, t.resolved_writer, t.pipeline_explicit))}</span>
         <span class="meta-chip"><strong>Size</strong><span class="mono">${fmtBytes(t.source_size)} → ${fmtBytes(t.output_size)}</span></span>
         <span class="meta-chip" title="${t.source_mtime}"><strong>Modified</strong><span class="mono">${fmtShortTimestamp(t.source_mtime)}</span></span>
         <span class="meta-chip"><strong>Snapshot</strong>${raw(_snapshotChipHtml(t))}</span>
       </div>
+      ${raw(t.tags && t.tags.length
+        ? `<div class="table-summary-tags">${t.tags.map((tag) => `<span class="pill pill-dim">${escapeHtml(tag)}</span>`).join("")}</div>`
+        : "")}
     </div>
-  `);
+  `;
+}
+
+/* Search box (name/tags substring) + cluster chip row (single active
+ * selection, like the Plugins page's kind filter) + tag chip row
+ * (MULTIPLE simultaneously active, OR semantics — a table matching
+ * ANY active tag passes, more natural for a "quick search" aid than
+ * requiring every tag at once). Returns "" (nothing rendered) if the
+ * project uses neither clusters nor tags, so a project not using this
+ * feature sees no extra UI at all. */
+function _dashboardFilterHtml(tables) {
+  const clusterNames = [...new Set(tables.map((t) => t.cluster).filter(Boolean))].sort();
+  const tagCounts = {};
+  for (const t of tables) for (const tag of t.tags || []) tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+  const tagNames = Object.keys(tagCounts).sort();
+  if (!clusterNames.length && !tagNames.length) return "";
+
+  const clusterRow = clusterNames.length ? `
+    <div class="toggle-chip-row" id="dash-cluster-filters">
+      <button type="button" class="toggle-chip dash-cluster-chip active" data-cluster-filter="">All clusters</button>
+      ${clusterNames.map((c) => `<button type="button" class="toggle-chip dash-cluster-chip" data-cluster-filter="${escapeHtml(c)}">${escapeHtml(c)}</button>`).join("")}
+    </div>` : "";
+
+  const tagRow = tagNames.length ? `
+    <div class="toggle-chip-row" id="dash-tag-filters">
+      ${tagNames.map((tag) => `<button type="button" class="toggle-chip dash-tag-chip" data-tag-filter="${escapeHtml(tag)}">${escapeHtml(tag)} <span class="pill pill-dim">${tagCounts[tag]}</span></button>`).join("")}
+    </div>` : "";
+
+  return `
+    <div class="card dashboard-filters">
+      <input type="text" id="dash-search" class="dash-search-input" placeholder="Search tables by name or tag…">
+      ${clusterRow}
+      ${tagRow}
+    </div>`;
+}
+
+let _dashReaderNames = [];
+let _dashWriterNames = [];
+
+async function viewDashboard() {
+  const [report, status, plugins, tracked, health] = await Promise.all([
+    api("/api/report"), api("/api/status"), getPlugins(), api("/api/log"), api("/api/health"),
+  ]);
+  const stateByName = Object.fromEntries(status.tables.map((t) => [t.name, t.state]));
+  _dashReaderNames = plugins.plugins.filter((x) => x.kind === "reader").map((x) => x.name);
+  _dashWriterNames = plugins.plugins.filter((x) => x.kind === "writer").map((x) => x.name);
+  const liveNames = new Set(report.tables.map((t) => t.name));
+  const orphanedNames = tracked.tables.filter((n) => !liveNames.has(n));
+
+  const pathByName = Object.fromEntries(status.tables.map((t) => [t.name, t.path]));
+  const total = report.tables.length;
+  const synced = report.tables.filter((t) => stateByName[t.name] === "clean").length;
+  const mismatches = report.tables.filter((t) => t.golden_status === "mismatch" || t.golden_status === "stale").length;
+  const dirty = report.tables.filter((t) => stateByName[t.name] === "dirty").length;
+
+  let searchQuery = "";
+  let clusterFilter = "";
+  const activeTags = new Set();
+
+  const matchesFilters = (t) => {
+    if (clusterFilter && t.cluster !== clusterFilter) return false;
+    if (activeTags.size && !(t.tags || []).some((tag) => activeTags.has(tag))) return false;
+    if (searchQuery) {
+      const haystack = `${t.name} ${(t.tags || []).join(" ")}`.toLowerCase();
+      if (!haystack.includes(searchQuery)) return false;
+    }
+    return true;
+  };
+
+  const wireCardHandlers = () => {
+    document.querySelectorAll("[data-quick-build]").forEach((btn) => {
+      btn.onclick = async () => {
+        const table = btn.dataset.quickBuild;
+        btn.disabled = true;
+        try {
+          const r = await api("/api/build", { body: { source: pathByName[table] } });
+          toast(`Build of '${table}' completed: ${r.outputs.join(", ")} (${r.was_built ? "rebuilt" : "from cache"})`, "ok");
+          viewDashboard();
+        } catch (e) {
+          toastError(e);
+          btn.disabled = false;
+        }
+      };
+    });
+
+    document.querySelectorAll("[data-default-kind]").forEach((sel) => {
+      sel.onchange = async () => {
+        const kind = sel.dataset.defaultKind;
+        const table = sel.dataset.defaultTable;
+        sel.disabled = true;
+        try {
+          const current = await api("/api/sidecar/" + encodeURIComponent(table));
+          const defaults = { ...(current.defaults || {}) };
+          if (sel.value) defaults[kind] = sel.value; else delete defaults[kind];
+          await api("/api/sidecar/" + encodeURIComponent(table), { method: "PUT", body: { defaults } });
+
+          if (kind === "reader" && sel.value) {
+            // the chosen reader exists, but does it REALLY read this
+            // table's file? same check as 'Validate conformance' on
+            // plugins, here pointed at the reader just set as default.
+            try {
+              const v = await api("/api/source/" + encodeURIComponent(table) + "/validate", { method: "POST" });
+              if (v.conforms) {
+                toast(`Default reader for '${table}' updated: reads the file correctly`, "ok");
+              } else {
+                toast(`Reader set, but '${v.reader}' can't read the source of '${table}'`, "warn", v.issues.map((i) => i.detail).join("; "));
+              }
+            } catch (ve) {
+              toast(`Default reader for '${table}' updated (verification failed: ${ve.message})`, "warn");
+            }
+          } else {
+            toast(`Default ${kind === "reader" ? "reader" : "writer"} for '${table}' updated`, "ok");
+          }
+          viewDashboard();
+        } catch (e) {
+          toastError(e);
+          sel.disabled = false;
+        }
+      };
+    });
+  };
+
+  const renderCards = () => {
+    const filtered = report.tables.filter(matchesFilters);
+    const cards = filtered.map((t) => _tableCardHtml(t, stateByName));
+    document.getElementById("table-summary-list").innerHTML =
+      cards.length ? cards.join("") : '<p class="empty-state card">No table matches this filter.</p>';
+    wireCardHandlers();
+  };
 
   document.getElementById("content").innerHTML = render`
     ${raw(pageHeader(health.project_name, `Dashboard · ${total} tables discovered in this project.`))}
@@ -597,9 +715,40 @@ async function viewDashboard() {
       <div class="stat-card ${mismatches ? "stat-fail" : ""}"><div class="stat-label">Golden mismatch/stale</div><div class="stat-value">${mismatches}</div></div>
       <div class="stat-card ${dirty ? "stat-warn" : ""}"><div class="stat-label">To save</div><div class="stat-value">${dirty}</div></div>
     </div>
-    <div class="table-summary-list">${cards.length ? cards : ['<p class="empty-state card">No table found.</p>']}</div>
+    ${raw(_dashboardFilterHtml(report.tables))}
+    <div class="table-summary-list" id="table-summary-list"></div>
     ${raw(_orphanedTablesHtml(orphanedNames))}
   `;
+
+  renderCards();
+
+  const searchInput = document.getElementById("dash-search");
+  if (searchInput) {
+    searchInput.oninput = debounce(() => {
+      searchQuery = searchInput.value.trim().toLowerCase();
+      renderCards();
+    }, 150);
+  }
+  document.querySelectorAll("#dash-cluster-filters [data-cluster-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      clusterFilter = btn.dataset.clusterFilter;
+      document.querySelectorAll("#dash-cluster-filters [data-cluster-filter]").forEach((b) => b.classList.toggle("active", b === btn));
+      renderCards();
+    };
+  });
+  document.querySelectorAll("#dash-tag-filters [data-tag-filter]").forEach((btn) => {
+    btn.onclick = () => {
+      const tag = btn.dataset.tagFilter;
+      if (activeTags.has(tag)) {
+        activeTags.delete(tag);
+        btn.classList.remove("active");
+      } else {
+        activeTags.add(tag);
+        btn.classList.add("active");
+      }
+      renderCards();
+    };
+  });
 
   const dropZone = document.getElementById("import-drop");
   const importFileInput = document.getElementById("import-file-input");
@@ -636,66 +785,80 @@ async function viewDashboard() {
       }
     };
   });
+}
 
-  document.querySelectorAll("[data-quick-build]").forEach((btn) => {
-    btn.onclick = async () => {
-      const table = btn.dataset.quickBuild;
-      btn.disabled = true;
-      try {
-        const r = await api("/api/build", { body: { source: pathByName[table] } });
-        toast(`Build of '${table}' completed: ${r.outputs.join(", ")} (${r.was_built ? "rebuilt" : "from cache"})`, "ok");
-        viewDashboard();
-      } catch (e) {
-        toastError(e);
-        btn.disabled = false;
-      }
-    };
+/* Asked only when 2+ files are dropped together: one batch table made
+ * of all of them, or each file imported as its own standalone table
+ * (for a pile of unrelated files — see BATCH.md vs the '--each' case
+ * of 'pld import' in cli.py import_cmd). Resolves to
+ * { mode: "batch" | "each", overwrite } or null if cancelled. */
+function _chooseImportMode(count) {
+  const overlay = document.getElementById("modal-overlay");
+  const box = document.getElementById("modal-box");
+  return new Promise((resolveFn) => {
+    box.innerHTML = render`
+      <p>${count} files dropped together. Create ONE batch table made of all of them, or import each as its own, independent table?</p>
+      <label class="toggle-chip"><input type="checkbox" id="modal-each-overwrite"><span>Overwrite tables that already exist</span></label>
+      <div class="modal-actions">
+        <button type="button" id="modal-cancel">Cancel</button>
+        <button type="button" id="modal-mode-batch">One batch table</button>
+        <button type="button" class="primary" id="modal-mode-each">${count} separate tables</button>
+      </div>
+    `;
+    overlay.hidden = false;
+    const overwriteBox = box.querySelector("#modal-each-overwrite");
+    const cleanup = (result) => { overlay.hidden = true; resolveFn(result); };
+    box.querySelector("#modal-cancel").onclick = () => cleanup(null);
+    box.querySelector("#modal-mode-batch").onclick = () => cleanup({ mode: "batch", overwrite: false });
+    box.querySelector("#modal-mode-each").onclick = () => cleanup({ mode: "each", overwrite: overwriteBox.checked });
+    overlay.onclick = (ev) => { if (ev.target === overlay) cleanup(null); };
   });
+}
 
-  document.querySelectorAll("[data-default-kind]").forEach((sel) => {
-    sel.onchange = async () => {
-      const kind = sel.dataset.defaultKind;
-      const table = sel.dataset.defaultTable;
-      sel.disabled = true;
-      try {
-        const current = await api("/api/sidecar/" + encodeURIComponent(table));
-        const defaults = { ...(current.defaults || {}) };
-        if (sel.value) defaults[kind] = sel.value; else delete defaults[kind];
-        await api("/api/sidecar/" + encodeURIComponent(table), { method: "PUT", body: { defaults } });
-
-        if (kind === "reader" && sel.value) {
-          // the chosen reader exists, but does it REALLY read this
-          // table's file? same check as 'Validate conformance' on
-          // plugins, here pointed at the reader just set as default.
-          try {
-            const v = await api("/api/source/" + encodeURIComponent(table) + "/validate", { method: "POST" });
-            if (v.conforms) {
-              toast(`Default reader for '${table}' updated: reads the file correctly`, "ok");
-            } else {
-              toast(`Reader set, but '${v.reader}' can't read the source of '${table}'`, "warn", v.issues.map((i) => i.detail).join("; "));
-            }
-          } catch (ve) {
-            toast(`Default reader for '${table}' updated (verification failed: ${ve.message})`, "warn");
-          }
-        } else {
-          toast(`Default ${kind === "reader" ? "reader" : "writer"} for '${table}' updated`, "ok");
-        }
-        viewDashboard();
-      } catch (e) {
-        toastError(e);
-        sel.disabled = false;
-      }
-    };
+/* Info-only modal (single "OK" button) — used to report the outcome
+ * of a bulk import, where a per-file toast doesn't scale to hundreds
+ * of files and some may have been skipped (not a hard failure, see
+ * import_many_single_tables in core/table_admin.py). */
+function infoDialog(bodyHtml) {
+  const overlay = document.getElementById("modal-overlay");
+  const box = document.getElementById("modal-box");
+  return new Promise((resolveFn) => {
+    box.innerHTML = render`
+      ${raw(bodyHtml)}
+      <div class="modal-actions">
+        <button type="button" class="primary" id="modal-ok">OK</button>
+      </div>
+    `;
+    overlay.hidden = false;
+    const cleanup = () => { overlay.hidden = true; resolveFn(); };
+    box.querySelector("#modal-ok").onclick = cleanup;
+    overlay.onclick = (ev) => { if (ev.target === overlay) cleanup(); };
   });
+}
+
+async function _reportBulkImport(r) {
+  const importedCount = r.imported.length;
+  const skipped = r.skipped || [];
+  if (!skipped.length) {
+    toast(`${importedCount} table${importedCount === 1 ? "" : "s"} imported`, "ok");
+    return;
+  }
+  const rows = skipped.map((s) => `<li><code>${escapeHtml(s.filename)}</code> — ${escapeHtml(s.reason)}</li>`).join("");
+  await infoDialog(`
+    <p>${importedCount} table${importedCount === 1 ? "" : "s"} imported, ${skipped.length} skipped:</p>
+    <ul class="bulk-import-skip-list">${rows}</ul>
+  `);
 }
 
 /* One or more files dragged/chosen in the dashboard's drop zone — a
  * single file asks for the table name (default: filename without
- * extension), multiple files together ask for the name of the new
- * batch table that will contain all of them (same choice as the CLI:
- * 'pld import <path> [--as name]' vs 'pld import <path...> --new-batch
- * name', see cli.py import_cmd). A name that already exists offers to
- * overwrite instead of silently refusing. */
+ * extension); multiple files together ask whether to bundle them into
+ * one new batch table or import each as its own independent table
+ * (same choice as the CLI: 'pld import <path> [--as name]' vs
+ * '--new-batch name' vs '--each', see cli.py import_cmd). A name that
+ * already exists offers to overwrite instead of silently refusing
+ * (single-file case); the bulk/'each' case skips existing names
+ * instead and reports them, unless 'overwrite' is checked. */
 async function _handleImportFiles(fileList) {
   const files = Array.from(fileList);
   if (!files.length) return;
@@ -708,15 +871,26 @@ async function _handleImportFiles(fileList) {
     formData.append("file", files[0]);
     if (name !== defaultName) formData.append("as_name", name);
   } else {
-    const batchName = await promptDialog(`Name of the new batch table for these ${files.length} files?`, { placeholder: "batch_name", confirmLabel: "Import" });
-    if (!batchName) return;
+    const choice = await _chooseImportMode(files.length);
+    if (!choice) return;
     files.forEach((f) => formData.append("file", f));
-    formData.append("new_batch", batchName);
+    if (choice.mode === "batch") {
+      const batchName = await promptDialog(`Name of the new batch table for these ${files.length} files?`, { placeholder: "batch_name", confirmLabel: "Import" });
+      if (!batchName) return;
+      formData.append("new_batch", batchName);
+    } else {
+      formData.append("each", "true");
+      if (choice.overwrite) formData.append("overwrite", "true");
+    }
   }
 
   try {
     const r = await apiUpload("/api/table/import", formData);
-    toast(`Import completed: ${r.kind === "batch" ? r.name : r.path}`, "ok");
+    if (r.kind === "bulk") {
+      await _reportBulkImport(r);
+    } else {
+      toast(`Import completed: ${r.kind === "batch" ? r.name : r.path}`, "ok");
+    }
     viewDashboard();
   } catch (e) {
     if (e.data && e.data.error === "TableAlreadyExistsError" && files.length === 1) {
@@ -778,6 +952,18 @@ async function viewTable(name) {
     <button class="danger" id="btn-delete-table">${iconSpan("trash")}Delete table</button>
   `;
 
+  const tagsClusterBody = `
+    <div class="field">
+      <label>Cluster</label>
+      <select id="tc-cluster" class="inline-select" style="width:100%;max-width:none"><option value="">— none —</option></select>
+    </div>
+    <div class="field">
+      <label>Tags</label>
+      <div id="tc-tag-chips" class="table-summary-tags"></div>
+      <input type="text" id="tc-tag-input" placeholder="Add a tag, press Enter" style="margin-top:8px">
+    </div>
+  `;
+
   content.innerHTML = render`
     <div class="breadcrumb"><a class="link" href="#/">← Dashboard</a></div>
     ${raw(pageHeader(name, undefined, headerActionsHtml))}
@@ -789,6 +975,7 @@ async function viewTable(name) {
         ${raw(detailsCard("Table-specific config (sidecar)", '<div id="sidecar-result"></div>', { open: false }))}
       </div>
       <div class="table-detail-side">
+        ${raw(pinnedCard("Tags & cluster", tagsClusterBody))}
         ${raw(pinnedCard("History", historyBody))}
       </div>
     </div>
@@ -805,9 +992,65 @@ async function viewTable(name) {
   // already set for this table (dashboard or sidecar) — leaving the
   // field empty will really use that default, writing something in it
   // only overrides it for THIS build, without touching the saved default.
-  api("/api/report").then((report) => {
+  // Combined with the cluster dropdown's population (from /api/clusters)
+  // in one Promise.all: setting <select>.value before its <option>s
+  // exist (a race if these ran in two separate .then()s) would silently
+  // fail to select anything.
+  let tcTags = [];
+  const renderTagChips = () => {
+    const chips = tcTags.map((tag) => `
+      <span class="pill pill-dim">${escapeHtml(tag)} <button type="button" class="chip-remove" data-remove-tag="${escapeHtml(tag)}" aria-label="Remove tag">×</button></span>
+    `).join("");
+    document.getElementById("tc-tag-chips").innerHTML = chips || '<span class="empty-state" style="margin:0">No tag</span>';
+    document.querySelectorAll("[data-remove-tag]").forEach((btn) => {
+      btn.onclick = async () => {
+        tcTags = tcTags.filter((t) => t !== btn.dataset.removeTag);
+        await saveTags();
+      };
+    });
+  };
+  const saveTags = async () => {
+    try {
+      await api(`/api/table/${encodeURIComponent(name)}/tags`, { method: "PUT", body: { tags: tcTags } });
+      renderTagChips();
+    } catch (e) {
+      toastError(e);
+    }
+  };
+  document.getElementById("tc-tag-input").addEventListener("keydown", async (ev) => {
+    if (ev.key !== "Enter") return;
+    ev.preventDefault();
+    const value = ev.target.value.trim();
+    if (!value) return;
+    if (!tcTags.includes(value)) tcTags.push(value);
+    ev.target.value = "";
+    await saveTags();
+  });
+  document.getElementById("tc-cluster").onchange = async (ev) => {
+    const cluster = ev.target.value || null;
+    try {
+      await api(`/api/table/${encodeURIComponent(name)}/cluster`, { method: "PUT", body: { cluster } });
+      toast(cluster ? `Assigned to cluster '${cluster}'` : "No longer in a cluster", "ok");
+    } catch (e) {
+      toastError(e);
+    }
+  };
+
+  Promise.all([api("/api/clusters"), api("/api/report")]).then(([clustersResp, report]) => {
+    const sel = document.getElementById("tc-cluster");
+    clustersResp.clusters.forEach((c) => {
+      const opt = document.createElement("option");
+      opt.value = c.name;
+      opt.textContent = c.name;
+      sel.appendChild(opt);
+    });
+
     const row = report.tables.find((t) => t.name === name);
     if (!row) return;
+    sel.value = row.cluster || "";
+    tcTags = row.tags || [];
+    renderTagChips();
+
     if (row.output_size != null) document.getElementById("btn-download-output").hidden = false;
     if (row.pipeline_explicit) return;
     if (row.resolved_reader) document.getElementById("f-from").placeholder = row.resolved_reader;
@@ -1161,7 +1404,6 @@ async function loadSidecarCard(name) {
     const [sidecar, cfg] = await Promise.all([api("/api/sidecar/" + encodeURIComponent(name)), api("/api/config")]);
     const schema = cfg.schema;
     const sidecarDefaults = sidecar.defaults || {};
-    const sidecarToolchain = sidecar.toolchain || {};
 
     function row(section, f, current) {
       const has = Object.prototype.hasOwnProperty.call(current, f.key);
@@ -1179,15 +1421,12 @@ async function loadSidecarCard(name) {
     }
 
     const defaultsRows = schema.defaults.map((f) => row("defaults", f, sidecarDefaults)).join("");
-    const toolchainRows = schema.toolchain.map((f) => row("toolchain", f, sidecarToolchain)).join("");
     const hasSidecar = Object.keys(sidecar).length > 0;
 
     el.innerHTML = `
       <p class="subtitle">Only the selected fields override the global config for this table.</p>
       <h2 style="margin-top:16px">Defaults</h2>
       ${defaultsRows}
-      <h2>Toolchain</h2>
-      ${toolchainRows}
       <div class="toolbar" style="margin-top:14px">
         <button type="button" class="primary" id="sc-save">${iconSpan("save")}Save sidecar</button>
         <button type="button" class="danger" id="sc-delete" ${hasSidecar ? "" : "disabled"}>${iconSpan("trash")}Delete sidecar</button>
@@ -1204,15 +1443,8 @@ async function loadSidecarCard(name) {
         const id = `sc-defaults-${f.key}`;
         if (document.getElementById(`${id}-toggle`).checked) defaults[f.key] = val(id) || null;
       });
-      const toolchain = {};
-      schema.toolchain.forEach((f) => {
-        const id = `sc-toolchain-${f.key}`;
-        if (document.getElementById(`${id}-toggle`).checked) {
-          toolchain[f.key] = f.type === "list" ? val(id).split(",").map((s) => s.trim()).filter(Boolean) : (val(id) || null);
-        }
-      });
       try {
-        await api("/api/sidecar/" + encodeURIComponent(name), { method: "PUT", body: { defaults, toolchain } });
+        await api("/api/sidecar/" + encodeURIComponent(name), { method: "PUT", body: { defaults } });
         toast("Sidecar saved", "ok");
         loadSidecarCard(name);
       } catch (e) {
@@ -1503,7 +1735,7 @@ function _pluginCardHtml(p) {
   const meta = PLUGIN_KIND_META[p.kind];
   const extPills = p.extensions.map((e) => `<span class="pill pill-dim mono">${escapeHtml(e)}</span>`).join("");
   return `
-    <a class="plugin-card${p.builtin ? " plugin-card-builtin" : ""}" href="#/plugin/${encodeURIComponent(p.name)}">
+    <a class="plugin-card${p.installed ? " plugin-card-installed" : ""}" href="#/plugin/${encodeURIComponent(p.name)}">
       <div class="plugin-card-kind">${iconSpan(meta.icon)}${meta.title}</div>
       <div class="plugin-card-name">${escapeHtml(p.name)}</div>
       <div class="plugin-card-meta">${extPills}<span class="pill pill-dim">v${escapeHtml(p.api_version)}</span></div>
@@ -1517,8 +1749,8 @@ function _pluginCardHtml(p) {
 // instead, the same way a search result list does, and no box is ever
 // bigger or smaller than its neighbor because there ARE no neighbors —
 // just one grid.
-function _pluginGridHtml(plugins, kindFilter, showBuiltin) {
-  const filtered = plugins.filter((p) => (!kindFilter || p.kind === kindFilter) && (showBuiltin || !p.builtin));
+function _pluginGridHtml(plugins, kindFilter, showInstalled) {
+  const filtered = plugins.filter((p) => (!kindFilter || p.kind === kindFilter) && (showInstalled || !p.installed));
   if (filtered.length === 0) {
     return '<p class="empty-state">No plugin matches this filter.</p>';
   }
@@ -1528,7 +1760,7 @@ function _pluginGridHtml(plugins, kindFilter, showBuiltin) {
 function _pluginToolbarHtml(plugins) {
   const counts = { "": plugins.length };
   for (const kind of Object.keys(PLUGIN_KIND_META)) counts[kind] = plugins.filter((p) => p.kind === kind).length;
-  const builtinCount = plugins.filter((p) => p.builtin).length;
+  const installedCount = plugins.filter((p) => p.installed).length;
   const chip = (kind, label) => `
     <button type="button" class="toggle-chip plugin-filter-chip${kind === "" ? " active" : ""}" data-kind-filter="${kind}">
       ${escapeHtml(label)} <span class="pill pill-dim">${counts[kind]}</span>
@@ -1540,8 +1772,8 @@ function _pluginToolbarHtml(plugins) {
         ${Object.entries(PLUGIN_KIND_META).map(([kind, meta]) => chip(kind, meta.title)).join("")}
       </div>
       <label class="toggle-chip">
-        <input type="checkbox" id="plugin-show-builtin">
-        Show payload built-ins <span class="pill pill-dim">${builtinCount}</span>
+        <input type="checkbox" id="plugin-show-installed">
+        Show installed (pip) plugins <span class="pill pill-dim">${installedCount}</span>
       </label>
     </div>`;
 }
@@ -1549,8 +1781,8 @@ function _pluginToolbarHtml(plugins) {
 async function viewPlugins() {
   const [r, local] = await Promise.all([api("/api/plugins"), api("/api/local-plugins")]);
   let kindFilter = "";
-  
-  let showBuiltin = localStorage.getItem("showBuiltinPlugins") === "true";
+
+  let showInstalled = localStorage.getItem("showInstalledPlugins") === "true";
 
   const localRows = local.files.map((f) => render`
     <div class="local-plugin-row">
@@ -1566,14 +1798,28 @@ async function viewPlugins() {
   document.getElementById("content").innerHTML = render`
     ${raw(pageHeader("Plugins"))}
     ${raw(_pluginToolbarHtml(r.plugins))}
-    <div id="plugin-grid-wrap">${raw(_pluginGridHtml(r.plugins, kindFilter, showBuiltin))}</div>
+    <div id="plugin-grid-wrap">${raw(_pluginGridHtml(r.plugins, kindFilter, showInstalled))}</div>
     ${raw(detailsCard(
-      "Local plugins (local_plugins/)",
-      `<div class="local-plugin-list">${localRows.join("") || '<p class="empty-state">No local plugin in this project.</p>'}</div>`,
+      "Plugins (plugins/)",
+      `<div class="local-plugin-list">${localRows.join("") || '<p class="empty-state">No plugin in this project.</p>'}</div>`,
       { open: local.files.length > 0 },
     ))}
     <div class="card">
-      <h2>New local plugin</h2>
+      <h2>Install plugin</h2>
+      <p class="subtitle">Payload ships no reader/writer of its own — install one from a local .py file, a raw .py URL, or drag one in. See the <a href="#/docs/plugins">plugin guide</a> for ready-to-use ones in examples/plugins/.</p>
+      <label class="import-drop" id="plugin-install-drop" for="plugin-install-file-input">
+        ${icon("download")}
+        <span>Drag a .py plugin file here, or click to choose</span>
+      </label>
+      <input type="file" id="plugin-install-file-input" accept=".py" multiple hidden>
+      <div class="field-row" style="margin-top:14px">
+        <div class="field"><label>Local path or http(s):// URL</label><input type="text" id="pi-source" placeholder="examples/plugins/raw_text.py"></div>
+        <div class="field"><label>Install as (optional)</label><input type="text" id="pi-as-name" placeholder="my_reader.py"></div>
+      </div>
+      <button class="primary" id="pi-install">${icon("download")}Install</button>
+    </div>
+    <div class="card">
+      <h2>New plugin</h2>
       <div class="field-row">
         <div class="field"><label>Name</label><input type="text" id="pn-name" placeholder="my_format"></div>
         <div class="field"><label>Kind</label>
@@ -1583,6 +1829,55 @@ async function viewPlugins() {
       <button class="primary" id="pn-create">${icon("plus")}Create and open in editor</button>
     </div>
   `;
+
+  const pluginDropZone = document.getElementById("plugin-install-drop");
+  const pluginInstallFileInput = document.getElementById("plugin-install-file-input");
+  ["dragenter", "dragover"].forEach((evt) => pluginDropZone.addEventListener(evt, (ev) => {
+    ev.preventDefault();
+    pluginDropZone.classList.add("import-drop-active");
+  }));
+  ["dragleave", "drop"].forEach((evt) => pluginDropZone.addEventListener(evt, (ev) => {
+    ev.preventDefault();
+    pluginDropZone.classList.remove("import-drop-active");
+  }));
+  pluginDropZone.addEventListener("drop", (ev) => _handlePluginInstallFiles(ev.dataTransfer.files));
+  pluginInstallFileInput.addEventListener("change", () => {
+    _handlePluginInstallFiles(pluginInstallFileInput.files);
+    pluginInstallFileInput.value = "";
+  });
+
+  document.getElementById("pi-install").onclick = async () => {
+    const source = val("pi-source");
+    if (!source) { toast("Enter a local path or URL first", "warn"); return; }
+    const asName = val("pi-as-name");
+    const formData = new FormData();
+    formData.append("source", source);
+    if (asName) formData.append("as_name", asName);
+    try {
+      let r;
+      try {
+        r = await apiUpload("/api/plugin/install", formData);
+      } catch (e) {
+        if (e.data && e.data.error === "PluginAlreadyExistsError") {
+          const ok = await confirmDialog(`${e.message}. Overwrite it?`, { danger: true, confirmLabel: "Overwrite" });
+          if (!ok) return;
+          formData.append("overwrite", "true");
+          r = await apiUpload("/api/plugin/install", formData);
+        } else {
+          throw e;
+        }
+      }
+      invalidatePluginsCache();
+      if (r.sanity_ok) {
+        toast(`'${r.filename}' installed (${r.kinds.join(", ")})`, "ok");
+      } else {
+        toast(`'${r.filename}' installed, but doesn't look like a valid plugin: ${r.sanity_issues.join("; ")}`, "warn");
+      }
+      viewPlugins();
+    } catch (e) {
+      toastError(e);
+    }
+  };
 
   document.getElementById("pn-create").onclick = async () => {
     try {
@@ -1601,7 +1896,7 @@ async function viewPlugins() {
   });
 
   const rerenderPluginGrid = () => {
-    document.getElementById("plugin-grid-wrap").innerHTML = _pluginGridHtml(r.plugins, kindFilter, showBuiltin);
+    document.getElementById("plugin-grid-wrap").innerHTML = _pluginGridHtml(r.plugins, kindFilter, showInstalled);
   };
 
   document.querySelectorAll("#plugin-kind-filters [data-kind-filter]").forEach((btn) => {
@@ -1612,17 +1907,71 @@ async function viewPlugins() {
     };
   });
 
-  const showBuiltinCheckbox = document.getElementById("plugin-show-builtin");
-  if (showBuiltinCheckbox) {
-    showBuiltinCheckbox.checked = showBuiltin;
-    showBuiltinCheckbox.onchange = (e) => {
-      showBuiltin = e.target.checked;
-      localStorage.setItem("showBuiltinPlugins", showBuiltin);
+  const showInstalledCheckbox = document.getElementById("plugin-show-installed");
+  if (showInstalledCheckbox) {
+    showInstalledCheckbox.checked = showInstalled;
+    showInstalledCheckbox.onchange = (e) => {
+      showInstalled = e.target.checked;
+      localStorage.setItem("showInstalledPlugins", showInstalled);
       rerenderPluginGrid();
     };
   }
 }
 
+
+/* Installs one already-selected/dropped .py file — on a name
+ * collision, asks to overwrite instead of silently refusing (same
+ * pattern as _handleImportFiles for tables), then retries once with
+ * 'overwrite'. Throws if the user declines the overwrite. */
+async function _installOnePluginFile(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  try {
+    return await apiUpload("/api/plugin/install", formData);
+  } catch (e) {
+    if (e.data && e.data.error === "PluginAlreadyExistsError") {
+      const ok = await confirmDialog(`${e.message}. Overwrite it?`, { danger: true, confirmLabel: "Overwrite" });
+      if (!ok) throw e;
+      formData.append("overwrite", "true");
+      return await apiUpload("/api/plugin/install", formData);
+    }
+    throw e;
+  }
+}
+
+/* Drag&drop / file-picker install: N .py files dropped together are
+ * installed one by one (a collision on one doesn't stop the others —
+ * same 'partial but explicit' spirit as bulk table import, just
+ * without a summary dialog since a failure is already reported as it
+ * happens via toast, and plugin drops are a handful of files, not
+ * hundreds). */
+async function _handlePluginInstallFiles(fileList) {
+  const files = Array.from(fileList);
+  if (!files.length) return;
+  const pyFiles = files.filter((f) => f.name.endsWith(".py"));
+  const skipped = files.filter((f) => !f.name.endsWith(".py"));
+  if (skipped.length) {
+    toast(`Only .py files can be installed as a plugin (ignored: ${skipped.map((f) => f.name).join(", ")})`, "warn");
+  }
+
+  let installed = 0;
+  for (const f of pyFiles) {
+    try {
+      const r = await _installOnePluginFile(f);
+      installed++;
+      if (!r.sanity_ok) {
+        toast(`'${r.filename}' installed, but doesn't look like a valid plugin: ${r.sanity_issues.join("; ")}`, "warn");
+      }
+    } catch (e) {
+      toastError(e);
+    }
+  }
+  if (installed) {
+    invalidatePluginsCache();
+    toast(`${installed} plugin${installed === 1 ? "" : "s"} installed`, "ok");
+    viewPlugins();
+  }
+}
 
 async function deleteLocalPlugin(filename, onDeleted) {
   const ok = await confirmDialog(`Permanently delete '${filename}'? This action can't be undone.`, { danger: true, confirmLabel: "Delete" });
@@ -1637,6 +1986,150 @@ async function deleteLocalPlugin(filename, onDeleted) {
   }
 }
 
+/* ---------- clusters ---------- */
+
+function _clusterCardHtml(c) {
+  const overrideParts = [
+    ...Object.entries(c.defaults).map(([k, v]) => `<span class="pill pill-dim mono">${escapeHtml(k)}=${escapeHtml(v)}</span>`),
+    ...Object.keys(c.plugin).map((k) => `<span class="pill pill-dim mono">plugin.${escapeHtml(k)}</span>`),
+  ];
+  return `
+    <div class="card cluster-card">
+      <div class="cluster-card-head">
+        <strong>${escapeHtml(c.name)}</strong>
+        <span class="pill pill-current">${c.member_count} table${c.member_count === 1 ? "" : "s"}</span>
+      </div>
+      <div class="cluster-card-overrides">${overrideParts.join("") || '<span class="empty-state" style="margin:0">No override</span>'}</div>
+      ${c.members.length ? `<div class="cluster-card-members">Members: ${c.members.map((m) => escapeHtml(m)).join(", ")}</div>` : ""}
+      <div class="cluster-card-actions">
+        <button class="icon-only" data-edit-cluster="${escapeHtml(c.name)}" title="Edit">${iconSpan("save")}</button>
+        <button class="danger icon-only" data-delete-cluster="${escapeHtml(c.name)}" title="Delete">${iconSpan("trash")}</button>
+      </div>
+    </div>`;
+}
+
+/* One cluster per table (see src/payload/docs/CLUSTERS.md): a named
+ * bundle of defaults/plugin overrides a table can opt into, sitting
+ * between the project's global [defaults] and a table's own
+ * sidecar/batch-inline overrides. This page manages the [[cluster]]
+ * declarations themselves — assigning a TABLE to a cluster happens on
+ * the table detail page ("Tags & cluster" card). [plugin.*] overrides
+ * stay hand-edit-table-tool.toml-only here too (same v1 scope as the
+ * CLI's 'pld cluster new/edit'). */
+async function viewClusters() {
+  const r = await api("/api/clusters");
+  const cards = r.clusters.map(_clusterCardHtml).join("");
+
+  document.getElementById("content").innerHTML = render`
+    ${raw(pageHeader("Clusters", "A cluster bundles config overrides that a table can opt into — global → cluster → sidecar → CLI flags."))}
+    <div class="cluster-grid" id="cluster-grid">${raw(cards || '<p class="empty-state card">No cluster declared in this project.</p>')}</div>
+    <div class="card" id="cluster-form-card">
+      <h2 id="cluster-form-title">New cluster</h2>
+      <div class="field"><label>Name</label><input type="text" id="cf-name" placeholder="sensors"></div>
+      <div class="field-row">
+        <div class="field"><label>Writer</label><input type="text" id="cf-writer" placeholder="no override"></div>
+        <div class="field"><label>Reader</label><input type="text" id="cf-reader" placeholder="no override"></div>
+      </div>
+      <div class="field-row">
+        <div class="field"><label>Output folder</label><input type="text" id="cf-output-dir" placeholder="no override"></div>
+        <div class="field"><label>Cache folder</label><input type="text" id="cf-cache-dir" placeholder="no override"></div>
+      </div>
+      <div class="field">
+        <label>Byte order</label>
+        <select id="cf-byte-order"><option value="">no override</option><option value="little">little</option><option value="big">big</option></select>
+      </div>
+      <div class="build-actions">
+        <button class="primary" id="cf-save">${icon("plus")}Create cluster</button>
+        <button id="cf-cancel" hidden>Cancel edit</button>
+      </div>
+    </div>
+  `;
+
+  let editingName = null;
+
+  const resetForm = () => {
+    editingName = null;
+    document.getElementById("cluster-form-title").textContent = "New cluster";
+    document.getElementById("cf-save").innerHTML = `${iconSpan("plus")}Create cluster`;
+    document.getElementById("cf-cancel").hidden = true;
+    document.getElementById("cf-name").disabled = false;
+    ["cf-name", "cf-writer", "cf-reader", "cf-output-dir", "cf-cache-dir"].forEach((id) => { document.getElementById(id).value = ""; });
+    document.getElementById("cf-byte-order").value = "";
+  };
+
+  document.getElementById("cf-cancel").onclick = resetForm;
+
+  document.getElementById("cf-save").onclick = async () => {
+    const name = editingName || val("cf-name");
+    if (!name) { toast("Enter a cluster name first", "warn"); return; }
+    const defaults = {};
+    const writer = val("cf-writer"); if (writer) defaults.writer = writer;
+    const reader = val("cf-reader"); if (reader) defaults.reader = reader;
+    const outputDir = val("cf-output-dir"); if (outputDir) defaults.output_dir = outputDir;
+    const cacheDir = val("cf-cache-dir"); if (cacheDir) defaults.cache_dir = cacheDir;
+    const byteOrder = document.getElementById("cf-byte-order").value; if (byteOrder) defaults.byte_order = byteOrder;
+
+    try {
+      if (editingName) {
+        await api(`/api/clusters/${encodeURIComponent(editingName)}`, { method: "PUT", body: { defaults } });
+        toast(`Cluster '${editingName}' updated`, "ok");
+      } else {
+        await api("/api/clusters", { method: "POST", body: { name, defaults } });
+        toast(`Cluster '${name}' created`, "ok");
+      }
+      viewClusters();
+    } catch (e) {
+      toastError(e);
+    }
+  };
+
+  document.querySelectorAll("[data-edit-cluster]").forEach((btn) => {
+    btn.onclick = () => {
+      const c = r.clusters.find((x) => x.name === btn.dataset.editCluster);
+      if (!c) return;
+      editingName = c.name;
+      document.getElementById("cluster-form-title").textContent = `Edit '${c.name}'`;
+      document.getElementById("cf-save").innerHTML = `${iconSpan("save")}Save changes`;
+      document.getElementById("cf-cancel").hidden = false;
+      document.getElementById("cf-name").value = c.name;
+      document.getElementById("cf-name").disabled = true;
+      document.getElementById("cf-writer").value = c.defaults.writer || "";
+      document.getElementById("cf-reader").value = c.defaults.reader || "";
+      document.getElementById("cf-output-dir").value = c.defaults.output_dir || "";
+      document.getElementById("cf-cache-dir").value = c.defaults.cache_dir || "";
+      document.getElementById("cf-byte-order").value = c.defaults.byte_order || "";
+      document.getElementById("cluster-form-card").scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+  });
+
+  document.querySelectorAll("[data-delete-cluster]").forEach((btn) => {
+    btn.onclick = async () => {
+      const name = btn.dataset.deleteCluster;
+      const ok = await confirmDialog(`Delete cluster '${name}'?`, { danger: true, confirmLabel: "Delete" });
+      if (!ok) return;
+      try {
+        await api(`/api/clusters/${encodeURIComponent(name)}`, { method: "DELETE" });
+        toast(`Cluster '${name}' deleted`, "ok");
+        viewClusters();
+      } catch (e) {
+        if (e.data && e.data.error === "ClusterError") {
+          const ok2 = await confirmDialog(`${e.message}. Delete anyway and clear it from those tables (tags kept)?`, { danger: true, confirmLabel: "Delete anyway" });
+          if (!ok2) return;
+          try {
+            await api(`/api/clusters/${encodeURIComponent(name)}?force=true`, { method: "DELETE" });
+            toast(`Cluster '${name}' deleted`, "ok");
+            viewClusters();
+          } catch (e2) {
+            toastError(e2);
+          }
+          return;
+        }
+        toastError(e);
+      }
+    };
+  });
+}
+
 async function viewPluginDetail(name) {
   const p = await api("/api/plugin/" + encodeURIComponent(name));
 
@@ -1649,7 +2142,7 @@ async function viewPluginDetail(name) {
 
   document.getElementById("content").innerHTML = render`
     <div class="breadcrumb"><a class="link" href="#/plugins">← Plugins</a></div>
-    ${raw(pageHeader(p.name, `${p.kind} · API v${p.api_version}${p.builtin ? " · payload built-in" : ""}`))}
+    ${raw(pageHeader(p.name, `${p.kind} · API v${p.api_version}${p.installed ? " · installed (pip)" : ""}`))}
     <div class="card">
       ${raw(chips ? `<div class="plugin-meta-row">${chips}</div>` : "")}
       <div class="plugin-description">${raw(formatDescription(p.docstring))}</div>
@@ -1732,7 +2225,7 @@ async function viewLocalPluginEditor(rawFilename) {
 
   content.innerHTML = render`
     <div class="breadcrumb"><a class="link" href="#/plugins">← Plugins</a></div>
-    ${raw(pageHeader(filename, "Local plugin editor — edit, check syntax, and test conformance directly from here."))}
+    ${raw(pageHeader(filename, "Plugin editor — edit, check syntax, and test conformance directly from here."))}
     <div class="card">
       <div class="field-row" style="align-items:center">
         <div class="field" style="flex:2;min-width:220px"><label>Sample file for the test (reader only, optional)</label><input type="text" id="lpe-sample" placeholder="example.raw"></div>
@@ -1874,26 +2367,6 @@ const CONFIG_FIELD_META = {
     label: "Byte order",
     desc: "Default endianness for readers/writers that handle multi-byte values.",
   },
-  "toolchain.compiler": {
-    label: "Compiler",
-    desc: "Executable used by the 'c_source' reader to compile .c files before extracting their bytes.",
-  },
-  "toolchain.compiler_flags": {
-    label: "Compiler flags",
-    desc: "Extra flags passed to the compiler, comma-separated — e.g. -O2, -Wall.",
-  },
-  "toolchain.objcopy": {
-    label: "objcopy",
-    desc: "Executable used to extract the binary data section after compilation.",
-  },
-  "toolchain.objcopy_target": {
-    label: "objcopy target",
-    desc: "Only required by the 'obj' writer — objcopy output format, e.g. elf32-littlearm.",
-  },
-  "toolchain.objcopy_arch": {
-    label: "objcopy arch",
-    desc: "Only required by the 'obj' writer — target architecture, e.g. arm.",
-  },
 };
 
 function _cfgFieldMarkup(section, f, currentByKey, originByKey) {
@@ -1938,18 +2411,11 @@ function _cfgFieldMarkup(section, f, currentByKey, originByKey) {
 function _cfgReadFormValues(schema) {
   const defaults = {};
   for (const f of schema.defaults) defaults[f.key] = val(_cfgFieldId("defaults", f.key)) || null;
-  const toolchain = {};
-  for (const f of schema.toolchain) {
-    const id = _cfgFieldId("toolchain", f.key);
-    toolchain[f.key] = f.type === "list"
-      ? val(id).split(",").map((s) => s.trim()).filter(Boolean)
-      : (val(id) || null);
-  }
-  return { defaults, toolchain };
+  return { defaults };
 }
 
 // Lightweight preview of the TOML that would be written — not a full
-// TOML serializer (no need: only defaults/toolchain, values are always
+// TOML serializer (no need: only defaults, values are always
 // string/list/null), just enough to show the user what's about to be
 // saved before they press "Save".
 function _cfgTomlPreview(values) {
@@ -1962,7 +2428,7 @@ function _cfgTomlPreview(values) {
     const lines = Object.entries(obj).map(([k, v]) => [k, fmtVal(v)]).filter(([, v]) => v !== null).map(([k, v]) => `${k} = ${v}`);
     return `[${name}]` + (lines.length ? `\n${lines.join("\n")}` : "\n# (no override, all defaults)");
   };
-  return `${section("defaults", values.defaults)}\n\n${section("toolchain", values.toolchain)}`;
+  return section("defaults", values.defaults);
 }
 
 async function viewConfig() {
@@ -1972,7 +2438,6 @@ async function viewConfig() {
   const originByKey = Object.fromEntries(r.fields.map((f) => [f.key, f.origin]));
 
   const defaultsRows = schema.defaults.map((f) => _cfgFieldMarkup("defaults", f, currentByKey, originByKey));
-  const toolchainRows = schema.toolchain.map((f) => _cfgFieldMarkup("toolchain", f, currentByKey, originByKey));
 
   const rows = r.fields.map((f) => render`
     <tr><td class="mono">${f.key}</td><td class="mono">${JSON.stringify(f.value)}</td><td>${statusPill(f.origin === "default" ? "never_saved" : f.origin.startsWith("sidecar") ? "warn" : "ok")} ${f.origin}</td></tr>
@@ -1984,11 +2449,6 @@ async function viewConfig() {
       <h2 class="settings-section-title">Default paths and formats</h2>
       <p class="settings-section-desc">Used for every table that has no explicit command-line preference.</p>
       ${defaultsRows}
-    </div>
-    <div class="card settings-section">
-      <h2 class="settings-section-title">Build toolchain</h2>
-      <p class="settings-section-desc">Used by the 'c_source' reader and the 'obj' writer — ignore them if you don't use those.</p>
-      ${toolchainRows}
       <div class="settings-toolbar">
         <span class="settings-toolbar-status" id="cfg-dirty-status">No changes</span>
         <button type="button" id="cfg-reset">${icon("refresh")}Reset</button>
@@ -2014,7 +2474,7 @@ async function viewConfig() {
   const dirtyStatus = document.getElementById("cfg-dirty-status");
   const saveBtn = document.getElementById("cfg-save");
 
-  const fieldOriginal = (section, key) => (section === "defaults" ? originalValues.defaults[key] : originalValues.toolchain[key]);
+  const fieldOriginal = (section, key) => originalValues.defaults[key];
 
   const refresh = () => {
     const values = _cfgReadFormValues(schema);
@@ -2024,7 +2484,7 @@ async function viewConfig() {
     document.querySelectorAll(".settings-row").forEach((row) => {
       const [section, ...rest] = row.dataset.rowKey.split(".");
       const fieldKey = rest.join(".");
-      const current = section === "defaults" ? values.defaults[fieldKey] : values.toolchain[fieldKey];
+      const current = values.defaults[fieldKey];
       const changed = JSON.stringify(current) !== JSON.stringify(fieldOriginal(section, fieldKey));
       row.querySelector(".settings-row-dirty-note").hidden = !changed;
       if (changed) changedCount += 1;

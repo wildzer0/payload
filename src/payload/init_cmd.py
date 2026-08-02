@@ -7,13 +7,16 @@ from pathlib import Path
 import tomli_w
 
 from payload.core.config import GLOBAL_CONFIG_FILENAME
-from payload.core.local_plugins import LOCAL_PLUGINS_DIRNAME
+from payload.core.local_plugins import PLUGINS_DIRNAME
 
-LOCAL_PLUGINS_README = '''# Local plugins
+PLUGINS_README = '''# Plugins
 
 .py files placed here are discovered automatically by payload, no
 `pip install` needed — see src/payload/docs/PLUGINS.md, section
-"Local plugins without pip install", for the full guide.
+"Plugins without pip install", for the full guide. payload ships no
+reader/writer of its own: this folder is how a project gets any —
+see examples/plugins/ in the payload repo for ready-to-use ones
+('pld plugin install <path or url>').
 
 Minimal convention:
 
@@ -67,21 +70,13 @@ def _render_toml(writer: str | None, byte_order: str) -> str:
     if writer:
         lines.append(f'writer = "{writer}"')
     lines.append(f'byte_order = "{byte_order}"')
-    lines.append("")
-    lines.append("[toolchain]")
-    lines.append('compiler = "gcc"')
-    lines.append("compiler_flags = []")
-    lines.append('objcopy = "objcopy"')
-    lines.append("# Only required if you use the 'obj' writer (compiles .c -> linkable .o).")
-    lines.append('# objcopy_target = "elf32-littlearm"')
-    lines.append('# objcopy_arch = "arm"')
     return "\n".join(lines) + "\n"
 
 
 def init_project(
     target_dir: Path,
     force: bool = False,
-    include_local_plugins: bool = True,
+    include_plugins: bool = True,
     include_example: bool = True,
     writer=_UNSET,
     byte_order: str = "little",
@@ -89,7 +84,7 @@ def init_project(
     project_description: str | None = None,
 ) -> list[Path]:
     """Creates target_dir if it doesn't exist, then table-tool.toml,
-    build/, (optionally) local_plugins/, and a sample table inside it.
+    build/, (optionally) plugins/, and a sample table inside it.
     Returns the list of created files/dirs. Doesn't overwrite anything
     unless force=True.
 
@@ -136,13 +131,13 @@ def init_project(
     build_dir.mkdir(parents=True, exist_ok=True)
     created.append(build_dir)
 
-    if include_local_plugins:
-        local_plugins_dir = target_dir / LOCAL_PLUGINS_DIRNAME
-        local_plugins_dir.mkdir(parents=True, exist_ok=True)
-        created.append(local_plugins_dir)
-        readme_dest = local_plugins_dir / "README.md"
+    if include_plugins:
+        plugins_dir = target_dir / PLUGINS_DIRNAME
+        plugins_dir.mkdir(parents=True, exist_ok=True)
+        created.append(plugins_dir)
+        readme_dest = plugins_dir / "README.md"
         if not readme_dest.exists() or force:
-            readme_dest.write_text(LOCAL_PLUGINS_README, newline="\n")
+            readme_dest.write_text(PLUGINS_README, newline="\n")
             created.append(readme_dest)
 
     if include_example:

@@ -29,7 +29,7 @@ def test_local_plugin_deps_check_ok_when_no_plugins(tmp_path):
 
 
 def test_local_plugin_deps_check_warns_on_missing_dependency(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "bad.py").write_text('REQUIRES = ["libreria_inesistente_xyz_123"]\n')
 
@@ -40,7 +40,7 @@ def test_local_plugin_deps_check_warns_on_missing_dependency(tmp_path):
 
 
 def test_local_plugin_deps_check_ok_when_deps_satisfied(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "good.py").write_text('REQUIRES = ["json", "os"]\n')  # stdlib, always satisfied
 

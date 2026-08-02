@@ -64,7 +64,10 @@ These overrides live **inline in the `[[batch_table]]` block**, not in
 a sidecar: a batch table has no single `source_path` to resolve a
 `<name>.config.toml` from. If unspecified, the global
 `[defaults]`/`[pipeline]` defaults apply exactly as they would for a
-normal table.
+normal table — and if the batch table belongs to a cluster (see
+[CLUSTERS.md](CLUSTERS.md)), the cluster's overrides apply too, with
+these inline overrides winning over the cluster (same precedence a
+sidecar has for a single-file table).
 
 ```toml
 [[batch_table]]
@@ -74,6 +77,10 @@ reader = "raw_text"
 writer = "hex"
 byte_order = "big"
 ```
+
+(`raw_text`/`hex` here are example plugin names, not bundled with
+`payload` — install them first with `pld plugin install
+examples/plugins/raw_text.py`/`hex_writer.py`, or substitute your own.)
 
 `[[batch_table]]` is read **only from the global `table-tool.toml`** —
 an occurrence in a sidecar (which wouldn't make sense anyway, since
@@ -169,7 +176,10 @@ pld rm rows --force                       # deletes all members + the [[batch_ta
 
 On the web side, `pld serve` exposes the same behavior through the
 existing routes (dashboard, table page, history, golden), plus
-`/api/table/import` (creation, also via drag&drop on the Dashboard) and
+`/api/table/import` (creation, also via drag&drop on the Dashboard —
+dropping 2+ files together asks whether to bundle them into one batch
+table or import each as its own independent table, see the `--each`
+flag of `pld import` in [USAGE.md](USAGE.md)) and
 `/api/table/delete` — the only thing that stays config-file-only is
 **editing** an already-existing `[[batch_table]]` (inline
 reader/writer/byte_order/stages, or reordering `sources`): no visual

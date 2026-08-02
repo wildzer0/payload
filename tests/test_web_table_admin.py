@@ -249,16 +249,21 @@ def test_import_single_file_empty_400(tmp_path):
     assert not (root / "external.raw").exists()
 
 
-def test_import_unreadable_extension_422(tmp_path):
+def test_import_unreadable_extension_still_accepted(tmp_path):
+    """Import doesn't require an installed reader for the extension —
+    a fresh project starts with zero readers (no bundled plugins), the
+    table just can't be built until one is installed. See
+    core/table_admin.py."""
     root = _init_project(tmp_path)
     client = _client(root)
 
     r = client.post("/api/table/import", files={"file": ("external.mysteryext", b"x")})
 
-    assert r.status_code == 404  # NoReaderFoundError -> NotFoundError -> 404
+    assert r.status_code == 200
+    assert (root / "external.mysteryext").read_bytes() == b"x"
 
 
-def test_import_multiple_files_without_new_batch_400(tmp_path):
+def test_import_multiple_files_without_new_batch_or_each_400(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
@@ -268,6 +273,80 @@ def test_import_multiple_files_without_new_batch_400(tmp_path):
     )
 
     assert r.status_code == 400
+
+
+def test_import_new_batch_and_each_together_400(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.post(
+        "/api/table/import",
+        files=[("file", ("ROW1.txt", b"0x01\n")), ("file", ("ROW2.txt", b"0x02\n"))],
+        data={"new_batch": "rows", "each": "true"},
+    )
+
+    assert r.status_code == 400
+
+
+def test_import_each_creates_independent_tables(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.post(
+        "/api/table/import",
+        files=[("file", ("a.raw", b"0x01\n")), ("file", ("b.raw", b"0x02\n"))],
+        data={"each": "true"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "created"
+    assert body["kind"] == "bulk"
+    assert {Path(r["path"]).name for r in body["imported"]} == {"a.raw", "b.raw"}
+    assert body["skipped"] == []
+    assert (root / "a.raw").exists() and (root / "b.raw").exists()
+
+    status = client.get("/api/status").json()
+    names = {t["name"] for t in status["tables"]}
+    assert {"a", "b"} <= names
+
+
+def test_import_each_skips_collisions_and_reports_them(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    client.post("/api/table/import", files={"file": ("a.raw", b"0x01\n")})
+
+    r = client.post(
+        "/api/table/import",
+        files=[("file", ("a.raw", b"0xFF\n")), ("file", ("b.raw", b"0x02\n"))],
+        data={"each": "true"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "partial"
+    assert [Path(r["path"]).name for r in body["imported"]] == ["b.raw"]
+    assert len(body["skipped"]) == 1
+    assert body["skipped"][0]["filename"] == "a.raw"
+    assert (root / "a.raw").read_bytes() == b"0x01\n"
+
+
+def test_import_each_overwrite_replaces_existing(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    client.post("/api/table/import", files={"file": ("a.raw", b"0x01\n")})
+
+    r = client.post(
+        "/api/table/import",
+        files=[("file", ("a.raw", b"0xFF\n"))],
+        data={"each": "true", "overwrite": "true"},
+    )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "created"
+    assert body["skipped"] == []
+    assert (root / "a.raw").read_bytes() == b"0xFF\n"
 
 
 def test_import_new_batch_creates_batch_table(tmp_path):

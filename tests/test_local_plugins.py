@@ -67,12 +67,17 @@ raise RuntimeError("failed before even defining a plugin")
 
 
 def test_local_plugins_dir_discovered_next_to_project_root(tmp_path):
-    (tmp_path / "local_plugins").mkdir()
+    (tmp_path / "plugins").mkdir()
     dirs = discover_local_plugin_dirs(tmp_path)
-    assert tmp_path / "local_plugins" in dirs
+    assert tmp_path / "plugins" in dirs
 
 
-def test_no_local_plugins_dir_returns_empty(tmp_path):
+def test_no_local_plugins_dir_returns_empty(tmp_path, monkeypatch):
+    # the test session sets PAYLOAD_PLUGIN_PATH to examples/plugins/
+    # (see conftest.py) so CLI/web integration tests have a real
+    # reader/writer to work with — this test cares specifically about
+    # the "nothing configured at all" case, so it clears it locally.
+    monkeypatch.delenv("PAYLOAD_PLUGIN_PATH", raising=False)
     assert discover_local_plugin_dirs(tmp_path) == []
 
 
@@ -93,7 +98,7 @@ def test_env_var_nonexistent_directory_ignored(tmp_path, monkeypatch):
 
 
 def test_single_writer_loaded_and_functional(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "upper.py").write_text(WRITER_SOURCE)
 
@@ -109,8 +114,9 @@ def test_single_writer_loaded_and_functional(tmp_path):
     assert out.read_bytes() == b"HELLO"
 
 
-def test_plural_readers_all_loaded(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+def test_plural_readers_all_loaded(tmp_path, monkeypatch):
+    monkeypatch.delenv("PAYLOAD_PLUGIN_PATH", raising=False)
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "multi.py").write_text(MULTI_READER_SOURCE)
 
@@ -121,7 +127,7 @@ def test_plural_readers_all_loaded(tmp_path):
 
 
 def test_broken_plugin_strict_raises(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "broken.py").write_text(BROKEN_SOURCE)
 
@@ -131,7 +137,7 @@ def test_broken_plugin_strict_raises(tmp_path):
 
 
 def test_broken_plugin_non_strict_tracked_not_raised(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "broken.py").write_text(BROKEN_SOURCE)
 
@@ -143,7 +149,7 @@ def test_broken_plugin_non_strict_tracked_not_raised(tmp_path):
 
 
 def test_module_import_failure_strict_raises(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "crashes.py").write_text(MODULE_LEVEL_FAILURE_SOURCE)
 
@@ -153,7 +159,7 @@ def test_module_import_failure_strict_raises(tmp_path):
 
 
 def test_module_import_failure_non_strict_tracked_not_raised(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "crashes.py").write_text(MODULE_LEVEL_FAILURE_SOURCE)
 
@@ -165,7 +171,7 @@ def test_module_import_failure_non_strict_tracked_not_raised(tmp_path):
 
 
 def test_underscore_prefixed_files_ignored(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "_helper.py").write_text("this is not valid python [[[")
 
@@ -175,7 +181,7 @@ def test_underscore_prefixed_files_ignored(tmp_path):
 
 
 def test_load_plugins_integrates_local_plugins(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "upper.py").write_text(WRITER_SOURCE)
 
@@ -207,7 +213,7 @@ def test_registry_warns_on_name_collision(tmp_path, caplog):
 
 
 def test_load_module_from_file_and_extract_plugin_classes(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     path = plugin_dir / "upper.py"
     path.write_text(WRITER_SOURCE)
@@ -219,7 +225,7 @@ def test_load_module_from_file_and_extract_plugin_classes(tmp_path):
 
 
 def test_extract_plugin_classes_multi_reader(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     path = plugin_dir / "multi.py"
     path.write_text(MULTI_READER_SOURCE)
@@ -235,7 +241,7 @@ def test_list_local_plugin_files_no_dir_returns_empty(tmp_path):
 
 
 def test_list_local_plugin_files_excludes_underscore_prefixed(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "upper.py").write_text(WRITER_SOURCE)
     (plugin_dir / "_helper.py").write_text("x = 1\n")

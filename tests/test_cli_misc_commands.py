@@ -144,7 +144,7 @@ def test_watch_on_change_rebuilds_and_prints(tmp_path, monkeypatch, capsys):
     proj = _init_project(tmp_path, monkeypatch)
     captured = {}
 
-    def fake_watch_loop(root, known_ext, out, on_change):
+    def fake_watch_loop(root, out, on_change, cache_dir=None):
         captured["on_change"] = on_change
 
     monkeypatch.setattr("payload.cli.watch_loop", fake_watch_loop)
@@ -170,7 +170,7 @@ def test_watch_on_change_rebuilds_whole_batch_table(tmp_path, monkeypatch, capsy
     )
     captured = {}
 
-    def fake_watch_loop(root, known_ext, out, on_change):
+    def fake_watch_loop(root, out, on_change, cache_dir=None):
         captured["on_change"] = on_change
 
     monkeypatch.setattr("payload.cli.watch_loop", fake_watch_loop)
@@ -378,7 +378,7 @@ def test_plugin_info_writer_shows_extension(tmp_path, monkeypatch):
 
 def test_plugin_info_shows_compatible_readers_when_restricted(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
-    plugin_dir = proj / "local_plugins"
+    plugin_dir = proj / "plugins"
     plugin_dir.mkdir(exist_ok=True)
     (plugin_dir / "picky.py").write_text(
         "class PickyWriter:\n"
@@ -483,7 +483,7 @@ def test_plugin_validate_writer_conforms(tmp_path, monkeypatch):
 
 def test_plugin_validate_non_conforming_plugin_exits_1(tmp_path, monkeypatch):
     proj = _init_project(tmp_path, monkeypatch)
-    plugin_dir = proj / "local_plugins"
+    plugin_dir = proj / "plugins"
     plugin_dir.mkdir(exist_ok=True)
     (plugin_dir / "incomplete.py").write_text(
         "class IncompleteReader:\n"
@@ -513,7 +513,7 @@ def test_plugin_new_local_creates_reader(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["plugin", "new-local", "my_format", "--kind", "reader"])
     assert result.exit_code == 0
-    created = tmp_path / "local_plugins" / "my_format.py"
+    created = tmp_path / "plugins" / "my_format.py"
     assert created.exists()
     assert "READER = MyFormatReader" in created.read_text()
 
@@ -522,7 +522,7 @@ def test_plugin_new_local_creates_writer(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["plugin", "new-local", "my_format", "--kind", "writer"])
     assert result.exit_code == 0
-    created = tmp_path / "local_plugins" / "my_format.py"
+    created = tmp_path / "plugins" / "my_format.py"
     assert "WRITER = MyFormatWriter" in created.read_text()
 
 
@@ -530,7 +530,7 @@ def test_plugin_new_local_creates_doctor_check(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, ["plugin", "new-local", "my_check", "--kind", "doctor-check"])
     assert result.exit_code == 0
-    created = tmp_path / "local_plugins" / "my_check.py"
+    created = tmp_path / "plugins" / "my_check.py"
     assert "DOCTOR_CHECK = MyCheck" in created.read_text()
 
 

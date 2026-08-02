@@ -1,8 +1,9 @@
 """
 Writer: a C header with TableIR.data's bytes in a 'static const
 uint8_t' array. A zero-configuration alternative to obj_writer.py
-(which requires objcopy + toolchain.objcopy_target/objcopy_arch): here
-you just '#include' the generated file in a single translation unit.
+(which requires objcopy + [plugin.obj] objcopy_target/objcopy_arch):
+here you just '#include' the generated file in a single translation
+unit.
 
 'static const', not 'extern': meant to be included in a SINGLE .c
 file — avoids ODR/redefinition errors if the file gets accidentally
@@ -96,3 +97,6 @@ class HeaderWriter:
         )
         out_path.write_text(content)
         return out_path
+
+
+WRITER = HeaderWriter

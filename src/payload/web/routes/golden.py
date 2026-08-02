@@ -14,12 +14,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from payload.core.batch_tables import effective_config
-from payload.core.config import load_config
-from payload.core.discovery import discover_for_history, resolve_table_ref
+from payload.core.clusters import resolve_clusters
+from payload.core.discovery import discover_for_history, resolve_table_config, resolve_table_ref
 from payload.core.errors import TableNotFoundError
 from payload.core.golden import check_golden, clear_golden, golden_diff, set_golden
 from payload.core.history import HistoryStore
+from payload.core.table_meta import resolve_table_meta
 from payload.web.paths import resolve
 
 
@@ -31,7 +31,9 @@ def _find_ref(sources: list[Path], batch_tables: list, table_name: str):
 
 
 def _output_paths(root: Path, base_config, ref) -> list[Path]:
-    table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+    clusters = resolve_clusters(root, base_config)
+    table_metas = resolve_table_meta(root, base_config, clusters)
+    table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
     out_dir = resolve(root, table_config.defaults.output_dir)
     return list(out_dir.glob(f"{ref.name}.*")) if out_dir.exists() else []
 

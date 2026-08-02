@@ -5,6 +5,7 @@ from payload.core.errors import (
     AmbiguousReaderError,
     BatchBuildError,
     BatchTableError,
+    ClusterError,
     GoldenMismatchError,
     GoldenMissingError,
     InvalidCliOptionError,
@@ -14,6 +15,7 @@ from payload.core.errors import (
     PluginApiVersionError,
     ReaderBatchUnsupportedError,
     ReaderParseError,
+    TableMetaError,
     TableNotTrackedError,
 )
 
@@ -54,6 +56,22 @@ def test_batch_table_error_names_the_batch_and_reason():
     assert "rows" in err.message
     assert "sources empty" in err.message
     assert err.exit_code == 2
+
+
+def test_cluster_error_names_the_cluster_and_reason():
+    err = ClusterError("sensors", "no [[cluster]] with this name")
+    assert "sensors" in err.message
+    assert "no" in err.message
+    assert err.exit_code == 2
+    assert "CLUSTERS.md" in err.hint
+
+
+def test_table_meta_error_names_the_table_and_reason():
+    err = TableMetaError("t1", "duplicate name across multiple [[table_meta]]")
+    assert "t1" in err.message
+    assert "duplicate name" in err.message
+    assert err.exit_code == 2
+    assert "CLUSTERS.md" in err.hint
 
 
 def test_plugin_api_version_error_message():

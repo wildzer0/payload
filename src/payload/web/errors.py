@@ -73,14 +73,14 @@ class NoBuildOutputError(PayloadError):
 
 
 class LocalPluginFileNotFoundError(PayloadError):
-    """Unknown file in local_plugins/ — used by the web editor
+    """Unknown file in plugins/ — used by the web editor
     (reading/writing/testing a single file), has no direct CLI
     equivalent so it lives here and not in core/errors.py."""
 
     exit_code = 4  # -> 404, same treatment as NotFoundError
 
     def __init__(self, filename: str, **kw):
-        super().__init__(f"File '{filename}' not found in local_plugins/", filename=filename, **kw)
+        super().__init__(f"File '{filename}' not found in plugins/", filename=filename, **kw)
 
 # The CLI exit codes (1-5, see core/errors.py) are already a grouping
 # by category — the default mapping reuses that semantics instead of

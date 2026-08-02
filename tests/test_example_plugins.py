@@ -4,8 +4,10 @@ import pytest
 
 from payload.core.errors import ReaderParseError, WriterEmitError
 from payload.core.ir import TableIR
-from payload.readers.csv_reader import CsvReader
-from payload.writers.hex_writer import HexWriter
+from tests.example_plugins_helper import load_example_plugin
+
+CsvReader = load_example_plugin("csv_reader.py").CsvReader
+HexWriter = load_example_plugin("hex_writer.py").HexWriter
 
 
 # --- CsvReader ---------------------------------------------------------

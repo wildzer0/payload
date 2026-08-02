@@ -13,22 +13,22 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from payload.core.batch_tables import effective_config
 from payload.core.cache import BuildCache, compute_pipeline_cache_key, compute_pipeline_cache_key_multi
+from payload.core.clusters import resolve_clusters
 from payload.core.config import (
     config_schema,
     delete_sidecar_config,
-    load_config,
     read_raw_sidecar,
     resolve_config_with_provenance,
     write_global_config,
     write_sidecar_config,
 )
-from payload.core.discovery import discover_for_history, resolve_table_ref
+from payload.core.discovery import discover_for_history, resolve_table_config, resolve_table_ref
 from payload.core.errors import TableNotFoundError
 from payload.core.pipeline import final_output_paths, resolve_pipeline_spec, validate_pipeline_against_registry
 from payload.core.pipeline_spec import ExecStage, PipelineSpec, ReaderStage, Stage, WriterStage
 from payload.core.registry import load_plugins
+from payload.core.table_meta import resolve_table_meta
 from payload.web.errors import InvalidRequestError
 from payload.web.paths import resolve
 
@@ -55,14 +55,15 @@ def _config_payload(root: Path, table: str | None) -> dict:
         ref = _find_ref(sources, batch_tables, table)
         # a batch table has no source_path to resolve a sidecar from
         # (its overrides live inline in [[batch_table]]) — show only
-        # the global config in that case.
+        # global+cluster in that case, not the (unsupported here)
+        # sidecar tier.
         if not ref.is_batch:
             source_path = ref.source_paths[0]
 
-    config, provenance = resolve_config_with_provenance(root, source_path=source_path)
+    config, provenance = resolve_config_with_provenance(root, source_path=source_path, table_name=table)
 
     fields = []
-    for section_name, section_obj in (("defaults", config.defaults), ("toolchain", config.toolchain)):
+    for section_name, section_obj in (("defaults", config.defaults),):
         for f in dc_fields(section_obj):
             key = f"{section_name}.{f.name}"
             fields.append({
@@ -92,13 +93,13 @@ async def config_route(request: Request) -> JSONResponse:
 
 async def config_put_route(request: Request) -> JSONResponse:
     body = await request.json()
-    defaults, toolchain = body.get("defaults"), body.get("toolchain")
-    if not isinstance(defaults, dict) or not isinstance(toolchain, dict):
-        raise InvalidRequestError("missing or invalid 'defaults'/'toolchain' parameters (expected two tables)")
+    defaults = body.get("defaults")
+    if not isinstance(defaults, dict):
+        raise InvalidRequestError("missing or invalid 'defaults' parameter (expected a table)")
     root = request.app.state.root
 
     def _run():
-        write_global_config(root, defaults, toolchain)
+        write_global_config(root, defaults)
         return _config_payload(root, None)
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
@@ -119,11 +120,9 @@ async def sidecar_get_route(request: Request) -> JSONResponse:
 
 async def sidecar_put_route(request: Request) -> JSONResponse:
     body = await request.json()
-    defaults, toolchain = body.get("defaults"), body.get("toolchain")
+    defaults = body.get("defaults")
     if defaults is not None and not isinstance(defaults, dict):
         raise InvalidRequestError("'defaults' must be a table")
-    if toolchain is not None and not isinstance(toolchain, dict):
-        raise InvalidRequestError("'toolchain' must be a table")
     root = request.app.state.root
     table = request.path_params["table_name"]
 
@@ -131,7 +130,7 @@ async def sidecar_put_route(request: Request) -> JSONResponse:
         sources, batch_tables, _ = discover_for_history(root)
         ref = _find_ref(sources, batch_tables, table)
         _reject_batch(ref)
-        write_sidecar_config(ref.source_paths[0], defaults=defaults, toolchain=toolchain)
+        write_sidecar_config(ref.source_paths[0], defaults=defaults)
         return read_raw_sidecar(ref.source_paths[0])
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
@@ -164,7 +163,9 @@ def _stage_to_raw(stage: Stage) -> dict:
 
 def _pipeline_payload(root: Path, ref, base_config, table: str) -> dict:
     registry = load_plugins(project_root=root)
-    config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+    clusters = resolve_clusters(root, base_config)
+    table_metas = resolve_table_meta(root, base_config, clusters)
+    config = resolve_table_config(root, base_config, ref, clusters, table_metas)
 
     spec = resolve_pipeline_spec(ref.source_paths[0], registry, config, None, None)
     validate_pipeline_against_registry(spec, registry)

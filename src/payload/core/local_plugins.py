@@ -1,14 +1,16 @@
 """
-Local plugins: reader/writer/doctor-check defined in a single .py
-file, loaded without going through 'pip install'. Meant for quick
-experiments or formats specific to a single project — for a plugin
-reusable across multiple projects, a real pip package (pld plugin new)
-is still the right choice (versionable, distributable, installable via
-an internal index).
+Project plugins: reader/writer/doctor-check defined in a single .py
+file, loaded without going through 'pip install'. This is the primary
+way a project gets any reader/writer at all — payload itself ships
+none (see examples/plugins/ for reference implementations, installable
+with 'pld plugin install'). For a plugin meant to be shared as a
+versioned package across many projects instead, a real pip package
+(pld plugin new) with entry_points is still supported — see
+core/registry.py's load_plugins(), which loads that path too.
 
 Two ways a file gets discovered:
-1. A 'local_plugins/' folder next to table-tool.toml (or anywhere
-   inside project_root) — scanned automatically.
+1. A 'plugins/' folder next to table-tool.toml (or anywhere inside
+   project_root) — scanned automatically.
 2. The PAYLOAD_PLUGIN_PATH environment variable — a list of additional
    folders separated by os.pathsep, searched anywhere on the
    filesystem.
@@ -54,7 +56,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-LOCAL_PLUGINS_DIRNAME = "local_plugins"
+PLUGINS_DIRNAME = "plugins"
 ENV_VAR_NAME = "PAYLOAD_PLUGIN_PATH"
 
 _ATTR_MAP = (
@@ -145,7 +147,7 @@ def missing_requirements(requires: list[str]) -> list[str]:
 
 def discover_local_plugin_dirs(project_root: Path) -> list[Path]:
     dirs = []
-    default_dir = project_root / LOCAL_PLUGINS_DIRNAME
+    default_dir = project_root / PLUGINS_DIRNAME
     if default_dir.is_dir():
         dirs.append(default_dir)
 
@@ -191,11 +193,11 @@ def extract_plugin_classes(module) -> list[tuple[str, type]]:
 
 
 def list_local_plugin_files(project_root: Path) -> list[Path]:
-    """.py files in <project_root>/local_plugins/ (only the project's
-    own folder, not the additional PAYLOAD_PLUGIN_PATH locations —
-    those can live anywhere on the filesystem and aren't in scope for
-    'what the web editor for this project is allowed to modify')."""
-    d = project_root / LOCAL_PLUGINS_DIRNAME
+    """.py files in <project_root>/plugins/ (only the project's own
+    folder, not the additional PAYLOAD_PLUGIN_PATH locations — those
+    can live anywhere on the filesystem and aren't in scope for 'what
+    the web editor for this project is allowed to modify')."""
+    d = project_root / PLUGINS_DIRNAME
     if not d.is_dir():
         return []
     return sorted(p for p in d.glob("*.py") if not p.name.startswith("_"))

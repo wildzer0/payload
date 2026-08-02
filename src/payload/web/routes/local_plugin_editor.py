@@ -1,13 +1,15 @@
-"""Browser-based local plugin editor: reads/writes a file in
-local_plugins/, live syntax checking (ast.parse, zero new
-dependencies) and conformance testing on a single file, even if it
-isn't loadable yet in a full PluginRegistry — the same conceptual role
-as 'pld plugin validate', but centered on ONE file while it's being
-written, not on a plugin that's already registered.
+"""Browser-based project plugin editor: reads/writes a file in
+plugins/, live syntax checking (ast.parse, zero new dependencies) and
+conformance testing on a single file, even if it isn't loadable yet in
+a full PluginRegistry — the same conceptual role as 'pld plugin
+validate', but centered on ONE file while it's being written, not on a
+plugin that's already registered.
 
-Only the served project's local_plugins/ is within the editor's scope
-(not the additional PAYLOAD_PLUGIN_PATH locations, which can live
-anywhere on the filesystem — out of scope for a web editor)."""
+Only the served project's plugins/ is within the editor's scope (not
+the additional PAYLOAD_PLUGIN_PATH locations, which can live anywhere
+on the filesystem — out of scope for a web editor). Route paths keep
+the historical '/api/local-plugins' prefix (internal API surface, not
+the user-facing rename)."""
 from __future__ import annotations
 
 import ast
@@ -22,7 +24,7 @@ from starlette.routing import Route
 from payload.core.errors import MissingPluginDependenciesError
 from payload.core.ir import TableIR
 from payload.core.local_plugins import (
-    LOCAL_PLUGINS_DIRNAME,
+    PLUGINS_DIRNAME,
     extract_plugin_classes,
     find_stub_methods,
     load_module_from_file,
@@ -40,7 +42,7 @@ from payload.web.paths import resolve
 
 
 def _safe_filename(raw: str) -> str:
-    """A plain filename inside local_plugins/, never a path — no
+    """A plain filename inside plugins/, never a path — no
     separators, no '..': the web editor must not be able to read or
     write files outside that folder."""
     if not raw.endswith(".py") or "/" in raw or "\\" in raw or raw in (".", "..") or raw.startswith("."):
@@ -49,7 +51,7 @@ def _safe_filename(raw: str) -> str:
 
 
 def _local_plugins_dir(root: Path) -> Path:
-    return root / LOCAL_PLUGINS_DIRNAME
+    return root / PLUGINS_DIRNAME
 
 
 async def local_plugins_list(request: Request) -> JSONResponse:

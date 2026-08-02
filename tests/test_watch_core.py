@@ -31,14 +31,35 @@ def _wait_until_called(mock, timeout=2.0, interval=0.01):
 def _handler(tmp_path, on_change=None, debounce=0.03):
     out_dir = tmp_path / "build"
     return _DebouncedTableHandler(
-        known_extensions={".raw"}, output_dir=out_dir,
+        root=tmp_path, output_dir=out_dir, cache_dir=None,
         on_change=on_change or MagicMock(), debounce_seconds=debounce,
     ), out_dir
 
 
-def test_should_handle_filters_unknown_extension(tmp_path):
+def test_should_handle_accepts_unknown_extension(tmp_path):
+    """Not gated on a reader recognizing the extension — same reasoning
+    as core/discovery.py's is_table_candidate: a fresh project starts
+    with zero readers installed, watch must still notice a changed
+    file even before a matching plugin exists (the rebuild attempt
+    will just fail clearly, same as a manual build would)."""
     h, _ = _handler(tmp_path)
-    assert h._should_handle(str(tmp_path / "t.txt")) is None
+    src = tmp_path / "t.unknownext"
+    src.write_text("x")
+    assert h._should_handle(str(src)) == src
+
+
+def test_should_handle_filters_global_config(tmp_path):
+    h, _ = _handler(tmp_path)
+    cfg = tmp_path / "table-tool.toml"
+    cfg.write_text("")
+    assert h._should_handle(str(cfg)) is None
+
+
+def test_should_handle_filters_hidden_files(tmp_path):
+    h, _ = _handler(tmp_path)
+    hidden = tmp_path / ".hidden.raw"
+    hidden.write_text("x")
+    assert h._should_handle(str(hidden)) is None
 
 
 def test_should_handle_excludes_output_dir(tmp_path):
@@ -143,7 +164,7 @@ def test_watch_starts_observer_and_stops_cleanly_on_keyboard_interrupt(tmp_path)
 
     with patch("payload.watch.Observer", return_value=fake_observer), \
          patch("payload.watch.time.sleep", side_effect=KeyboardInterrupt):
-        watch(tmp_path, {".raw"}, tmp_path / "build", on_change=MagicMock())
+        watch(tmp_path, tmp_path / "build", on_change=MagicMock())
 
     fake_observer.schedule.assert_called_once()
     fake_observer.start.assert_called_once()
@@ -168,7 +189,7 @@ def test_watch_wraps_on_change_errors_without_propagating(tmp_path):
 
     with patch("payload.watch.Observer", return_value=fake_observer), \
          patch("payload.watch.time.sleep", side_effect=KeyboardInterrupt):
-        watch(tmp_path, {".raw"}, tmp_path / "build", on_change=_raising_on_change)
+        watch(tmp_path, tmp_path / "build", on_change=_raising_on_change)
 
     # the wrapper passed to the handler must not propagate the exception
     captured_handler["handler"]._on_change(tmp_path / "t.raw")

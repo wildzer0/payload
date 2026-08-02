@@ -27,7 +27,7 @@ def test_docs_list(tmp_path):
 
     assert r.status_code == 200
     slugs = {d["slug"] for d in r.json()["docs"]}
-    assert slugs == {"usage", "plugins", "pipeline", "batch"}
+    assert slugs == {"usage", "plugins", "pipeline", "batch", "clusters"}
 
 
 def test_doc_detail_returns_real_markdown_content(tmp_path):
@@ -53,6 +53,19 @@ def test_doc_detail_batch_returns_real_markdown_content(tmp_path):
     body = r.json()
     assert body["title"] == "Batch tables"
     assert "parse_many" in body["content"]
+    assert len(body["content"]) > 500
+
+
+def test_doc_detail_clusters_returns_real_markdown_content(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.get("/api/docs/clusters")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["title"] == "Clusters & tags"
+    assert "table_meta" in body["content"]
     assert len(body["content"]) > 500
 
 

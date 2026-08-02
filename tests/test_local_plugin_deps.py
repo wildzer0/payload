@@ -69,7 +69,7 @@ def test_missing_requirements_handles_version_specifiers():
 
 
 def test_load_plugins_strict_raises_on_missing_deps(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "bad.py").write_text(
         'REQUIRES = ["nonexistent_library_xyz"]\n\n'
@@ -83,7 +83,7 @@ def test_load_plugins_strict_raises_on_missing_deps(tmp_path):
 
 
 def test_load_plugins_non_strict_tracks_missing_deps_without_raising(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "bad.py").write_text(
         'REQUIRES = ["nonexistent_library_xyz"]\n\n'
@@ -100,7 +100,7 @@ def test_load_plugins_non_strict_tracks_missing_deps_without_raising(tmp_path):
 
 
 def test_plugin_with_satisfied_requires_loads_normally(tmp_path):
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "good.py").write_text(
         'REQUIRES = ["json"]\n\n'
@@ -122,7 +122,7 @@ def test_doctor_plugins_check_not_fail_for_missing_local_deps(tmp_path):
     'pld doctor' for a problem easily fixed with install-deps."""
     from payload.core.doctor import PluginLoadCheck
 
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "bad.py").write_text('REQUIRES = ["nonexistent_library_xyz"]\n')
 
@@ -133,7 +133,7 @@ def test_doctor_plugins_check_not_fail_for_missing_local_deps(tmp_path):
 
 def test_plugin_without_requires_unaffected(tmp_path):
     """No regression for plugins that don't declare REQUIRES."""
-    plugin_dir = tmp_path / "local_plugins"
+    plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir()
     (plugin_dir / "simple.py").write_text(
         'class W:\n    name = "simple_writer"\n    extension = ".w"\n    api_version = "1.0"\n'

@@ -45,9 +45,10 @@ environment. In order of preference:
 
 The same three methods work for installing a third-party plugin
 (`pld plugin new` generates a pip package like any other). For a
-plugin specific to a single project, see also "Local plugins" in
-[PLUGINS.md](PLUGINS.md#local-plugins-without-pip-install) — it
-requires no installation at all.
+plugin specific to a single project — the common case, since `payload`
+ships no reader/writer of its own — see "Plugins, without `pip
+install`" in [PLUGINS.md](PLUGINS.md#plugins-without-pip-install), or
+just `pld plugin install <path-or-url>`: no installation at all.
 
 ## Concepts in brief
 
@@ -71,9 +72,11 @@ it's a pointer to an already-saved snapshot).
 ### `pld init [name] [--force] [--wizard/-w] [--yes/-y]`
 
 Creates the minimal scaffold of a project: `table-tool.toml`, the
-`build/` folder and `local_plugins/` (for external plugins without
-`pip install`, see [PLUGINS.md](PLUGINS.md#local-plugins-without-pip-install)),
-and a sample table (`example_table.raw`).
+`build/` folder and `plugins/` (for plugins without `pip install`, see
+[PLUGINS.md](PLUGINS.md#plugins-without-pip-install)), and a sample
+table (`example_table.raw`). `payload` ships no reader/writer of its
+own — `plugins/` starts empty; `pld plugin install` populates it (see
+below).
 
 ```bash
 pld init my-project       # creates a new dedicated folder (recommended)
@@ -90,7 +93,7 @@ it touches nothing and suggests using `pld init <name>`.
 
 **With `--wizard`**, it walks you step by step through the choices
 instead of using all the defaults: project name (if not already given
-as an argument), whether to include `local_plugins/`, whether to
+as an argument), whether to include `plugins/`, whether to
 include the sample table, default writer, default `byte_order`,
 whether to initialize a git repository (`git init`, only if `git` is on
 the PATH). `--yes` combined with `--wizard` skips every question and
@@ -152,6 +155,7 @@ the batch can be safely parallelized.
 | `--out <dir>` | `build` | output folder |
 | `--jobs N` | `1` | degree of parallelism (thread pool) |
 | `--filter <glob>` | all known sources | limits the scan, e.g. `"sensors/**"` |
+| `--cluster <name>` | none | restricts to this cluster's member tables (combines with `--filter`), see [CLUSTERS.md](CLUSTERS.md) |
 | `--force`, `--dry-run`, `--check-golden` | same as `build` | applied to every table |
 | `--opt key=value` | — | one-off override applied to every table in the batch, repeatable |
 | `--keep-intermediate` | off | doesn't clean up `tmp/` after each build in the batch |
@@ -180,13 +184,28 @@ pld watch .   # watches the whole folder recursively
 
 ### `pld config show [table] [--root <dir>]`
 
-Shows the resolved config (3 tiers: default → global → sidecar) and
-**where each value comes from** — useful when it's not obvious which
-tier is winning for a specific table.
+Shows the resolved config (4 tiers: default → global → cluster, if the
+table belongs to one → sidecar) and **where each value comes from** —
+useful when it's not obvious which tier is winning for a specific
+table. See [CLUSTERS.md](CLUSTERS.md) for the cluster tier.
 
 ```bash
-pld config show                # global config, no sidecar involved
-pld config show temp_table     # includes this table's sidecar, if any
+pld config show                # global config, no sidecar/cluster involved
+pld config show temp_table     # includes this table's cluster (if any) and sidecar (if any)
+```
+
+### `pld cluster ...`, `pld tag`/`pld tags`
+
+One cluster per table (shared `defaults`/`plugin` config overrides),
+plus free-form tags for search/filtering in the dashboard — see
+[CLUSTERS.md](CLUSTERS.md) for the full design and the complete
+command reference (`pld cluster new/list/show/edit/delete/assign/
+unassign`, `pld tag`, `pld tags`).
+
+```bash
+pld cluster new sensors --writer hex
+pld cluster assign temp_sensor sensors
+pld tag temp_sensor --add prod
 ```
 
 ### `pld pipeline show <table> [--root <dir>]`
@@ -376,14 +395,19 @@ gets removed anyway.
 pld rm sensors --member ROW3.txt --force
 ```
 
-### `pld import <file...> [--as <name>] [--batch <name>] [--new-batch <name>] [--overwrite] [--root <dir>]`
+### `pld import <file...> [--as <name>] [--batch <name>] [--new-batch <name>] [--each] [--overwrite] [--root <dir>]`
 
 Copies one or more external files **into the project** as a new table
 (or updates the source of one already tracked, with `--overwrite`) —
 the location is always the project root, decided by the tool: you no
-longer need to organize folders by hand. Rejects a file whose extension
-no reader recognizes, or that's empty (0 bytes — almost always a wrong
-file or an interrupted upload), before even copying it.
+longer need to organize folders by hand. Rejects a file that's empty
+(0 bytes — almost always a wrong file or an interrupted upload), before
+even copying it. **Import never requires a reader for the extension to
+already be installed** — a project can freely accumulate tables before
+installing (or writing) the plugin that will eventually build them,
+which matters a lot now that a fresh project ships with zero readers
+(see [PLUGINS.md](PLUGINS.md)); a format nothing can read only becomes
+a problem at build time (`NoReaderFoundError` there, not at import).
 
 ```bash
 # new single-file table (name derived from the file, without its extension)
@@ -395,18 +419,28 @@ pld import ~/Downloads/data.raw --as external_temp
 # update the source of an already tracked table
 pld import ~/Downloads/data_v2.raw --as external_temp --overwrite
 
-# new batch table from several files together
+# new batch table from several files together (one logical table, see BATCH.md)
 pld import ROW1.txt ROW2.txt ROW3.txt --new-batch sensors
 
 # adds a member to an already declared batch table
 pld import ROW4.txt --batch sensors
+
+# a pile of UNRELATED files, each becoming its own standalone table
+pld import *.raw --each
 ```
 
-`--batch`/`--new-batch` are mutually exclusive; more than one file
-together requires `--new-batch` (otherwise only one file at a time).
-Same mechanism on the web side: the Dashboard has a drag&drop zone that
-covers the same cases (a single file asks for a name, several files
-together ask for the batch table's name).
+`--batch`/`--new-batch`/`--each` are mutually exclusive; more than one
+file together requires one of `--new-batch` (one table made of all of
+them) or `--each` (each file its own table) — otherwise only one file
+at a time. With `--each`, a name collision with an already-tracked
+table doesn't abort the whole run: that one file is skipped and
+reported (`N imported, M skipped`), the rest still go through — unless
+`--overwrite` is also passed, in which case colliding names are
+replaced instead of skipped. Same mechanism on the web side: the
+Dashboard has a drag&drop zone that covers the same cases — a single
+file asks for a name, several files together ask whether to bundle
+them into one batch table or import each as its own (with a "skipped"
+report shown afterward if any name collided).
 
 ### `pld view <source> [--from <reader>]`
 
@@ -485,16 +519,41 @@ suggested writer, any compatibility constraints. This is a plugin's
 pld plugin info csv
 ```
 
+### `pld plugin install <source> [--as <name>] [--dest plugins] [--overwrite]`
+
+Installs a single-file plugin into the project's `plugins/` folder —
+`payload` ships no reader/writer of its own, this is the normal way a
+project gets one. `source` is a local `.py` path, or an `http(s)://`
+URL to a raw `.py` file (no `git clone`, no pip package, single file
+only). Refuses to silently overwrite an existing file at the
+destination unless `--overwrite` is passed. Runs a quick sanity check
+right after (parses, checks it exposes `READER`/`WRITER`/
+`DOCTOR_CHECK`) and reports it without undoing the install if it
+fails.
+
+```bash
+pld plugin install examples/plugins/raw_text.py
+pld plugin install https://example.com/plugins/my_writer.py --as my_writer.py
+pld plugin install examples/plugins/bin_writer.py --overwrite
+```
+
+Same thing on the web side: the Plugins page has an "Install plugin" card
+with a local path/URL field (`POST /api/plugin/install`, same
+`source`/`as_name`/`dest`/`overwrite` semantics) and a drag&drop zone that
+uploads the `.py` file's content directly — useful for a file that only
+exists on the machine you're browsing from, not on the machine `pld serve`
+runs on.
+
 ### `pld plugin install-deps <file.py> [--yes]`
 
-Installs, with `pip`, the dependencies declared by a **local plugin**
-(module-level `REQUIRES = [...]`, see
-[PLUGINS.md](PLUGINS.md#local-plugins-without-pip-install)). Not related
+Installs, with `pip`, the dependencies declared by a **project
+plugin** (module-level `REQUIRES = [...]`, see
+[PLUGINS.md](PLUGINS.md#plugins-without-pip-install)). Not related
 to a plugin installed via pip — that one already manages its own
 dependencies through its `pyproject.toml`.
 
 ```bash
-pld plugin install-deps local_plugins/my_writer.py
+pld plugin install-deps plugins/my_writer.py
 ```
 
 ### `pld plugin new <package-name> --kind reader|writer|doctor-check [--dest <dir>]`
@@ -546,10 +605,12 @@ Logs go to `stderr`, never `stdout` — you can always pipe the command's
 
 ## Configuration file
 
-Three tiers, increasing precedence: **`table-tool.toml`** (global,
-project root) → **per-table sidecar** (`<name>.config.toml` next to the
-source) → **CLI flags**. The merge is deep: the sidecar only overwrites
-the keys it explicitly declares.
+Four tiers, increasing precedence: **`table-tool.toml`** (global,
+project root) → **the table's cluster**, if it belongs to one (see
+[CLUSTERS.md](CLUSTERS.md)) → **per-table sidecar**
+(`<name>.config.toml` next to the source, or a batch table's own
+inline overrides) → **CLI flags**. The merge is deep: each tier only
+overwrites the keys it explicitly declares.
 
 `table-tool.toml`:
 
@@ -561,12 +622,18 @@ output_dir = "build"
 cache_dir = ".payload_cache"
 byte_order = "little"       # "little" | "big" — target for readers/writers that handle multi-byte values
 
-[toolchain]
+# Plugin-owned config: [plugin.<name>] is unvalidated by the core, each
+# plugin reads its own slice (config.get("plugin", {}).get(self.name, {})).
+# The two example plugins that need a real toolchain use it like this:
+[plugin.c_source]
 compiler = "gcc"
 compiler_flags = []
 objcopy = "objcopy"
-objcopy_target = ""   # only required by the 'obj' writer, e.g. "elf32-littlearm"
-objcopy_arch = ""     # only required by the 'obj' writer, e.g. "arm"
+
+[plugin.obj]
+objcopy = "objcopy"
+objcopy_target = ""   # required by the 'obj' writer, e.g. "elf32-littlearm"
+objcopy_arch = ""     # required by the 'obj' writer, e.g. "arm"
 ```
 
 Sidecar `sensors/temp_table.config.toml` (optional, override only):
@@ -591,6 +658,13 @@ with examples. It's written by hand, but `pld import
 --new-batch`/`--batch` and `pld rm --member` also create/modify it on
 their own (see above) — editing the TOML is no longer mandatory for
 these common operations.
+
+A sixth, `[[cluster]]`, declares a named bundle of `defaults`/`plugin`
+overrides tables can opt into, and a seventh, `[[table_meta]]`, is
+where a table declares which cluster (at most one) it belongs to and
+its free-form tags — see [CLUSTERS.md](CLUSTERS.md) for the full
+design. Both are managed by `pld cluster ...`/`pld tag` as much as by
+hand-editing the TOML.
 
 ---
 
@@ -656,22 +730,20 @@ pyinstaller --onefile --name pld --copy-metadata payload ^
 
 ### How plugins work with the exe
 
-The **builtin plugins** (`raw_text`, `csv`, `c_source`, `bin`, `hex`,
-`obj`) are already inside the exe, they work right away — they require
-`--copy-metadata payload` at build time (already included in the
-command above) because they're discovered via `entry_points`, which
-needs the package's metadata even inside a frozen binary.
-
-**External plugins** (third-party `.py` files, without recompiling the
-exe) work through the same "local plugins" mechanism already covered
-in [PLUGINS.md](PLUGINS.md#local-plugins-without-pip-install) —
-`local_plugins/` next to wherever you launch `pld.exe` from, or
+`payload` ships no reader/writer of its own (see
+[examples/plugins/](../../../examples/plugins/)), so the exe needs
+**project plugins** to do anything useful — same mechanism already
+covered in [PLUGINS.md](PLUGINS.md#plugins-without-pip-install):
+`plugins/` next to wherever you launch `pld.exe` from, or
 `PAYLOAD_PLUGIN_PATH`. It works because that mechanism loads `.py`
 files from disk at runtime (`importlib.util`), an operation independent
 of how the Python process itself was packaged — **no difference
-compared to a normal installation**.
+compared to a normal installation**. `--copy-metadata payload` (already
+included in the command above) is only needed if you also want a
+*pip-installed, entry_points-based* plugin to be discoverable inside
+the frozen exe (an edge case — `payload` itself declares none).
 
-**Real limitation worth knowing**: a local plugin used with the exe can
+**Real limitation worth knowing**: a plugin used with the exe can
 only import the standard library and modules already bundled in the
 exe (`payload.*`, `typer`, `rich`, `watchdog`) — if your plugin needs a
 third-party library not included in the build (e.g. `numpy`), it won't

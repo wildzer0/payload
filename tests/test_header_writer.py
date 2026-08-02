@@ -5,7 +5,9 @@ import pytest
 
 from payload.core.errors import WriterEmitError
 from payload.core.ir import TableIR
-from payload.writers.header_writer import HeaderWriter
+from tests.example_plugins_helper import load_example_plugin
+
+HeaderWriter = load_example_plugin("header_writer.py").HeaderWriter
 
 _VALID_C_IDENTIFIER = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
 

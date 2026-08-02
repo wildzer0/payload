@@ -15,14 +15,15 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, Response
 from starlette.routing import Route
 
-from payload.core.batch_tables import effective_config
+from payload.core.clusters import resolve_clusters
 from payload.core.config import load_config
-from payload.core.discovery import discover_for_history, resolve_table_ref
+from payload.core.discovery import discover_for_history, resolve_table_config, resolve_table_ref
 from payload.core.doctor import run_doctor
 from payload.core.errors import TableNotFoundError
 from payload.core.golden import check_golden
 from payload.core.history import HistoryStore
 from payload.core.registry import load_plugins
+from payload.core.table_meta import resolve_table_meta
 from payload.web.errors import InvalidRequestError, NoBuildOutputError
 from payload.web.paths import resolve
 
@@ -64,10 +65,12 @@ async def report(request: Request) -> JSONResponse:
         sources, batch_tables, base_config = discover_for_history(root)
         history = HistoryStore(root)
         registry = load_plugins(strict=False, project_root=root)
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
         rows = []
         for ref in all_table_refs(sources, batch_tables):
             name = ref.name
-            table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+            table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
             out_dir = resolve(root, table_config.defaults.output_dir)
 
             pipeline_explicit = bool(table_config.pipeline_stages)
@@ -98,9 +101,12 @@ async def report(request: Request) -> JSONResponse:
 
             last = history.last_snapshot(name)
             has_sidecar = False if ref.is_batch else bool(read_raw_sidecar(ref.source_paths[0]))
+            meta = table_metas.get(name)
             rows.append({
                 "name": name,
                 "is_batch": ref.is_batch,
+                "cluster": meta.cluster if meta else None,
+                "tags": meta.tags if meta else [],
                 "source_count": len(ref.source_paths),
                 "source_size": sum(p.stat().st_size for p in ref.source_paths),
                 "output_size": out_size,
@@ -138,7 +144,9 @@ async def table_download_route(request: Request) -> Response:
         ref = resolve_table_ref(sources, batch_tables, table_name)
         if ref is None:
             raise TableNotFoundError(table_name)
-        table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
+        table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
         out_dir = resolve(root, table_config.defaults.output_dir)
         output_files = sorted(out_dir.glob(f"{table_name}.*")) if out_dir.exists() else []
         if not output_files:

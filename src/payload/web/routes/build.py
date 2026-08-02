@@ -18,6 +18,7 @@ from starlette.routing import Route
 from payload.core.batch import run_batch_build
 from payload.core.batch_tables import effective_config, resolve_batch_tables
 from payload.core.cache import BuildCache
+from payload.core.clusters import resolve_clusters
 from payload.core.config import load_config
 from payload.core.discovery import (
     all_table_refs,
@@ -26,11 +27,19 @@ from payload.core.discovery import (
     exclude_batch_members,
     find_duplicate_stems,
 )
-from payload.core.errors import DuplicateTableNameError, GoldenMismatchError, GoldenStaleError, PayloadError, SourceNotFoundError
+from payload.core.errors import (
+    ClusterError,
+    DuplicateTableNameError,
+    GoldenMismatchError,
+    GoldenStaleError,
+    PayloadError,
+    SourceNotFoundError,
+)
 from payload.core.golden import check_golden
 from payload.core.history import HistoryStore
 from payload.core.pipeline import build
 from payload.core.registry import load_plugins
+from payload.core.table_meta import resolve_table_meta
 from payload.web.errors import InvalidRequestError
 from payload.web.paths import resolve
 from payload.web.sse import sse_format
@@ -66,7 +75,11 @@ async def build_route(request: Request) -> JSONResponse:
             if batch is None:
                 raise SourceNotFoundError(source_path)
             source_paths = batch.source_paths
-            config = effective_config(base_config, batch)
+            clusters = resolve_clusters(root, base_config)
+            table_metas = resolve_table_meta(root, base_config, clusters)
+            meta = table_metas.get(batch.name)
+            cluster = clusters.get(meta.cluster) if meta and meta.cluster else None
+            config = effective_config(base_config, batch, cluster=cluster)
             table_name = batch.name
 
         cache = BuildCache(resolve(root, config.defaults.cache_dir))
@@ -122,6 +135,7 @@ async def build_all_stream(request: Request) -> StreamingResponse:
     if not (1 <= jobs <= MAX_BUILD_ALL_JOBS):
         raise InvalidRequestError(f"'jobs' parameter must be between 1 and {MAX_BUILD_ALL_JOBS}")
     filter_glob = params.get("filter")
+    cluster = params.get("cluster")
     force = params.get("force") == "true"
     dry_run = params.get("dry_run") == "true"
     check_golden_flag = params.get("check_golden") == "true"
@@ -137,9 +151,9 @@ async def build_all_stream(request: Request) -> StreamingResponse:
             try:
                 registry = load_plugins(project_root=root)
                 base_config = load_config(root)
-                cache = BuildCache(resolve(root, base_config.defaults.cache_dir))
-                known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
-                sources = discover_table_sources(root, known_ext, resolve(root, base_config.defaults.output_dir), filter_glob)
+                cache_dir = resolve(root, base_config.defaults.cache_dir)
+                cache = BuildCache(cache_dir)
+                sources = discover_table_sources(root, resolve(root, base_config.defaults.output_dir), cache_dir, filter_glob)
 
                 duplicates = find_duplicate_stems(sources)
                 if duplicates:
@@ -152,6 +166,19 @@ async def build_all_stream(request: Request) -> StreamingResponse:
                 sources = exclude_batch_members(sources, batch_tables)
                 check_no_batch_name_collisions(sources, batch_tables)
                 tables = all_table_refs(sources, batch_tables)
+
+                if cluster:
+                    # Same post-discovery filter as 'pld build-all
+                    # --cluster' (cli.py) — applies uniformly to
+                    # single-file and batch tables, unlike 'filter'.
+                    all_clusters = resolve_clusters(root, base_config)
+                    if cluster not in all_clusters:
+                        raise ClusterError(cluster, "no \\[\\[cluster]] with this name")
+                    table_metas = resolve_table_meta(root, base_config, all_clusters)
+                    tables = [
+                        t for t in tables
+                        if (m := table_metas.get(t.name)) is not None and m.cluster == cluster
+                    ]
 
                 summary = run_batch_build(
                     tables, root, registry, cache, out_dir, jobs=jobs, writer_name=to,

@@ -55,6 +55,35 @@ def test_build_all_stream_emits_progress_then_summary(tmp_path):
     assert (root / "build" / "second.bin").exists()
 
 
+def test_build_all_stream_cluster_restricts_to_members(tmp_path):
+    root = _init_project(tmp_path)
+    (root / "second.raw").write_text("0x02\n")
+    client = _client(root)
+    client.post("/api/clusters", json={"name": "sensors"})
+    client.put("/api/table/example_table/cluster", json={"cluster": "sensors"})
+
+    with client.stream("GET", "/api/build-all/stream", params={"cluster": "sensors"}) as r:
+        lines = [l for l in r.iter_lines() if l]
+
+    events = _parse_sse(lines)
+    summary_events = [e for e in events if e[0] == "summary"]
+    assert summary_events[0][1]["built"] == 1
+    assert (root / "build" / "example_table.bin").exists()
+    assert not (root / "build" / "second.bin").exists()
+
+
+def test_build_all_stream_unknown_cluster_reports_error_event(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    with client.stream("GET", "/api/build-all/stream", params={"cluster": "does_not_exist"}) as r:
+        lines = [l for l in r.iter_lines() if l]
+
+    events = _parse_sse(lines)
+    assert events[-1][0] == "error"
+    assert events[-1][1]["error"] == "ClusterError"
+
+
 def test_build_all_stream_reports_duplicate_names_as_error_event(tmp_path):
     root = _init_project(tmp_path)
     (root / "sub").mkdir()

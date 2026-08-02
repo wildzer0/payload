@@ -25,6 +25,7 @@ from payload.core.config import (
     create_batch_table,
     remove_batch_table_entry,
     remove_batch_table_source,
+    remove_table_meta_entry,
 )
 from payload.core.discovery import TableRef
 from payload.core.errors import (
@@ -34,7 +35,6 @@ from payload.core.errors import (
     SourceNotFoundError,
     TableAlreadyExistsError,
 )
-from payload.core.registry import PluginRegistry
 
 
 def _validate_filename(raw: str) -> str:
@@ -66,7 +66,6 @@ class ImportResult:
 
 def import_single_table(
     project_root: Path,
-    registry: PluginRegistry,
     data: bytes,
     filename: str,
     existing_sources: list[Path],
@@ -75,14 +74,16 @@ def import_single_table(
 ) -> ImportResult:
     """Copies 'data' as a single-file table — new, or overwrites the
     source of one already tracked if overwrite=True and the name
-    already exists (otherwise TableAlreadyExistsError). Validates that
-    at least one reader recognizes the extension BEFORE writing
-    anything (NoReaderFoundError if none handles it) — a file no
-    reader can read shouldn't even enter the project."""
+    already exists (otherwise TableAlreadyExistsError). Doesn't
+    require a reader for the extension to already be installed: import
+    is just "put this file in the project", nothing here reads its
+    content — a project can freely accumulate tables before installing
+    (or writing) the plugin that will eventually build them. A format
+    genuinely nothing can read only becomes a problem at build time
+    (NoReaderFoundError there)."""
     filename = _validate_filename(filename)
     _validate_not_empty(filename, data)
     target = project_root / filename
-    registry.find_reader(target)
 
     name = target.stem
     already_exists = _name_taken(name, existing_sources, existing_batch_tables)
@@ -95,7 +96,6 @@ def import_single_table(
 
 def import_new_batch_table(
     project_root: Path,
-    registry: PluginRegistry,
     files: dict[str, bytes],
     batch_name: str,
     existing_sources: list[Path],
@@ -125,7 +125,6 @@ def import_new_batch_table(
         # any write happens.
         if target.exists():
             raise TableAlreadyExistsError(target.stem)
-        registry.find_reader(target)
 
     for filename, data in files.items():
         (project_root / filename).write_bytes(data)
@@ -134,23 +133,76 @@ def import_new_batch_table(
     return BatchTable(name=batch_name, source_paths=[project_root / f for f in filenames])
 
 
+@dataclass
+class SkippedImport:
+    filename: str
+    reason: str
+
+
+@dataclass
+class BulkImportResult:
+    imported: list[ImportResult]
+    skipped: list[SkippedImport]
+
+
+def import_many_single_tables(
+    project_root: Path,
+    files: dict[str, bytes],
+    existing_sources: list[Path],
+    existing_batch_tables: list[BatchTable],
+    overwrite: bool = False,
+) -> BulkImportResult:
+    """Imports every file in 'files' as its OWN standalone table — the
+    bulk counterpart of import_single_table, for a set of unrelated
+    files that don't belong together (e.g. 300 files dropped together
+    on the dashboard), as opposed to import_new_batch_table which
+    builds ONE table out of several files. Unlike that function, a
+    problem with one file (empty, unsafe filename, name collision)
+    does NOT abort the rest: each file is validated and imported
+    independently, and problems are collected and reported rather than
+    silently skipped or allowed to block everything else — same
+    'partial, but explicit' principle already used for writer fan-out
+    failures (see FanOutWriteError in core/pipeline.py)."""
+    imported: list[ImportResult] = []
+    skipped: list[SkippedImport] = []
+    taken = {p.stem for p in existing_sources} | {bt.name for bt in existing_batch_tables}
+
+    for filename, data in files.items():
+        try:
+            filename = _validate_filename(filename)
+            _validate_not_empty(filename, data)
+            target = project_root / filename
+        except (InvalidImportError, EmptySourceError) as e:
+            skipped.append(SkippedImport(filename, e.message))
+            continue
+
+        name = target.stem
+        already_exists = name in taken
+        if already_exists and not overwrite:
+            skipped.append(SkippedImport(filename, f"a table named '{name}' already exists"))
+            continue
+
+        target.write_bytes(data)
+        imported.append(ImportResult(path=target, created=not already_exists))
+        taken.add(name)
+
+    return BulkImportResult(imported=imported, skipped=skipped)
+
+
 def import_batch_member(
     project_root: Path,
-    registry: PluginRegistry,
     data: bytes,
     filename: str,
     batch: BatchTable,
 ) -> Path:
     """Adds one more file to an already declared [[batch_table]],
     always appended to the current order (for a different order, edit
-    'sources' by hand — see BATCH.md). Same reader validation as a
-    single import."""
+    'sources' by hand — see BATCH.md)."""
     filename = _validate_filename(filename)
     _validate_not_empty(filename, data)
     if any(p.name == filename for p in batch.source_paths):
         raise TableAlreadyExistsError(f"{batch.name}/{filename}")
     target = project_root / filename
-    registry.find_reader(target)
 
     target.write_bytes(data)
     add_batch_table_source(project_root, batch.name, filename)
@@ -175,7 +227,9 @@ def delete_table(
     HistoryStore.source_paths_for_snapshot). For a batch table, also
     removes the entire [[batch_table]] from table-tool.toml — restore
     from history is NOT supported for batch tables at this stage (see
-    src/payload/docs/BATCH.md)."""
+    src/payload/docs/BATCH.md). Also drops the table's [[table_meta]]
+    entry (cluster/tags), single-file or batch alike — a deleted table
+    shouldn't leave orphaned metadata behind."""
     removed_sources = [p for p in ref.source_paths if p.is_file()]
     for p in removed_sources:
         p.unlink()
@@ -187,6 +241,7 @@ def delete_table(
     cache.forget_table(ref.name)
 
     batch_entry_removed = remove_batch_table_entry(project_root, ref.name) if ref.is_batch else False
+    remove_table_meta_entry(project_root, ref.name)
     return DeleteResult(removed_sources, removed_outputs, batch_entry_removed)
 
 
@@ -214,6 +269,7 @@ def delete_batch_member(
     remaining = [p for p in batch.source_paths if p != target]
     if not remaining:
         batch_entry_removed = remove_batch_table_entry(project_root, batch.name)
+        remove_table_meta_entry(project_root, batch.name)
         removed_outputs = [p for p in output_dir.glob(f"{batch.name}.*") if p.is_file()] if output_dir.exists() else []
         for p in removed_outputs:
             p.unlink()

@@ -30,6 +30,10 @@ DOCS = [
         "slug": "batch", "filename": "BATCH.md", "title": "Batch tables",
         "description": "A table built from several source files: [[batch_table]], parse_many, limits.",
     },
+    {
+        "slug": "clusters", "filename": "CLUSTERS.md", "title": "Clusters & tags",
+        "description": "One cluster per table for shared config overrides, plus free-form tags for search/filtering.",
+    },
 ]
 _BY_SLUG = {d["slug"]: d for d in DOCS}
 

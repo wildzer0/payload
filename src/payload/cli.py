@@ -22,11 +22,17 @@ from rich.table import Table
 from payload.core.batch import run_batch_build
 from payload.core.batch_tables import BatchTable, effective_config, resolve_batch_tables
 from payload.core.cache import BuildCache
+from payload.core.clusters import resolve_clusters
 from payload.core.config import (
     GLOBAL_CONFIG_FILENAME,
     create_batch_table,
+    create_cluster,
+    delete_cluster,
     load_config,
     resolve_config_with_provenance,
+    set_table_cluster,
+    set_table_tags,
+    update_cluster,
 )
 from payload.core.discovery import (
     TableRef,
@@ -36,11 +42,13 @@ from payload.core.discovery import (
     discover_table_sources,
     exclude_batch_members,
     find_duplicate_stems,
+    resolve_table_config,
     resolve_table_ref,
 )
 from payload.core.doctor import run_doctor
 from payload.core.errors import (
     BatchBuildError,
+    ClusterError,
     DuplicateTableNameError,
     GoldenMismatchError,
     GoldenStaleError,
@@ -61,9 +69,11 @@ from payload.core.table_admin import (
     delete_batch_member,
     delete_table,
     import_batch_member,
+    import_many_single_tables,
     import_new_batch_table,
     import_single_table,
 )
+from payload.core.table_meta import resolve_table_meta
 from payload._version import __version__
 from payload.init_cmd import init_project, is_nonempty_existing_dir
 from payload.plugin_scaffold import scaffold_local_plugin, scaffold_plugin
@@ -76,10 +86,12 @@ golden_app = typer.Typer(help="Golden file management")
 plugin_app = typer.Typer(help="Plugin management/scaffolding")
 config_app = typer.Typer(help="Resolved config inspection")
 pipeline_app = typer.Typer(help="Pipeline inspection")
+cluster_app = typer.Typer(help="Cluster management (one cluster per table, config overrides)")
 app.add_typer(golden_app, name="golden")
 app.add_typer(plugin_app, name="plugin")
 app.add_typer(config_app, name="config")
 app.add_typer(pipeline_app, name="pipeline")
+app.add_typer(cluster_app, name="cluster")
 
 # Windows consoles with a legacy codepage (cp1252/'charmap', not UTF-8)
 # can't represent emoji like 💡 used in tips — without this, a
@@ -187,6 +199,17 @@ def require_project_root(root: Path) -> None:
         raise ProjectNotInitializedError(root)
 
 
+def _table_config_for_ref(root: Path, base_config, ref: TableRef):
+    """One-off convenience for CLI commands that resolve a single
+    table's config (not a batch build loop, where clusters/table_metas
+    should be resolved once upfront instead — see run_batch_build):
+    wraps core/discovery.py's resolve_table_config with a fresh
+    clusters/table_metas lookup, cluster override included."""
+    clusters = resolve_clusters(root, base_config)
+    table_metas = resolve_table_meta(root, base_config, clusters)
+    return resolve_table_config(root, base_config, ref, clusters, table_metas)
+
+
 # --------------------------------------------------------------------------
 # build / build-all
 # --------------------------------------------------------------------------
@@ -246,7 +269,11 @@ def build_cmd(
             if batch is None:
                 raise SourceNotFoundError(source_path)
             source_paths = batch.source_paths
-            config = effective_config(base_config, batch)
+            clusters = resolve_clusters(root, base_config)
+            table_metas = resolve_table_meta(root, base_config, clusters)
+            meta = table_metas.get(batch.name)
+            cluster = clusters.get(meta.cluster) if meta and meta.cluster else None
+            config = effective_config(base_config, batch, cluster=cluster)
             table_name = batch.name
 
         cache = BuildCache(Path(config.defaults.cache_dir))
@@ -283,6 +310,9 @@ def build_all_cmd(
     out: Path = typer.Option(Path("build"), "--out", help="Output directory"),
     jobs: int = typer.Option(1, "--jobs", help="Parallelism level"),
     filter_glob: Optional[str] = typer.Option(None, "--filter", help="Glob to filter sources"),
+    cluster: Optional[str] = typer.Option(
+        None, "--cluster", help="Restrict to tables belonging to this cluster (combines with --filter)"
+    ),
     force: bool = typer.Option(False, "--force"),
     dry_run: bool = typer.Option(False, "--dry-run"),
     check_golden_flag: bool = typer.Option(False, "--check-golden"),
@@ -302,9 +332,8 @@ def build_all_cmd(
         cache = BuildCache(Path(base_config.defaults.cache_dir))
         cli_opts = _parse_opts(opt)
 
-        known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
         sources = discover_table_sources(
-            root, known_ext, Path(base_config.defaults.output_dir), filter_glob
+            root, Path(base_config.defaults.output_dir), Path(base_config.defaults.cache_dir), filter_glob
         )
 
         duplicates = find_duplicate_stems(sources)
@@ -318,6 +347,22 @@ def build_all_cmd(
         sources = exclude_batch_members(sources, batch_tables)
         check_no_batch_name_collisions(sources, batch_tables)
         tables = all_table_refs(sources, batch_tables)
+
+        if cluster is not None:
+            # Applied AFTER all_table_refs (unlike --filter, a
+            # pre-discovery glob that never touches batch tables):
+            # cluster membership is name-keyed and must narrow both
+            # single-file and batch tables uniformly.
+            clusters = resolve_clusters(root, base_config)
+            if cluster not in clusters:
+                raise ClusterError(cluster, "no \\[\\[cluster]] with this name")
+            table_metas = resolve_table_meta(root, base_config, clusters)
+
+            def _in_cluster(t: TableRef) -> bool:
+                meta = table_metas.get(t.name)
+                return meta is not None and meta.cluster == cluster
+
+            tables = [t for t in tables if _in_cluster(t)]
 
         with Progress(
             SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
@@ -384,7 +429,6 @@ def watch(
         registry = load_plugins(project_root=project_root)
         config = load_config(project_root)
         cache = BuildCache(Path(config.defaults.cache_dir))
-        known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
         watch_root = root if root.is_dir() else root.parent
 
         # The initial build must never prevent watch from starting —
@@ -392,7 +436,7 @@ def watch(
         # build error while watching live.
         batch_member_paths: dict[Path, BatchTable] = {}
         try:
-            sources = discover_table_sources(root, known_ext, Path(config.defaults.output_dir), filter_glob)
+            sources = discover_table_sources(root, Path(config.defaults.output_dir), Path(config.defaults.cache_dir), filter_glob)
             duplicates = find_duplicate_stems(sources)
             if duplicates:
                 raise DuplicateTableNameError(duplicates)
@@ -426,7 +470,11 @@ def watch(
                 # debounce window, the batch rebuilds once per file
                 # that settles: redundant but harmless, the cache makes
                 # the extra runs cheap.
-                per_table_config = effective_config(load_config(project_root), batch)
+                live_config = load_config(project_root)
+                live_clusters = resolve_clusters(project_root, live_config)
+                live_meta = resolve_table_meta(project_root, live_config, live_clusters).get(batch.name)
+                live_cluster = live_clusters.get(live_meta.cluster) if live_meta and live_meta.cluster else None
+                per_table_config = effective_config(live_config, batch, cluster=live_cluster)
                 out_paths, was_built = build(
                     batch.source_paths, registry, per_table_config, out,
                     cache=cache, writer_name=to, table_name=batch.name,
@@ -445,7 +493,7 @@ def watch(
             destinations = ", ".join(str(p) for p in out_paths)
             console.print(f"[green]✓[/] {src.name} → {destinations} ({status})")
 
-        watch_loop(watch_root, known_ext, out, on_change)
+        watch_loop(watch_root, out, on_change, cache_dir=Path(config.defaults.cache_dir))
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -552,11 +600,13 @@ def commit(
         if only:
             tables = [t for t in tables if t.name in only]
 
+        clusters = resolve_clusters(root, config)
+        table_metas = resolve_table_meta(root, config, clusters)
         dirty = []
         for ref in tables:
             output_paths = list(output_dir.glob(f"{ref.name}.*"))
             if history.is_dirty(ref.name, ref.source_paths, output_paths):
-                table_config = effective_config(config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+                table_config = resolve_table_config(root, config, ref, clusters, table_metas)
                 build_info = describe_table_build(
                     ref.source_paths, registry, table_config, output_paths, output_dir, table_name=ref.name,
                 )
@@ -802,7 +852,7 @@ def rm_cmd(
 
         sources, batch_tables, config = discover_for_history(root)
         ref = _resolve_ref_or_exit(sources, batch_tables, table_name)
-        table_config = effective_config(config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+        table_config = _table_config_for_ref(root, config, ref)
         output_dir = Path(table_config.defaults.output_dir)
         cache = BuildCache(Path(table_config.defaults.cache_dir))
         history = HistoryStore(root)
@@ -853,7 +903,7 @@ def rm_cmd(
 @app.command(name="import")
 def import_cmd(
     ctx: typer.Context,
-    paths: list[Path] = typer.Argument(..., help="External file to import (more than one only with --new-batch)"),
+    paths: list[Path] = typer.Argument(..., help="External file(s) to import (more than one needs --new-batch or --each)"),
     as_name: Optional[str] = typer.Option(
         None, "--as", help="Table name (default: filename without extension)"
     ),
@@ -862,6 +912,10 @@ def import_cmd(
     ),
     new_batch: Optional[str] = typer.Option(
         None, "--new-batch", help="Create a new [[batch_table]] with this name from the given files"
+    ),
+    each: bool = typer.Option(
+        False, "--each", help="Import every file as its own standalone table, instead of one [[batch_table]] "
+                              "made of all of them — for a pile of unrelated files (e.g. hundreds at once)"
     ),
     overwrite: bool = typer.Option(
         False, "--overwrite", help="Overwrite the source if a table with this name already exists"
@@ -873,16 +927,31 @@ def import_cmd(
     the location is always the project root, decided by the tool: no
     more creating folders or moving files by hand (see
     src/payload/docs/USAGE.md, section 'Table management'). --batch/
-    --new-batch for batch tables, see src/payload/docs/BATCH.md."""
+    --new-batch for batch tables, --each for many unrelated files at
+    once, see src/payload/docs/BATCH.md."""
 
     def _run():
         require_project_root(root)
-        if batch and new_batch:
-            console.print("[red]✗[/] '--batch' and '--new-batch' are incompatible")
+        if sum(bool(x) for x in (batch, new_batch, each)) > 1:
+            console.print("[red]✗[/] '--batch', '--new-batch' and '--each' are mutually exclusive")
             raise typer.Exit(code=2)
 
-        registry = load_plugins(project_root=root)
         sources, batch_tables, _ = discover_for_history(root)
+
+        if each:
+            files = {}
+            for p in paths:
+                if not p.is_file():
+                    raise SourceNotFoundError(p)
+                files[p.name] = p.read_bytes()
+            result = import_many_single_tables(root, files, sources, batch_tables, overwrite=overwrite)
+            for r in result.imported:
+                verb = "imported" if r.created else "updated"
+                console.print(f"[green]✓[/] {r.path} {verb}")
+            for s in result.skipped:
+                console.print(f"[yellow]⚠[/] {s.filename} skipped: {s.reason}")
+            console.print(f"{len(result.imported)} imported, {len(result.skipped)} skipped")
+            return
 
         if new_batch:
             files = {}
@@ -890,14 +959,14 @@ def import_cmd(
                 if not p.is_file():
                     raise SourceNotFoundError(p)
                 files[p.name] = p.read_bytes()
-            bt = import_new_batch_table(root, registry, files, new_batch, sources, batch_tables)
+            bt = import_new_batch_table(root, files, new_batch, sources, batch_tables)
             console.print(f"[green]✓[/] \\[\\[batch_table]] '{new_batch}' created with {len(bt.source_paths)} files")
             for p in bt.source_paths:
                 console.print(f"    → {p}")
             return
 
         if len(paths) != 1:
-            console.print("[red]✗[/] one file at a time — use --new-batch to import more than one together")
+            console.print("[red]✗[/] one file at a time — use --new-batch (one table from several files) or --each (several independent tables)")
             raise typer.Exit(code=2)
         external = paths[0]
         if not external.is_file():
@@ -910,13 +979,13 @@ def import_cmd(
                 console.print(f"[red]✗[/] no \\[\\[batch_table]] '{batch}'")
                 raise typer.Exit(code=4)
             filename = f"{as_name}{external.suffix}" if as_name else external.name
-            target = import_batch_member(root, registry, data, filename, bt)
+            target = import_batch_member(root, data, filename, bt)
             console.print(f"[green]✓[/] {target} added to '{batch}'")
             return
 
         name = as_name or external.stem
         target_filename = f"{name}{external.suffix}"
-        result = import_single_table(root, registry, data, target_filename, sources, batch_tables, overwrite=overwrite)
+        result = import_single_table(root, data, target_filename, sources, batch_tables, overwrite=overwrite)
         verb = "imported" if result.created else "updated"
         console.print(f"[green]✓[/] {result.path} {verb}")
 
@@ -960,7 +1029,7 @@ def config_show(
         t.add_column("Value")
         t.add_column("Origin", style="dim")
 
-        for section_name, section_obj in (("defaults", config.defaults), ("toolchain", config.toolchain)):
+        for section_name, section_obj in (("defaults", config.defaults),):
             for f in dc_fields(section_obj):
                 key = f"{section_name}.{f.name}"
                 value = getattr(section_obj, f.name)
@@ -1012,7 +1081,7 @@ def pipeline_show(
             raise typer.Exit(code=4)
 
         registry = load_plugins(project_root=root)
-        config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+        config = _table_config_for_ref(root, base_config, ref)
 
         spec = resolve_pipeline_spec(ref.source_paths[0], registry, config, None, None)
         validate_pipeline_against_registry(spec, registry)
@@ -1082,6 +1151,14 @@ def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
         history = HistoryStore(root)
         tables = all_table_refs(sources, batch_tables)
 
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
+        # Only shown when actually used — 2 extra columns on every
+        # 'pld report' for a project that has no cluster/tag would
+        # just be clutter (and push a narrow terminal into wrapping
+        # cells in the columns that matter).
+        show_meta = any(m.cluster or m.tags for m in table_metas.values())
+
         t = Table(title=f"Project report ({len(tables)} tables)")
         t.add_column("Table")
         t.add_column("Source")
@@ -1089,11 +1166,14 @@ def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
         t.add_column("Byte order")
         t.add_column("Golden")
         t.add_column("Last snapshot")
+        if show_meta:
+            t.add_column("Cluster")
+            t.add_column("Tags")
 
         for ref in tables:
             name = ref.name
             display = f"{name} [dim](batch, {len(ref.source_paths)} files)[/]" if ref.is_batch else name
-            table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+            table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
             out_dir = Path(table_config.defaults.output_dir)
 
             src_size = f"{sum(p.stat().st_size for p in ref.source_paths)} B"
@@ -1114,7 +1194,13 @@ def report(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
             last = history.last_snapshot(name)
             snap_str = f"#{last.id} ({last.timestamp[:10]})" if last else "[dim]never saved[/]"
 
-            t.add_row(display, src_size, out_size, table_config.defaults.byte_order, golden_str, snap_str)
+            row = [display, src_size, out_size, table_config.defaults.byte_order, golden_str, snap_str]
+            if show_meta:
+                meta = table_metas.get(name)
+                row.append(meta.cluster if meta and meta.cluster else "[dim]—[/]")
+                row.append(", ".join(meta.tags) if meta and meta.tags else "[dim]—[/]")
+
+            t.add_row(*row)
 
         console.print(t)
 
@@ -1163,7 +1249,7 @@ def _resolve_ref_or_exit(sources: list[Path], batch_tables: list, table_name: st
 
 
 def _current_output_paths(root: Path, base_config, ref: TableRef) -> list[Path]:
-    table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+    table_config = _table_config_for_ref(root, base_config, ref)
     out_dir = Path(table_config.defaults.output_dir)
     return list(out_dir.glob(f"{ref.name}.*")) if out_dir.exists() else []
 
@@ -1284,6 +1370,273 @@ def golden_diff_cmd(
                     f"0x{c['offset']:04X}  current: {c['current']}  |  golden: {c['golden']}",
                     style="red",
                 )
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+# --------------------------------------------------------------------------
+# cluster new/list/show/edit/delete/assign/unassign, tag, tags
+# --------------------------------------------------------------------------
+
+_CLUSTER_DEFAULTS_FIELDS = ("writer", "reader", "output_dir", "cache_dir", "byte_order")
+
+
+@cluster_app.command("new")
+def cluster_new_cmd(
+    ctx: typer.Context,
+    name: str = typer.Argument(..., help="Cluster name"),
+    writer: Optional[str] = typer.Option(None, "--writer"),
+    reader: Optional[str] = typer.Option(None, "--reader"),
+    output_dir: Optional[str] = typer.Option(None, "--output-dir"),
+    cache_dir: Optional[str] = typer.Option(None, "--cache-dir"),
+    byte_order: Optional[str] = typer.Option(None, "--byte-order", help="little | big"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Creates a new [[cluster]] — all overrides are optional (a
+    cluster with none is still useful, e.g. purely to group tables for
+    filtering). See src/payload/docs/CLUSTERS.md for [plugin.*]
+    overrides, hand-edit-only for now."""
+
+    def _run():
+        require_project_root(root)
+        values = (writer, reader, output_dir, cache_dir, byte_order)
+        defaults = {k: v for k, v in zip(_CLUSTER_DEFAULTS_FIELDS, values) if v is not None}
+        path = create_cluster(root, name, defaults=defaults)
+        console.print(f"[green]✓[/] \\[\\[cluster]] '{name}' created in {path}")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@cluster_app.command("list")
+def cluster_list_cmd(ctx: typer.Context, root: Path = typer.Option(Path("."), "--root")):
+    """Lists every declared cluster with its override summary and member count."""
+
+    def _run():
+        require_project_root(root)
+        base_config = load_config(root)
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
+
+        if not clusters:
+            console.print("No cluster declared in this project.")
+            return
+
+        t = Table(title=f"Clusters ({len(clusters)})")
+        t.add_column("Name")
+        t.add_column("Overrides")
+        t.add_column("Members")
+        for c in clusters.values():
+            parts = [f"{k}={v}" for k, v in c.defaults.items()]
+            parts += [f"plugin.{name}" for name in c.plugin]
+            members = [m.name for m in table_metas.values() if m.cluster == c.name]
+            t.add_row(c.name, ", ".join(parts) if parts else "[dim]—[/]", str(len(members)))
+        console.print(t)
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@cluster_app.command("show")
+def cluster_show_cmd(
+    ctx: typer.Context, name: str = typer.Argument(...), root: Path = typer.Option(Path("."), "--root"),
+):
+    """Shows one cluster's overrides and its member tables."""
+
+    def _run():
+        require_project_root(root)
+        base_config = load_config(root)
+        clusters = resolve_clusters(root, base_config)
+        if name not in clusters:
+            raise ClusterError(name, "no [[cluster]] with this name")
+        cluster = clusters[name]
+        table_metas = resolve_table_meta(root, base_config, clusters)
+        members = sorted(m.name for m in table_metas.values() if m.cluster == name)
+
+        console.print(f"[bold]{name}[/]")
+        if cluster.defaults:
+            console.print("  defaults:")
+            for k, v in cluster.defaults.items():
+                console.print(f"    {k} = {v}")
+        if cluster.plugin:
+            console.print("  plugin:")
+            for plugin_name, opts in cluster.plugin.items():
+                # no '[name]' delimiter here: square brackets are rich
+                # markup syntax, and a plugin name is arbitrary text —
+                # wrapping it in literal brackets risks the console
+                # trying (and failing) to parse it as a style tag.
+                console.print(f"    {plugin_name}: {opts}")
+        if not cluster.defaults and not cluster.plugin:
+            console.print("  [dim]no overrides[/]")
+        console.print(f"  members ({len(members)}): {', '.join(members) if members else '[dim]none[/]'}")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@cluster_app.command("edit")
+def cluster_edit_cmd(
+    ctx: typer.Context,
+    name: str = typer.Argument(...),
+    writer: Optional[str] = typer.Option(None, "--writer"),
+    clear_writer: bool = typer.Option(False, "--clear-writer"),
+    reader: Optional[str] = typer.Option(None, "--reader"),
+    clear_reader: bool = typer.Option(False, "--clear-reader"),
+    output_dir: Optional[str] = typer.Option(None, "--output-dir"),
+    clear_output_dir: bool = typer.Option(False, "--clear-output-dir"),
+    cache_dir: Optional[str] = typer.Option(None, "--cache-dir"),
+    clear_cache_dir: bool = typer.Option(False, "--clear-cache-dir"),
+    byte_order: Optional[str] = typer.Option(None, "--byte-order", help="little | big"),
+    clear_byte_order: bool = typer.Option(False, "--clear-byte-order"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Updates an existing cluster's 'defaults' overrides field by
+    field — a bare --xxx sets that field, --clear-xxx removes the
+    override (falls back to the global/table default). [plugin.*]
+    overrides stay hand-edit-only, see 'pld cluster new'."""
+
+    def _run():
+        require_project_root(root)
+        base_config = load_config(root)
+        clusters = resolve_clusters(root, base_config)
+        if name not in clusters:
+            raise ClusterError(name, "no [[cluster]] with this name")
+
+        current = dict(clusters[name].defaults)
+        for field_name, value, clear in (
+            ("writer", writer, clear_writer),
+            ("reader", reader, clear_reader),
+            ("output_dir", output_dir, clear_output_dir),
+            ("cache_dir", cache_dir, clear_cache_dir),
+            ("byte_order", byte_order, clear_byte_order),
+        ):
+            if clear:
+                current.pop(field_name, None)
+            elif value is not None:
+                current[field_name] = value
+
+        path = update_cluster(root, name, defaults=current)
+        console.print(f"[green]✓[/] \\[\\[cluster]] '{name}' updated in {path}")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@cluster_app.command("delete")
+def cluster_delete_cmd(
+    ctx: typer.Context,
+    name: str = typer.Argument(...),
+    force: bool = typer.Option(
+        False, "--force", help="Also clear the cluster from every member table (keeps their tags)"
+    ),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Deletes a [[cluster]] — refuses if it still has member tables unless --force."""
+
+    def _run():
+        require_project_root(root)
+        removed = delete_cluster(root, name, force=force)
+        if not removed:
+            console.print(f"[yellow]![/] no \\[\\[cluster]] '{name}'")
+            return
+        console.print(f"[green]✓[/] cluster '{name}' removed")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@cluster_app.command("assign")
+def cluster_assign_cmd(
+    ctx: typer.Context,
+    table_name: str = typer.Argument(...),
+    cluster_name: str = typer.Argument(..., metavar="CLUSTER"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Assigns a table to a cluster — a table belongs to at most one,
+    assigning again replaces the previous cluster."""
+
+    def _run():
+        require_project_root(root)
+        sources, batch_tables, _ = discover_for_history(root)
+        _resolve_ref_or_exit(sources, batch_tables, table_name)
+        set_table_cluster(root, table_name, cluster_name)
+        console.print(f"[green]✓[/] '{table_name}' assigned to cluster '{cluster_name}'")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@cluster_app.command("unassign")
+def cluster_unassign_cmd(
+    ctx: typer.Context, table_name: str = typer.Argument(...), root: Path = typer.Option(Path("."), "--root"),
+):
+    """Removes a table's cluster assignment (its tags, if any, are kept)."""
+
+    def _run():
+        require_project_root(root)
+        sources, batch_tables, _ = discover_for_history(root)
+        _resolve_ref_or_exit(sources, batch_tables, table_name)
+        set_table_cluster(root, table_name, None)
+        console.print(f"[green]✓[/] '{table_name}' no longer belongs to a cluster")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command(name="tag")
+def tag_cmd(
+    ctx: typer.Context,
+    table_name: str = typer.Argument(...),
+    add: Optional[list[str]] = typer.Option(None, "--add", help="Tag to add (repeatable)"),
+    remove: Optional[list[str]] = typer.Option(None, "--remove", help="Tag to remove (repeatable)"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Shows a table's tags (no flags), or edits them with --add/--remove
+    (both may be given together in one call)."""
+
+    def _run():
+        require_project_root(root)
+        sources, batch_tables, base_config = discover_for_history(root)
+        _resolve_ref_or_exit(sources, batch_tables, table_name)
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
+        current = table_metas.get(table_name)
+        tags = list(current.tags) if current else []
+
+        if not add and not remove:
+            console.print(f"'{table_name}': {', '.join(tags) if tags else '[dim]no tags[/]'}")
+            return
+
+        for t in add or []:
+            if t not in tags:
+                tags.append(t)
+        remove_set = set(remove or [])
+        tags = [t for t in tags if t not in remove_set]
+
+        set_table_tags(root, table_name, tags)
+        console.print(f"[green]✓[/] '{table_name}' tags: {', '.join(tags) if tags else '[dim]none[/]'}")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@app.command(name="tags")
+def tags_cmd(ctx: typer.Context, root: Path = typer.Option(Path("."), "--root")):
+    """Project-wide: every distinct tag in use, and how many tables have it."""
+
+    def _run():
+        require_project_root(root)
+        base_config = load_config(root)
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
+
+        counts: dict[str, int] = {}
+        for meta in table_metas.values():
+            for t in meta.tags:
+                counts[t] = counts.get(t, 0) + 1
+
+        if not counts:
+            console.print("No tag in use in this project.")
+            return
+
+        t = Table(title=f"Tags ({len(counts)})")
+        t.add_column("Tag")
+        t.add_column("Tables")
+        for tag_name in sorted(counts):
+            t.add_row(tag_name, str(counts[tag_name]))
+        console.print(t)
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -1460,10 +1813,10 @@ def plugin_new_local(
     ctx: typer.Context,
     name: str = typer.Argument(..., help="Plugin name (slug), e.g. simple_reader"),
     kind: str = typer.Option(..., "--kind", help="reader | writer | doctor-check"),
-    dest: Path = typer.Option(Path("local_plugins"), "--dest", help="Destination folder"),
+    dest: Path = typer.Option(Path("plugins"), "--dest", help="Destination folder"),
 ):
-    """Quick scaffold of a LOCAL plugin: a single .py file inside
-    local_plugins/, no pip install. For a distributable plugin (a real
+    """Quick scaffold of a project plugin: a single .py file inside
+    plugins/, no pip install. For a distributable plugin (a real
     pip package), use 'pld plugin new' instead."""
 
     def _run():
@@ -1478,6 +1831,35 @@ def plugin_new_local(
 
         console.print(f"[green]✓[/] created {out_path}")
         console.print("    → 'pld plugins' to check it gets discovered once you've finished it", style="dim")
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
+@plugin_app.command("install")
+def plugin_install(
+    ctx: typer.Context,
+    source: str = typer.Argument(..., help="Local .py path, or an http(s):// URL to a raw .py file"),
+    as_name: Optional[str] = typer.Option(None, "--as", help="Filename to install under (default: source's basename)"),
+    dest: Path = typer.Option(Path("plugins"), "--dest", help="Destination folder"),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing file at the destination"),
+):
+    """Installs a single-file plugin (reader/writer/doctor-check) from
+    a local path or a raw .py URL into the project's plugins/ folder —
+    no git clone, no pip package, just one file. Payload ships no
+    reader/writer of its own; see examples/plugins/ in the payload
+    repo for ready-to-use ones."""
+
+    def _run():
+        from payload.core.plugin_install import install_plugin as _install_plugin
+
+        result = _install_plugin(dest, source, as_name=as_name, overwrite=overwrite)
+        console.print(f"[green]✓[/] installed {result.filename} -> {result.path}")
+        if result.sanity_ok:
+            console.print(f"    exposes: {', '.join(result.kinds)}", style="dim")
+        else:
+            console.print(f"[yellow]![/] sanity check failed: {'; '.join(result.sanity_issues)}")
+            console.print("    → the file was still installed; fix it before it's discovered", style="dim")
+        console.print("    → 'pld plugins' to check it gets discovered", style="dim")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -1665,7 +2047,7 @@ def init(
     ),
 ):
     """Creates the minimal scaffold of a project: config, directories,
-    local_plugins/, sample table.
+    plugins/, sample table.
 
     With a name, creates a new dedicated folder (recommended: avoids
     accidentally ending up with the scaffold scattered in the wrong
@@ -1675,7 +2057,7 @@ def init(
 
     def _run():
         resolved_name = name
-        include_local_plugins = True
+        include_plugins = True
         include_example = True
         chosen_writer = None
         chosen_byte_order = "little"
@@ -1692,8 +2074,8 @@ def init(
                 resolved_name = typed or None
 
             if not yes:
-                include_local_plugins = typer.confirm(
-                    "Create 'local_plugins/' for external plugins without pip install?", default=True
+                include_plugins = typer.confirm(
+                    "Create 'plugins/' for external plugins without pip install?", default=True
                 )
                 include_example = typer.confirm(
                     "Include a sample table?", default=True
@@ -1734,7 +2116,7 @@ def init(
 
         init_kwargs = dict(
             force=force,
-            include_local_plugins=include_local_plugins,
+            include_plugins=include_plugins,
             include_example=include_example,
         )
         if wizard:

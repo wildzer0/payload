@@ -1,7 +1,9 @@
 import pytest
 
 from payload.core.errors import ReaderParseError
-from payload.readers.raw_text import RawTextReader
+from tests.example_plugins_helper import load_example_plugin
+
+RawTextReader = load_example_plugin("raw_text.py").RawTextReader
 
 
 def test_sniff_detects_hex_values(tmp_path):

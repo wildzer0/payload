@@ -52,3 +52,6 @@ class BinWriter:
 
         out_path.write_bytes(ir.data)
         return out_path
+
+
+WRITER = BinWriter

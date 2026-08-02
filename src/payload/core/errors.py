@@ -192,6 +192,31 @@ class PluginApiVersionError(PluginError):
         )
 
 
+class PluginAlreadyExistsError(PluginError):
+    """Installing a plugin would silently overwrite an existing file at
+    the destination — refuses without explicit --overwrite consent,
+    same principle as TableAlreadyExistsError for table imports (see
+    core/table_admin.py)."""
+
+    def __init__(self, path: Path, **kw):
+        super().__init__(
+            f"A plugin file already exists at '{path}'",
+            hint="Pass --overwrite to replace it, or --as <name> to install under a different filename",
+            path=str(path), **kw,
+        )
+
+
+class PluginSourceNotFoundError(PluginError):
+    """The given source (local path or URL) for 'pld plugin install'
+    couldn't be read."""
+
+    def __init__(self, source: str, reason: str, **kw):
+        super().__init__(
+            f"Can't install plugin from '{source}': {reason}",
+            source=source, **kw,
+        )
+
+
 class AmbiguousReaderError(PluginError):
     def __init__(self, path: Path, candidates: list[str], **kw):
         super().__init__(
@@ -241,6 +266,33 @@ class BatchTableError(ConfigError):
             # and printed as '[]', the brackets need escaping.
             hint="See src/payload/docs/BATCH.md for the \\[\\[batch_table]] schema",
             batch_name=batch_name,
+            **kw,
+        )
+
+
+class ClusterError(ConfigError):
+    """A [[cluster]] is invalid: duplicate name, or a [[table_meta]]
+    entry references a cluster name that doesn't exist, or deleting a
+    cluster that still has member tables without --force/force=True."""
+
+    def __init__(self, cluster_name: str, reason: str, **kw):
+        super().__init__(
+            f"Cluster '{cluster_name}' is invalid: {reason}",
+            hint="See src/payload/docs/CLUSTERS.md for the \\[\\[cluster]] schema",
+            cluster_name=cluster_name,
+            **kw,
+        )
+
+
+class TableMetaError(ConfigError):
+    """A [[table_meta]] entry is invalid: duplicate name across
+    multiple [[table_meta]] blocks for the same table."""
+
+    def __init__(self, table_name: str, reason: str, **kw):
+        super().__init__(
+            f"Table metadata for '{table_name}' is invalid: {reason}",
+            hint="See src/payload/docs/CLUSTERS.md for the \\[\\[table_meta]] schema",
+            table_name=table_name,
             **kw,
         )
 

@@ -8,7 +8,6 @@ from payload.core.discovery import discover_table_sources
 def test_provenance_default_when_no_config(tmp_path):
     config, provenance = resolve_config_with_provenance(tmp_path)
     assert provenance["defaults.writer"] == "default"
-    assert provenance["toolchain.compiler"] == "default"
 
 
 def test_provenance_global_when_set_in_global_toml(tmp_path):
@@ -27,11 +26,11 @@ def test_provenance_sidecar_overrides_global(tmp_path):
     config, provenance = resolve_config_with_provenance(tmp_path, source_path=src)
     assert config.defaults.writer == "hex"
     assert "sidecar" in provenance["defaults.writer"]
-    # a field untouched by the sidecar stays "global", it doesn't
+    # a field untouched by the sidecar stays "default", it doesn't
     # accidentally become "sidecar" (nothing else is in the global
     # config here, so it stays default — we're just verifying the
     # merge didn't overwrite the provenance of undeclared fields)
-    assert provenance["toolchain.compiler"] == "default"
+    assert provenance["defaults.byte_order"] == "default"
 
 
 def test_provenance_without_table_argument_ignores_sidecar(tmp_path):
@@ -54,7 +53,7 @@ def test_export_project_contains_sources_and_config(tmp_path):
     src = sensors / "temp.raw"
     src.write_text("x")
 
-    sources = discover_table_sources(tmp_path, {".raw"}, tmp_path / "build")
+    sources = discover_table_sources(tmp_path, tmp_path / "build")
     out_zip = tmp_path / "out.zip"
     export_project(tmp_path, sources, out_zip)
 

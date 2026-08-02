@@ -31,18 +31,12 @@ serve = [
 [project.scripts]
 pld = "payload.cli:app"
 
-# Plugin builtin, registrati esattamente come farebbe un pacchetto di terze
-# parti — dimostra che il core non ha trattamento speciale per i "propri" plugin.
-[project.entry-points."payload.readers"]
-raw_text = "payload.readers.raw_text:RawTextReader"
-csv = "payload.readers.csv_reader:CsvReader"
-c_source = "payload.readers.c_source:CSourceReader"
-
-[project.entry-points."payload.writers"]
-bin = "payload.writers.bin_writer:BinWriter"
-hex = "payload.writers.hex_writer:HexWriter"
-obj = "payload.writers.obj_writer:ObjWriter"
-header = "payload.writers.header_writer:HeaderWriter"
+# No reader/writer ships inside the payload package itself — every
+# project owns its own plugins (see plugins/ and 'pld plugin install').
+# The entry_points loading mechanism (payload.readers/payload.writers/
+# payload.doctor_checks, see core/registry.py) still works for anyone
+# who wants a real pip-distributed plugin shared across projects; it's
+# just empty here.
 
 [build-system]
 requires = ["setuptools>=68"]

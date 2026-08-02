@@ -85,7 +85,7 @@ def _client(root: Path) -> TestClient:
 
 
 def _write_local_plugin(root: Path, filename: str, source: str) -> Path:
-    d = root / "local_plugins"
+    d = root / "plugins"
     d.mkdir(exist_ok=True)
     path = d / filename
     path.write_text(source)
@@ -146,7 +146,7 @@ def test_list_flags_scaffold_stub_methods(tmp_path):
     root = _init_project(tmp_path)
     from payload.plugin_scaffold import scaffold_local_plugin
 
-    scaffold_local_plugin("scaffolded_reader", "reader", root / "local_plugins")
+    scaffold_local_plugin("scaffolded_reader", "reader", root / "plugins")
     client = _client(root)
 
     r = client.get("/api/local-plugins")
@@ -216,11 +216,11 @@ def test_put_creates_and_overwrites(tmp_path):
     r = client.put("/api/local-plugins/reader.py", json={"content": READER_SOURCE})
 
     assert r.status_code == 200
-    assert (root / "local_plugins" / "reader.py").read_text() == READER_SOURCE
+    assert (root / "plugins" / "reader.py").read_text() == READER_SOURCE
 
     r2 = client.put("/api/local-plugins/reader.py", json={"content": "# updated\n" + READER_SOURCE})
     assert r2.status_code == 200
-    assert (root / "local_plugins" / "reader.py").read_text().startswith("# updated")
+    assert (root / "plugins" / "reader.py").read_text().startswith("# updated")
 
 
 def test_put_missing_content_400(tmp_path):
@@ -253,7 +253,7 @@ def test_delete_removes_file(tmp_path):
 
     assert r.status_code == 200
     assert r.json() == {"filename": "reader.py", "status": "deleted"}
-    assert not (root / "local_plugins" / "reader.py").exists()
+    assert not (root / "plugins" / "reader.py").exists()
 
 
 def test_delete_is_idempotent(tmp_path):

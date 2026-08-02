@@ -18,15 +18,23 @@ from payload.core.registry import PluginRegistry
 
 
 class ToolchainCheck:
+    """Generic "is this binary on PATH" doctor check — not toolchain-
+    specific in implementation, just historically named after its
+    first two uses (compiler/objcopy). A plugin that needs an external
+    binary (e.g. a compiler) can register its own DOCTOR_CHECK built on
+    this, reading its config from [plugin.<plugin_name>] (see
+    examples/plugins/c_source.py, examples/plugins/obj_writer.py)."""
+
     name = "toolchain"
     api_version = "1.0"
 
-    def __init__(self, binary_key: str, binary_name: str):
-        self._binary_key = binary_key  # e.g. "compiler" (key inside [toolchain])
+    def __init__(self, binary_key: str, binary_name: str, plugin_name: str):
+        self._binary_key = binary_key  # e.g. "compiler" (key inside [plugin.<plugin_name>])
         self._binary_name = binary_name  # expected name, for the message
+        self._plugin_name = plugin_name  # e.g. "c_source" (section under [plugin.*])
 
     def run(self, config: dict) -> CheckResult:
-        cmd = config.get("toolchain", {}).get(self._binary_key)
+        cmd = config.get("plugin", {}).get(self._plugin_name, {}).get(self._binary_key)
         if not cmd:
             return CheckResult(
                 self.name, CheckStatus.WARN, f"'{self._binary_key}' not configured"
@@ -37,7 +45,7 @@ class ToolchainCheck:
                 self.name,
                 CheckStatus.FAIL,
                 f"'{cmd}' not found in PATH",
-                hint=f"Install {cmd} or update '{self._binary_key}' in table-tool.toml",
+                hint=f"Install {cmd} or update '{self._binary_key}' under [plugin.{self._plugin_name}] in table-tool.toml",
             )
         try:
             out = subprocess.run(
@@ -194,18 +202,12 @@ class TableNameUniquenessCheck:
 
     def run(self, config: dict) -> CheckResult:
         from payload.core.discovery import discover_table_sources, find_duplicate_stems
-        from payload.core.registry import load_plugins
 
         project_root = Path(config.get("_project_root", "."))
         output_dir = Path(config.get("defaults", {}).get("output_dir", "build"))
+        cache_dir = Path(config.get("defaults", {}).get("cache_dir", ".payload_cache"))
 
-        try:
-            registry = load_plugins(project_root=project_root, strict=False)
-        except Exception as e:  # pragma: no cover - defensive
-            return CheckResult(self.name, CheckStatus.WARN, f"couldn't verify: {e}")
-
-        known_ext = {ext for r in registry.readers.values() for ext in r.extensions}
-        sources = discover_table_sources(project_root, known_ext, output_dir)
+        sources = discover_table_sources(project_root, output_dir, cache_dir)
         duplicates = find_duplicate_stems(sources)
 
         if duplicates:
@@ -222,7 +224,7 @@ class TableNameUniquenessCheck:
 
 
 class LocalPluginDepsCheck:
-    """Scans local plugins (local_plugins/, PAYLOAD_PLUGIN_PATH) and
+    """Scans project plugins (plugins/, PAYLOAD_PLUGIN_PATH) and
     reports the ones with unmet REQUIRES. Non-blocking (WARN): a local
     plugin with missing dependencies doesn't prevent payload from
     working, only that specific plugin."""
@@ -370,8 +372,6 @@ class PipelineExecStagesCheck:
 
 def builtin_checks() -> list:
     return [
-        ToolchainCheck("compiler", "compiler"),
-        ToolchainCheck("objcopy", "objcopy"),
         PluginLoadCheck(),
         ConfigValidityCheck(),
         TableNameUniquenessCheck(),

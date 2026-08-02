@@ -78,10 +78,9 @@ def test_config_put_writes_global_config(tmp_path):
     client = _client(root)
     current = client.get("/api/config").json()
     defaults = {f["key"].split(".", 1)[1]: f["value"] for f in current["fields"] if f["key"].startswith("defaults.")}
-    toolchain = {f["key"].split(".", 1)[1]: f["value"] for f in current["fields"] if f["key"].startswith("toolchain.")}
     defaults["writer"] = "hex"
 
-    r = client.put("/api/config", json={"defaults": defaults, "toolchain": toolchain})
+    r = client.put("/api/config", json={"defaults": defaults})
 
     assert r.status_code == 200
     fields = {f["key"]: f["value"] for f in r.json()["fields"]}
@@ -89,11 +88,11 @@ def test_config_put_writes_global_config(tmp_path):
     assert (root / "table-tool.toml").exists()
 
 
-def test_config_put_rejects_missing_sections(tmp_path):
+def test_config_put_rejects_missing_defaults(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.put("/api/config", json={"defaults": {}})
+    r = client.put("/api/config", json={})
 
     assert r.status_code == 400
 
@@ -102,7 +101,7 @@ def test_config_put_rejects_unknown_field(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
 
-    r = client.put("/api/config", json={"defaults": {"campo_inventato": 1}, "toolchain": {}})
+    r = client.put("/api/config", json={"defaults": {"campo_inventato": 1}})
 
     assert r.status_code == 400
 
@@ -155,15 +154,6 @@ def test_sidecar_put_rejects_non_dict_defaults(tmp_path):
     client = _client(root)
 
     r = client.put("/api/sidecar/example_table", json={"defaults": "not a table"})
-
-    assert r.status_code == 400
-
-
-def test_sidecar_put_rejects_non_dict_toolchain(tmp_path):
-    root = _init_project(tmp_path)
-    client = _client(root)
-
-    r = client.put("/api/sidecar/example_table", json={"toolchain": "not a table"})
 
     assert r.status_code == 400
 

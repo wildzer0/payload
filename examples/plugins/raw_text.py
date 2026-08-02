@@ -5,6 +5,10 @@ comments. Syntax:
     # whole-line comment, ignored
     0x0A, 0x1B          # end-of-line comment, saved in TableIR.comments
     0x2C, 0x3D
+
+Not installed by default — copy this file (or 'pld plugin install
+examples/plugins/raw_text.py') into a project's plugins/ folder to use
+it, see src/payload/docs/PLUGINS.md.
 """
 from __future__ import annotations
 
@@ -116,3 +120,6 @@ class RawTextReader:
             source_format=self.name,
             comments=comments,
         )
+
+
+READER = RawTextReader

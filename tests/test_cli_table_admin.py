@@ -210,6 +210,20 @@ def test_import_empty_file_fails(tmp_path, monkeypatch):
     assert not (proj / "external.raw").exists()
 
 
+def test_import_unreadable_extension_still_succeeds(tmp_path, monkeypatch):
+    """Import doesn't require an installed reader for the extension —
+    see core/table_admin.py; the table just can't be built until a
+    matching reader is installed."""
+    proj = _init_project(tmp_path, monkeypatch)
+    external = tmp_path / "external.mysteryext"
+    external.write_text("x\n")
+
+    result = runner.invoke(app, ["import", str(external)])
+
+    assert result.exit_code == 0, result.stdout
+    assert (proj / "external.mysteryext").exists()
+
+
 def test_import_missing_external_file_fails(tmp_path, monkeypatch):
     _init_project(tmp_path, monkeypatch)
 
@@ -274,7 +288,18 @@ def test_import_batch_and_new_batch_incompatible(tmp_path, monkeypatch):
     result = runner.invoke(app, ["import", str(external), "--batch", "a", "--new-batch", "b"])
 
     assert result.exit_code == 2
-    assert "incompatible" in result.stdout
+    assert "mutually exclusive" in result.stdout
+
+
+def test_import_new_batch_and_each_incompatible(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+    row1 = tmp_path / "ROW1.txt"
+    row1.write_text("0x01\n")
+
+    result = runner.invoke(app, ["import", str(row1), "--new-batch", "rows", "--each"])
+
+    assert result.exit_code == 2
+    assert "mutually exclusive" in result.stdout
 
 
 def test_import_multiple_files_without_new_batch_fails(tmp_path, monkeypatch):
@@ -287,6 +312,57 @@ def test_import_multiple_files_without_new_batch_fails(tmp_path, monkeypatch):
     result = runner.invoke(app, ["import", str(row1), str(row2)])
 
     assert result.exit_code == 2
+
+
+def test_import_each_creates_independent_tables(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    row1 = tmp_path / "ROW1.txt"
+    row1.write_text("0x01\n")
+    row2 = tmp_path / "ROW2.txt"
+    row2.write_text("0x02\n")
+
+    result = runner.invoke(app, ["import", str(row1), str(row2), "--each"])
+
+    assert result.exit_code == 0, result.stdout
+    assert (proj / "ROW1.txt").exists() and (proj / "ROW2.txt").exists()
+    assert "2 imported, 0 skipped" in result.stdout
+
+
+def test_import_each_skips_collisions_and_reports_them(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "ROW1.txt").write_text("old\n")
+    row1 = tmp_path / "ROW1.txt"
+    row1.write_text("0x01\n")
+    row2 = tmp_path / "ROW2.txt"
+    row2.write_text("0x02\n")
+
+    result = runner.invoke(app, ["import", str(row1), str(row2), "--each"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "1 imported, 1 skipped" in result.stdout
+    assert (proj / "ROW1.txt").read_text() == "old\n"
+    assert (proj / "ROW2.txt").read_text() == "0x02\n"
+
+
+def test_import_each_overwrite_replaces_existing(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    (proj / "ROW1.txt").write_text("old\n")
+    row1 = tmp_path / "ROW1.txt"
+    row1.write_text("0x01\n")
+
+    result = runner.invoke(app, ["import", str(row1), "--each", "--overwrite"])
+
+    assert result.exit_code == 0, result.stdout
+    assert "1 imported, 0 skipped" in result.stdout
+    assert (proj / "ROW1.txt").read_text() == "0x01\n"
+
+
+def test_import_each_missing_file_fails(tmp_path, monkeypatch):
+    _init_project(tmp_path, monkeypatch)
+
+    result = runner.invoke(app, ["import", str(tmp_path / "does_not_exist.txt"), "--each"])
+
+    assert result.exit_code == 4
 
 
 def test_import_into_existing_batch_table(tmp_path, monkeypatch):

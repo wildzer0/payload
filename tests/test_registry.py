@@ -136,27 +136,39 @@ def test_load_plugins_non_strict_tracks_broken_entry_point(tmp_path):
     assert registry.load_failures[0][0] == "broken_reader"
 
 
-def test_is_builtin_true_for_payload_own_entry_points(tmp_path):
-    registry = load_plugins(project_root=tmp_path, strict=False)
-    assert registry.is_builtin("raw_text") is True
-    assert registry.is_builtin("bin") is True
+def test_is_installed_true_for_any_entry_point_regardless_of_module(tmp_path):
+    """payload ships no entry-point plugin of its own anymore (see
+    pyproject.toml) — is_installed() just reflects 'loaded via a
+    pip-installed entry_point', from any package, not a payload-only
+    distinction. Uses a synthetic entry point since there's no real
+    one to load here."""
+    fake_ep = MagicMock()
+    fake_ep.name = "fake_reader"
+    fake_ep.load.return_value = FakeReader
+
+    def fake_entry_points(group):
+        return [fake_ep] if group == READER_GROUP else []
+
+    with patch("payload.core.registry.entry_points", side_effect=fake_entry_points):
+        registry = load_plugins(project_root=tmp_path, strict=False)
+    assert registry.is_installed("fake_reader") is True
 
 
-def test_is_builtin_false_for_plugin_without_entry_point():
+def test_is_installed_false_for_locally_registered_plugin():
     registry = PluginRegistry()
     registry.register_reader(FakeReader())
-    assert registry.is_builtin(FakeReader.name) is False
+    assert registry.is_installed(FakeReader.name) is False
 
 
-def test_is_builtin_false_for_third_party_entry_point():
+def test_is_installed_true_for_third_party_entry_point():
     registry = PluginRegistry()
     ep = MagicMock()
     ep.module = "some_third_party_pkg.reader"
     registry.register_reader(FakeReader())
     registry._origin[FakeReader.name] = ep
-    assert registry.is_builtin(FakeReader.name) is False
+    assert registry.is_installed(FakeReader.name) is True
 
 
-def test_is_builtin_false_for_unknown_name():
+def test_is_installed_false_for_unknown_name():
     registry = PluginRegistry()
-    assert registry.is_builtin("does_not_exist") is False
+    assert registry.is_installed("does_not_exist") is False

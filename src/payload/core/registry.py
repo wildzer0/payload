@@ -67,27 +67,26 @@ class PluginRegistry:
 
         raise NoReaderFoundError(path)
 
-    def is_builtin(self, name: str) -> bool:
-        """True for a plugin shipped with payload itself (the readers/
-        writers in payload.readers/payload.writers, registered as
-        'payload.*:...' entry_points — see pyproject.toml). False for
-        a local plugin (local_plugins/, no entry point) or a
-        third-party plugin installed via pip: only the former count as
-        'built-in' from the user's point of view ('plugins list' puts
-        them below the plugins the user wrote)."""
-        origin = self._origin.get(name)
-        return origin is not None and origin.module.startswith("payload.")
+    def is_installed(self, name: str) -> bool:
+        """True if this plugin was loaded via a pip-installed
+        entry_point (payload.readers/payload.writers/
+        payload.doctor_checks, declared by ANY installed package — see
+        pyproject.toml; payload itself declares none) rather than from
+        the project's own plugins/ folder. Distinguishes "came from a
+        pip package" from "the project wrote it" in the UI ('plugins
+        list' groups them separately)."""
+        return name in self._origin
 
 
 def load_plugins(project_root: Path | None = None, strict: bool = True) -> PluginRegistry:
     """Loads every plugin: first the ones installed via entry_points
-    (pip packages), then the local ones (loose .py files in
-    'local_plugins/' or in PAYLOAD_PLUGIN_PATH — see
-    core/local_plugins.py).
+    (pip packages — none ship with payload itself, see pyproject.toml),
+    then the project's own ones (loose .py files in 'plugins/' or in
+    PAYLOAD_PLUGIN_PATH — see core/local_plugins.py).
 
-    project_root: where to look for 'local_plugins/'. If None, uses
-    the current working directory (sensible behavior for the vast
-    majority of commands, which operate from the project folder).
+    project_root: where to look for 'plugins/'. If None, uses the
+    current working directory (sensible behavior for the vast majority
+    of commands, which operate from the project folder).
 
     strict=True: a plugin that fails to load or has an incompatible
     API stops immediately with PluginLoadError/PluginApiVersionError

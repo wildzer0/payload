@@ -11,13 +11,14 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
-from payload.core.batch_tables import effective_config
-from payload.core.config import GLOBAL_CONFIG_FILENAME, create_batch_table, load_config
-from payload.core.discovery import all_table_refs, discover_for_history, resolve_table_ref
+from payload.core.clusters import resolve_clusters
+from payload.core.config import GLOBAL_CONFIG_FILENAME, create_batch_table
+from payload.core.discovery import all_table_refs, discover_for_history, resolve_table_config, resolve_table_ref
 from payload.core.errors import NoOutputToCommitError, NothingToCommitError, SnapshotNotFoundError, TableNotFoundError
 from payload.core.history import HistoryStore, legacy_compatible_source_blobs
 from payload.core.pipeline import describe_table_build
 from payload.core.registry import load_plugins
+from payload.core.table_meta import resolve_table_meta
 from payload.web.errors import InvalidRequestError
 from payload.web.paths import resolve
 
@@ -35,9 +36,11 @@ async def status(request: Request) -> JSONResponse:
     def _run():
         sources, batch_tables, base_config = discover_for_history(root)
         history = HistoryStore(root)
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
         tables = []
         for ref in all_table_refs(sources, batch_tables):
-            table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+            table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
             out_dir = resolve(root, table_config.defaults.output_dir)
             output_paths = list(out_dir.glob(f"{ref.name}.*")) if out_dir.exists() else []
             last = history.last_snapshot(ref.name)
@@ -47,12 +50,15 @@ async def status(request: Request) -> JSONResponse:
                 state = "dirty"
             else:
                 state = "clean"
+            meta = table_metas.get(ref.name)
             tables.append({
                 "name": ref.name,
                 "path": str(ref.source_paths[0]) if not ref.is_batch else None,
                 "is_batch": ref.is_batch,
                 "source_count": len(ref.source_paths),
                 "state": state,
+                "cluster": meta.cluster if meta else None,
+                "tags": meta.tags if meta else [],
             })
         return {"tables": tables}
 
@@ -72,6 +78,8 @@ async def commit(request: Request) -> JSONResponse:
         history = HistoryStore(root)
         registry = load_plugins(project_root=root)
         output_dir = resolve(root, base_config.defaults.output_dir)
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
 
         target_tables = all_table_refs(sources, batch_tables)
         if only:
@@ -81,7 +89,7 @@ async def commit(request: Request) -> JSONResponse:
         for ref in target_tables:
             output_paths = list(output_dir.glob(f"{ref.name}.*"))
             if history.is_dirty(ref.name, ref.source_paths, output_paths):
-                table_config = effective_config(base_config, ref.batch) if ref.is_batch else load_config(root, source_path=ref.source_paths[0])
+                table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
                 build_info = describe_table_build(
                     ref.source_paths, registry, table_config, output_paths, output_dir, table_name=ref.name,
                 )

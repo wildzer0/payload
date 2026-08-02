@@ -1,6 +1,7 @@
 """
-Compiles a .c file with the configured toolchain and extracts the
-bytes of a dedicated data section, to populate TableIR.data.
+Compiles a .c file with the configured compiler/objcopy (see
+[plugin.c_source] in table-tool.toml) and extracts the bytes of a
+dedicated data section, to populate TableIR.data.
 
 The .c file must define the data in a section with this exact name:
 
@@ -28,6 +29,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from payload.core.doctor import ToolchainCheck
 from payload.core.errors import ReaderParseError, ToolchainExecutionError
 from payload.core.ir import PLUGIN_API_VERSION, TableIR
 
@@ -53,10 +55,10 @@ class CSourceReader:
         return False
 
     def parse(self, path: Path, config: dict) -> TableIR:
-        toolchain = config.get("toolchain", {})
-        compiler = toolchain.get("compiler", "gcc")
-        compiler_flags = toolchain.get("compiler_flags", [])
-        objcopy = toolchain.get("objcopy", "objcopy")
+        plugin_cfg = config.get("plugin", {}).get("c_source", {})
+        compiler = plugin_cfg.get("compiler", "gcc")
+        compiler_flags = plugin_cfg.get("compiler_flags", [])
+        objcopy = plugin_cfg.get("objcopy", "objcopy")
 
         # PRIVATE subfolder inside tmp/, not tmp/ itself: when this
         # reader runs inside a multi-stage pipeline, tmp/ is shared
@@ -125,3 +127,22 @@ class CSourceReader:
             return comments if offset == data_len else []  # sanity check: if it doesn't add up, don't trust it
         except Exception:
             return []
+
+
+class _CSourceToolchainCheck(ToolchainCheck):
+    """DOCTOR_CHECK must be a bare zero-arg-constructible class (same
+    convention as READER/WRITER, see core/local_plugins.py) — this
+    wraps ToolchainCheck's 3 required constructor args so the loader
+    can instantiate it with none. 'name' is overridden so it doesn't
+    collide with obj_writer.py's own ToolchainCheck-based DOCTOR_CHECK
+    when both are registered together (PluginRegistry keys doctor
+    checks by name)."""
+
+    name = "toolchain_c_source"
+
+    def __init__(self):
+        super().__init__("compiler", "compiler", "c_source")
+
+
+READER = CSourceReader
+DOCTOR_CHECK = _CSourceToolchainCheck

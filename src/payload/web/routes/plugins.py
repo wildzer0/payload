@@ -42,7 +42,7 @@ async def plugins_list(request: Request) -> JSONResponse:
                     "kind": kind, "name": name,
                     "extensions": [e for e in ext if e],
                     "api_version": getattr(plugin, "api_version", "?"),
-                    "builtin": registry.is_builtin(name),
+                    "installed": registry.is_installed(name),
                 })
         return {"plugins": items}
 
@@ -70,7 +70,7 @@ async def plugin_info(request: Request) -> JSONResponse:
             "default_writer": getattr(plugin, "default_writer", None),
             "compatible_readers": getattr(plugin, "compatible_readers", None),
             "docstring": doc or None,
-            "builtin": registry.is_builtin(name),
+            "installed": registry.is_installed(name),
         }
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
@@ -150,13 +150,62 @@ async def plugin_install_deps_route(request: Request) -> JSONResponse:
     return JSONResponse(await anyio.to_thread.run_sync(_run))
 
 
+async def plugin_install_route(request: Request) -> JSONResponse:
+    """multipart/form-data: either a 'source' field (local .py path or
+    http(s):// URL, same as 'pld plugin install <source>') or a 'file'
+    field (an uploaded/dropped .py file's bytes — the web-only case,
+    there's no path to fetch from since the browser already has the
+    content), plus optional 'as_name', 'dest' (default 'plugins') and
+    'overwrite'."""
+    root = request.app.state.root
+    form = await request.form()
+    source = (form.get("source") or "").strip() or None
+    raw_upload = form.get("file")
+    # A 'file' part with no filename in its Content-Disposition isn't
+    # parsed into an UploadFile at all (python-multipart treats it as
+    # a plain string field instead) — folded into "no upload" rather
+    # than crashing on a missing .filename attribute below.
+    upload = raw_upload if raw_upload and not isinstance(raw_upload, str) else None
+    if not source and not upload:
+        raise InvalidRequestError("missing 'source' or 'file' parameter")
+    if source and upload:
+        raise InvalidRequestError("'source' and 'file' are mutually exclusive")
+
+    as_name = (form.get("as_name") or "").strip() or None
+    overwrite = form.get("overwrite") == "true"
+    dest = resolve(root, form.get("dest") or "plugins")
+    upload_filename = upload.filename if upload else None
+    data = await upload.read() if upload else None
+
+    def _run():
+        from payload.core.plugin_install import install_plugin, install_plugin_from_bytes
+
+        if source:
+            is_url = source.startswith(("http://", "https://"))
+            src = source if is_url else str(resolve(root, source))
+            result = install_plugin(dest, src, as_name=as_name, overwrite=overwrite)
+        else:
+            filename = as_name or upload_filename
+            result = install_plugin_from_bytes(dest, filename, data, overwrite=overwrite)
+
+        return {
+            "path": str(result.path),
+            "filename": result.filename,
+            "sanity_ok": result.sanity_ok,
+            "sanity_issues": result.sanity_issues,
+            "kinds": result.kinds,
+        }
+
+    return JSONResponse(await anyio.to_thread.run_sync(_run))
+
+
 async def plugin_new_local_route(request: Request) -> JSONResponse:
     body = await request.json()
     name, kind = body.get("name"), body.get("kind")
     if not name or not kind:
         raise InvalidRequestError("missing 'name'/'kind' parameters")
     root = request.app.state.root
-    dest = resolve(root, body.get("dest") or "local_plugins")
+    dest = resolve(root, body.get("dest") or "plugins")
 
     def _run():
         try:
@@ -193,6 +242,7 @@ ROUTES = [
     Route("/api/plugin/{name}", plugin_info, methods=["GET"]),
     Route("/api/plugin/validate", plugin_validate, methods=["POST"]),
     Route("/api/plugin/install-deps", plugin_install_deps_route, methods=["POST"]),
+    Route("/api/plugin/install", plugin_install_route, methods=["POST"]),
     Route("/api/plugin/new-local", plugin_new_local_route, methods=["POST"]),
     Route("/api/plugin/new", plugin_new_route, methods=["POST"]),
 ]

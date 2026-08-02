@@ -3,8 +3,11 @@ from pathlib import Path
 import pytest
 
 from payload.core.byteorder import pack_value, repack, unpack_value
-from payload.readers.csv_reader import CsvReader
-from payload.writers.bin_writer import BinWriter
+from tests.example_plugins_helper import load_example_plugin
+
+CsvReader = load_example_plugin("csv_reader.py").CsvReader
+BinWriter = load_example_plugin("bin_writer.py").BinWriter
+RawTextReader = load_example_plugin("raw_text.py").RawTextReader
 
 
 # --- byteorder helpers ---------------------------------------------------
@@ -110,8 +113,6 @@ def test_bin_writer_passthrough_when_same_order(tmp_path):
 def test_bin_writer_falls_back_without_structured_fields(tmp_path):
     # a reader without extra['fields'] (e.g. raw_text): the writer can't
     # blindly reinterpret, it must just pass through the bytes received
-    from payload.readers.raw_text import RawTextReader
-
     raw_file = tmp_path / "t.raw"
     raw_file.write_text("0x0A, 0x1B\n")
     ir = RawTextReader().parse(raw_file, {})

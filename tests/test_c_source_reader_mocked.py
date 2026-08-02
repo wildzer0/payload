@@ -12,7 +12,10 @@ from unittest.mock import patch
 import pytest
 
 from payload.core.errors import ReaderParseError, ToolchainExecutionError
-from payload.readers.c_source import CSourceReader
+from tests.example_plugins_helper import load_example_plugin
+
+_c_source_module = load_example_plugin("c_source.py")
+CSourceReader = _c_source_module.CSourceReader
 
 C_SOURCE = '''#include <stdint.h>
 
@@ -44,7 +47,7 @@ def test_sniff_always_false(tmp_path):
 def test_compile_failure_raises_toolchain_error(tmp_path):
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)
-    with patch("payload.readers.c_source.subprocess.run", _fake_run(compile_rc=1)):
+    with patch.object(_c_source_module.subprocess, "run", _fake_run(compile_rc=1)):
         with pytest.raises(ToolchainExecutionError):
             CSourceReader().parse(c_file, {})
 
@@ -52,7 +55,7 @@ def test_compile_failure_raises_toolchain_error(tmp_path):
 def test_extract_failure_raises_toolchain_error(tmp_path):
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)
-    with patch("payload.readers.c_source.subprocess.run", _fake_run(extract_rc=1)):
+    with patch.object(_c_source_module.subprocess, "run", _fake_run(extract_rc=1)):
         with pytest.raises(ToolchainExecutionError):
             CSourceReader().parse(c_file, {})
 
@@ -64,9 +67,9 @@ def test_compiler_not_found_raises_toolchain_error_not_bare_exception(tmp_path):
     traceback instead of a clean ToolchainExecutionError."""
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)
-    with patch("payload.readers.c_source.subprocess.run", side_effect=FileNotFoundError(2, "No such file or directory", "gcc-that-does-not-exist")):
+    with patch.object(_c_source_module.subprocess, "run", side_effect=FileNotFoundError(2, "No such file or directory", "gcc-that-does-not-exist")):
         with pytest.raises(ToolchainExecutionError) as exc_info:
-            CSourceReader().parse(c_file, {"toolchain": {"compiler": "gcc-that-does-not-exist"}})
+            CSourceReader().parse(c_file, {"plugin": {"c_source": {"compiler": "gcc-that-does-not-exist"}}})
     assert "gcc-that-does-not-exist" in str(exc_info.value)
 
 
@@ -79,16 +82,16 @@ def test_objcopy_not_found_raises_toolchain_error_not_bare_exception(tmp_path):
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         raise FileNotFoundError(2, "No such file or directory", "objcopy-that-does-not-exist")
 
-    with patch("payload.readers.c_source.subprocess.run", _run):
+    with patch.object(_c_source_module.subprocess, "run", _run):
         with pytest.raises(ToolchainExecutionError) as exc_info:
-            CSourceReader().parse(c_file, {"toolchain": {"objcopy": "objcopy-that-does-not-exist"}})
+            CSourceReader().parse(c_file, {"plugin": {"c_source": {"objcopy": "objcopy-that-does-not-exist"}}})
     assert "objcopy-that-does-not-exist" in str(exc_info.value)
 
 
 def test_no_section_extracted_raises_reader_parse_error(tmp_path):
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)
-    with patch("payload.readers.c_source.subprocess.run", _fake_run(bin_content=None)):
+    with patch.object(_c_source_module.subprocess, "run", _fake_run(bin_content=None)):
         with pytest.raises(ReaderParseError):
             CSourceReader().parse(c_file, {})
 
@@ -96,7 +99,7 @@ def test_no_section_extracted_raises_reader_parse_error(tmp_path):
 def test_empty_section_raises_reader_parse_error(tmp_path):
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)
-    with patch("payload.readers.c_source.subprocess.run", _fake_run(bin_content=b"")):
+    with patch.object(_c_source_module.subprocess, "run", _fake_run(bin_content=b"")):
         with pytest.raises(ReaderParseError):
             CSourceReader().parse(c_file, {})
 
@@ -104,8 +107,8 @@ def test_empty_section_raises_reader_parse_error(tmp_path):
 def test_successful_extraction_returns_data_and_comments(tmp_path):
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)
-    with patch("payload.readers.c_source.subprocess.run", _fake_run(bin_content=bytes([0x0A, 0x1B, 0x2C, 0x3D]))):
-        ir = CSourceReader().parse(c_file, {"toolchain": {"compiler": "gcc", "objcopy": "objcopy"}})
+    with patch.object(_c_source_module.subprocess, "run", _fake_run(bin_content=bytes([0x0A, 0x1B, 0x2C, 0x3D]))):
+        ir = CSourceReader().parse(c_file, {"plugin": {"c_source": {"compiler": "gcc", "objcopy": "objcopy"}}})
 
     assert ir.data == bytes([0x0A, 0x1B, 0x2C, 0x3D])
     assert ir.comments == [(0, "min threshold"), (2, "max threshold")]
@@ -119,7 +122,7 @@ def test_comment_extraction_skipped_when_byte_count_mismatches(tmp_path):
     offsets."""
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)  # declares 4 0x.. values in the source
-    with patch("payload.readers.c_source.subprocess.run", _fake_run(bin_content=bytes([0x0A, 0x1B]))):  # but only 2 bytes compiled
+    with patch.object(_c_source_module.subprocess, "run", _fake_run(bin_content=bytes([0x0A, 0x1B]))):  # but only 2 bytes compiled
         ir = CSourceReader().parse(c_file, {})
 
     assert ir.data == bytes([0x0A, 0x1B])
@@ -134,7 +137,7 @@ def test_comment_extraction_tolerates_source_disappearing(tmp_path):
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)
     fake = _fake_run(bin_content=bytes([0x0A, 0x1B, 0x2C, 0x3D]), delete_source_before_extract=True, source_path=c_file)
-    with patch("payload.readers.c_source.subprocess.run", fake):
+    with patch.object(_c_source_module.subprocess, "run", fake):
         ir = CSourceReader().parse(c_file, {})
 
     assert ir.data == bytes([0x0A, 0x1B, 0x2C, 0x3D])
@@ -144,7 +147,7 @@ def test_comment_extraction_tolerates_source_disappearing(tmp_path):
 def test_scratch_dir_cleaned_up_even_on_failure(tmp_path):
     c_file = tmp_path / "t.c"
     c_file.write_text(C_SOURCE)
-    with patch("payload.readers.c_source.subprocess.run", _fake_run(compile_rc=1)):
+    with patch.object(_c_source_module.subprocess, "run", _fake_run(compile_rc=1)):
         with pytest.raises(ToolchainExecutionError):
             CSourceReader().parse(c_file, {})
 

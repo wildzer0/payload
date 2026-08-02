@@ -12,7 +12,11 @@ import pytest
 
 from payload.core.errors import ToolchainExecutionError, WriterEmitError
 from payload.core.ir import TableIR
-from payload.writers.obj_writer import ObjWriter, section_name_for
+from tests.example_plugins_helper import load_example_plugin
+
+_obj_writer_module = load_example_plugin("obj_writer.py")
+ObjWriter = _obj_writer_module.ObjWriter
+section_name_for = _obj_writer_module.section_name_for
 
 
 def _ir(name="sensor", data=b"\x0a\x1b\x2c\x3d") -> TableIR:
@@ -21,24 +25,24 @@ def _ir(name="sensor", data=b"\x0a\x1b\x2c\x3d") -> TableIR:
 
 def test_missing_objcopy_target_raises(tmp_path):
     with pytest.raises(WriterEmitError):
-        ObjWriter().emit(_ir(), tmp_path / "out.o", {"toolchain": {}})
+        ObjWriter().emit(_ir(), tmp_path / "out.o", {"plugin": {"obj": {}}})
 
 
 def test_missing_objcopy_arch_raises(tmp_path):
     with pytest.raises(WriterEmitError):
-        ObjWriter().emit(_ir(), tmp_path / "out.o", {"toolchain": {"objcopy_target": "elf32-littlearm"}})
+        ObjWriter().emit(_ir(), tmp_path / "out.o", {"plugin": {"obj": {"objcopy_target": "elf32-littlearm"}}})
 
 
 def test_objcopy_failure_raises_toolchain_error(tmp_path):
     source = tmp_path / "sensor.c"
     source.write_text("irrelevant")
     ir = TableIR(name="sensor", data=b"\x0a", source_path=source, source_format="c_source")
-    config = {"toolchain": {"objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
+    config = {"plugin": {"obj": {"objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}}
 
     def fake_run(cmd, capture_output=True, text=True):
         return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="objcopy failed")
 
-    with patch("payload.writers.obj_writer.subprocess.run", fake_run):
+    with patch.object(_obj_writer_module.subprocess, "run", fake_run):
         with pytest.raises(ToolchainExecutionError):
             ObjWriter().emit(ir, tmp_path / "out.o", config)
 
@@ -50,12 +54,12 @@ def test_objcopy_not_found_raises_toolchain_error_not_bare_exception(tmp_path):
     source = tmp_path / "sensor.c"
     source.write_text("irrelevant")
     ir = TableIR(name="sensor", data=b"\x0a", source_path=source, source_format="c_source")
-    config = {"toolchain": {"objcopy": "objcopy-that-does-not-exist", "objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
+    config = {"plugin": {"obj": {"objcopy": "objcopy-that-does-not-exist", "objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}}
 
     def fake_run(cmd, capture_output=True, text=True):
         raise FileNotFoundError(2, "No such file or directory", "objcopy-that-does-not-exist")
 
-    with patch("payload.writers.obj_writer.subprocess.run", fake_run):
+    with patch.object(_obj_writer_module.subprocess, "run", fake_run):
         with pytest.raises(ToolchainExecutionError) as exc_info:
             ObjWriter().emit(ir, tmp_path / "out.o", config)
     assert "objcopy-that-does-not-exist" in str(exc_info.value)
@@ -66,7 +70,7 @@ def test_successful_emit_writes_input_and_calls_objcopy(tmp_path):
     source = tmp_path / "sensor.c"
     source.write_text("irrelevant")
     ir = TableIR(name="sensor temp!", data=b"\xde\xad\xbe\xef", source_path=source, source_format="c_source")
-    config = {"toolchain": {"objcopy": "my_objcopy", "objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
+    config = {"plugin": {"obj": {"objcopy": "my_objcopy", "objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}}
     out_path = tmp_path / "out.o"
 
     captured = {}
@@ -77,7 +81,7 @@ def test_successful_emit_writes_input_and_calls_objcopy(tmp_path):
         captured["bin_content"] = bin_path.read_bytes()
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    with patch("payload.writers.obj_writer.subprocess.run", fake_run):
+    with patch.object(_obj_writer_module.subprocess, "run", fake_run):
         result = ObjWriter().emit(ir, out_path, config)
 
     assert result == out_path
@@ -93,12 +97,12 @@ def test_scratch_dir_cleaned_up_even_on_failure(tmp_path):
     source = tmp_path / "sensor.c"
     source.write_text("irrelevant")
     ir = TableIR(name="sensor", data=b"\x0a", source_path=source, source_format="c_source")
-    config = {"toolchain": {"objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}
+    config = {"plugin": {"obj": {"objcopy_target": "elf32-littlearm", "objcopy_arch": "arm"}}}
 
     def fake_run(cmd, capture_output=True, text=True):
         return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="failed")
 
-    with patch("payload.writers.obj_writer.subprocess.run", fake_run):
+    with patch.object(_obj_writer_module.subprocess, "run", fake_run):
         with pytest.raises(ToolchainExecutionError):
             ObjWriter().emit(ir, tmp_path / "out.o", config)
 

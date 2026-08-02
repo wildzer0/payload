@@ -2,6 +2,108 @@
 
 ## v0.5.0 (not yet released)
 
+**Clusters & tags** — for projects with more than a handful of tables. See
+[src/payload/docs/CLUSTERS.md](src/payload/docs/CLUSTERS.md) for the full
+design.
+
+- New `[[cluster]]`/`[[table_meta]]` config sections: a cluster is a named
+  bundle of `defaults`/`plugin` overrides a table can opt into (at most one
+  per table), sitting as a new tier in config resolution — global
+  `[defaults]` → cluster → sidecar (or a batch table's own inline overrides)
+  → CLI flags. `[[table_meta]]` also carries free-form `tags` per table
+  (multiple, purely organizational, no effect on builds).
+- CLI: `pld cluster new/list/show/edit/delete/assign/unassign`, `pld tag`,
+  `pld tags`, and `pld build-all --cluster <name>` (combines with
+  `--filter`). `pld report`/`pld config show` reflect cluster/tags where
+  relevant.
+- Web: new "Clusters" page (create/edit/delete, member list), a "Tags &
+  cluster" card on each table's page, and — on the Dashboard — a search box
+  plus cluster/tag filter chips (multiple active tags combine with OR, a
+  cluster filter is single-select), shown only once a project actually uses
+  either.
+- New routes: `GET/POST /api/clusters`, `PUT/DELETE /api/clusters/{name}`,
+  `PUT /api/table/{name}/cluster`, `GET/PUT /api/table/{name}/tags`;
+  `/api/report`/`/api/status` gained `cluster`/`tags` fields, and
+  `/api/build-all/stream` gained a `cluster` filter param.
+- Deleting a table drops its `[[table_meta]]` entry too, so a removed table
+  never leaves an orphaned cluster/tag assignment behind.
+
+**Fix: table discovery no longer requires an installed reader.**
+`pld status`/`build-all`/`commit`/the web dashboard all discovered tables by
+scanning the project for files whose extension a *reader* recognized — with
+zero readers bundled by default (see below), a fresh project showed **no
+tables at all**, not even `pld init`'s own `example_table.raw`, until a
+matching plugin was installed. Discovery (`core/discovery.py`,
+`is_table_candidate`) is now format-agnostic: every file counts as a table
+unless it's obvious infrastructure (`table-tool.toml`, `*.config.toml`
+sidecars, `output_dir`, `cache_dir`, `plugins/`, hidden files/dirs) —
+building it is the only thing that still needs a matching reader
+(`NoReaderFoundError` there, same as always). Also fixed, found in the same
+pass: a relative `output_dir`/`cache_dir` was resolved against the *server
+process's* cwd instead of the project root, so the exclusion silently never
+matched whenever `pld serve`/`--root` pointed at a different folder — masked
+until now by the reader-extension filter above, which usually filtered out
+build output anyway. `pld watch`'s live-reload filter follows the same rule
+(`payload/watch.py`).
+
+**Install a plugin from the web UI** — `pld plugin install` was CLI-only;
+the Plugins page in `pld serve` now has an "Install plugin" card with a
+local-path/URL field and a drag&drop zone (`POST /api/plugin/install`,
+`core/plugin_install.install_plugin_from_bytes` for the upload case). Same
+no-silent-overwrite behavior as the CLI, with an overwrite-confirm dialog on
+collision.
+
+**Bulk import, no reader required at import time** — two follow-ups to the
+no-bundled-plugins change below, both aimed at the same problem: a fresh
+project starts with zero readers, so importing shouldn't be blocked on one
+being installed yet.
+
+- `pld import <files...> --each` (and the Dashboard's drag&drop, which now
+  asks "one batch table or N separate ones?" when 2+ files are dropped)
+  imports every file as its OWN standalone table, instead of forcing a
+  choice between one file at a time or bundling everything into a single
+  `[[batch_table]]`. A name collision with an already-tracked table doesn't
+  abort the whole run — that file is skipped and reported
+  (`N imported, M skipped`), the rest still go through, unless `--overwrite`
+  is also passed.
+- `pld import`/`/api/table/import` no longer require a reader for the
+  file's extension to already be installed — import is just "copy this
+  file into the project", nothing reads its content. A format nothing can
+  read yet only becomes a problem at build time (`NoReaderFoundError`
+  there), not at import.
+
+**No bundled plugins, project-owned `plugins/`** — `payload` no longer ships
+any reader/writer of its own; every project brings its own (breaking change,
+no compatibility shim).
+
+- Removed the `[toolchain]` core config section — `compiler`/`compiler_flags`
+  and `objcopy`/`objcopy_target`/`objcopy_arch` are now owned by whichever
+  plugin needs them, under `[plugin.c_source]`/`[plugin.obj]` respectively. A
+  `table-tool.toml` with a leftover `[toolchain]` section now fails
+  validation ("unknown section") — move the values under `[plugin.*]`.
+- Removed the bundled `raw_text`/`csv`/`c_source` readers and
+  `bin`/`hex`/`obj`/`header` writers from the installed package (no more
+  `payload.readers`/`payload.writers` entry-points, see `pyproject.toml`).
+  They're now reference implementations in
+  [examples/plugins/](examples/plugins/), installable on demand.
+- New command: `pld plugin install <source> [--as NAME] [--dest plugins]
+  [--overwrite]` — installs a single-file plugin from a local path or a raw
+  `.py` URL into a project's `plugins/` folder, refusing to silently
+  overwrite an existing file (same "explicit consent" principle as `pld
+  import`).
+- Renamed the project-local plugin folder from `local_plugins/` to
+  `plugins/` — an existing project must rename its folder (the
+  `PAYLOAD_PLUGIN_PATH` env var and the `/api/local-plugins/*` web routes are
+  unchanged).
+- `registry.is_builtin()` → `is_installed()`: now reflects "loaded via a
+  pip-installed entry_point" (any package, not just payload's own — since
+  payload ships none) vs "loaded from a project's `plugins/` folder". The web
+  UI's "builtin" badge/filter is now "installed (pip)".
+- The entry_points loading mechanism itself (`payload.readers`/
+  `payload.writers`/`payload.doctor_checks`) is unchanged and still works for
+  a real pip-distributed plugin shared across projects — it's just empty by
+  default now.
+
 **Batch table follow-ups** — closes the two gaps `v0.4.0`'s batch
 tables explicitly deferred, see
 [src/payload/docs/BATCH.md](src/payload/docs/BATCH.md).

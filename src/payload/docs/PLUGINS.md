@@ -80,7 +80,7 @@ from payload.core.errors import ReaderParseError
 raise ReaderParseError(path, "line 12: value out of range")
 ```
 
-### Real example: `readers/csv_reader.py`
+### Real example: `examples/plugins/csv_reader.py`
 
 ```python
 class CsvReader:
@@ -117,9 +117,11 @@ value,comment
 0x2C,max threshold
 ```
 
-See the full file at `src/payload/readers/csv_reader.py` — it also
+See the full file at `examples/plugins/csv_reader.py` — it also
 handles an optional `offset` column for non-contiguous data, and is a
-good starting point to copy for a new reader.
+good starting point to copy for a new reader (`pld plugin install
+examples/plugins/csv_reader.py` to try it in a project, or just copy
+the file into `plugins/`).
 
 ### Optional extension: `parse_many` (batch tables)
 
@@ -178,7 +180,7 @@ from payload.core.errors import WriterEmitError
 raise WriterEmitError(self.name, "table too large for this format")
 ```
 
-### Real example: `writers/hex_writer.py`
+### Real example: `examples/plugins/hex_writer.py`
 
 A minimal writer (`bin_writer.py`) just does `out_path.write_bytes(ir.data)`.
 A more interesting example is `hex_writer.py`, which **transforms**
@@ -254,30 +256,37 @@ CheckResult(name: str, status: str, message: str, hint: str | None = None)
 say **how to fix it**, not just what went wrong (e.g. "install X"
 instead of just "X not found").
 
-### Real example: `ToolchainCheck`
+### Real example: `ToolchainCheck` (`payload.core.doctor`)
+
+A generic "is this binary on PATH" check, reusable by any plugin that
+needs an external tool — reads its config from `[plugin.<name>]`, not
+a core section (see `examples/plugins/c_source.py`,
+`examples/plugins/obj_writer.py` for how the two example plugins that
+need a real toolchain wire this up):
 
 ```python
-class ToolchainCheck:
-    name = "toolchain"
-    api_version = "1.0"
+from payload.core.doctor import ToolchainCheck
 
-    def run(self, config: dict) -> CheckResult:
-        cmd = config.get("toolchain", {}).get("compiler")
-        if not cmd:
-            return CheckResult(self.name, CheckStatus.WARN, "'compiler' not configured")
-        if not shutil.which(cmd):
-            return CheckResult(
-                self.name, CheckStatus.FAIL, f"'{cmd}' not found in PATH",
-                hint=f"Install {cmd} or update 'compiler' in table-tool.toml",
-            )
-        return CheckResult(self.name, CheckStatus.OK, f"{cmd} found")
+class _MyToolCheck(ToolchainCheck):
+    # DOCTOR_CHECK must be a bare zero-arg class (see "Plugins without
+    # pip install" below) — this wraps ToolchainCheck's constructor
+    # args so the loader can instantiate it with none.
+    def __init__(self):
+        super().__init__(binary_key="compiler", binary_name="compiler", plugin_name="my_plugin")
+
+DOCTOR_CHECK = _MyToolCheck
 ```
+
+`ToolchainCheck.run()` reads `config.get("plugin", {}).get(plugin_name, {}).get(binary_key)`,
+checks it's on `PATH` with `shutil.which`, and reports `OK`/`WARN`/`FAIL`
+accordingly — see the class itself for the exact behavior.
 
 ### What `config` contains
 
-The same "resolved" dict (defaults + toolchain already merged
-following the CLI > sidecar > global config > default priority) that
-`parse()`/`emit()` would receive, plus one key doctor checks often use
+The same "resolved" dict (`defaults` already merged following the
+CLI > sidecar > global config > default priority, plus your own
+`[plugin.<name>]` slice) that `parse()`/`emit()` would receive, plus
+one key doctor checks often use
 that reader/writer usually don't: **`config["_project_root"]`**
 (string) — the project folder, **always use it instead of the
 process's cwd** to resolve relative paths. `pld serve` can run from a
@@ -307,26 +316,35 @@ real `run()`) **no longer breaks `pld doctor`** if you open it before
 finishing it: the check simply shows up as `FAIL` with that message,
 instead of failing the whole command with a traceback. `pld doctor`
 also includes a dedicated check (`local_plugin_stubs`, non-blocking)
-that scans every local plugin in the project (reader/writer/doctor
-check, not just doctor checks) and flags the ones whose `parse`/`emit`/
-`run` is still an unimplemented scaffold, so you don't have to run
-them to find out — and the same information shows up as a "not
-implemented" badge on the "Plugin" page of the web UI, next to every
-file in `local_plugins/`.
+that scans every project plugin (reader/writer/doctor check, not just
+doctor checks) and flags the ones whose `parse`/`emit`/`run` is still
+an unimplemented scaffold, so you don't have to run them to find out —
+and the same information shows up as a "not implemented" badge on the
+"Plugins" page of the web UI, next to every file in `plugins/`.
 
 ---
 
 ## How a plugin gets registered
 
-A plugin is discoverable by the core through an `entry_point` declared
-in the `pyproject.toml` of the package that contains it:
+Two independent ways, both fully supported (`payload` itself uses
+neither — it ships no reader/writer of its own, see [Plugins without
+`pip install`](#plugins-without-pip-install) below for the one most
+projects actually want):
+
+**A single `.py` file in the project's `plugins/` folder** — no
+packaging, no `pip install`, see the dedicated section below. This is
+how `examples/plugins/*.py` (this repo's reference implementations)
+are meant to be used.
+
+**A real pip package, via `entry_point`** — worth it for a plugin
+shared as a versioned package across several projects:
 
 ```toml
 [project.entry-points."payload.readers"]
-csv = "payload.readers.csv_reader:CsvReader"
+csv = "my_package.csv_reader:CsvReader"
 
 [project.entry-points."payload.writers"]
-hex = "payload.writers.hex_writer:HexWriter"
+hex = "my_package.hex_writer:HexWriter"
 ```
 
 Available groups: `payload.readers`, `payload.writers`,
@@ -443,16 +461,18 @@ populated in a particular way).
 ## Passing extra information to a plugin
 
 `config` (the dict `parse()`/`emit()` receive) only contains
-`defaults`/`toolchain` by default — if your plugin needs something the
+`defaults` by default — if your plugin needs something the
 core doesn't know about (a CSV delimiter, a base address, a
 format-specific flag), you have **two channels**, for two different
 purposes:
 
 **1. `[plugin.<name>]` — persistent, in `table-tool.toml`/sidecar**
 
-Not validated by the core (unlike `defaults`/`toolchain`): it's plugin
-territory, the core has no way to know which keys are legitimate for a
-third-party plugin.
+Not validated by the core (unlike `defaults`): it's plugin territory,
+the core has no way to know which keys are legitimate for a
+third-party plugin. This is also where a plugin that needs a real
+toolchain (compiler, objcopy, ...) keeps its settings — see
+`examples/plugins/c_source.py`/`obj_writer.py`.
 
 ```toml
 # table-tool.toml, or <table>.config.toml for the sidecar
@@ -489,24 +509,29 @@ you don't need `--force`.
 
 ---
 
-## Local plugins, without `pip install`
+## Plugins, without `pip install`
 
-A "real" plugin (meant to be reused across several projects,
-distributed, versioned) should be packaged with `pld plugin new` +
-`pip install -e .` — that's what gives you `entry_points`, independent
-versioning, installability via an internal pip index.
-
-For a quick experiment or a format specific to **a single project**,
-that ceremony can be overkill. `payload` also discovers plugins as
+**This is how most projects get a reader/writer at all** — `payload`
+itself ships none (see `examples/plugins/` in this repo for reference
+implementations). A "real" plugin (meant to be reused across several
+projects, distributed, versioned) should instead be packaged with
+`pld plugin new` + `pip install -e .` — that's what gives you
+`entry_points`, independent versioning, installability via an internal
+pip index. For everything else, `payload` discovers plugins as
 **single `.py` files**, with no installation at all:
 
-**Where to put them** — two ways, can be combined:
-1. A `local_plugins/` folder next to `table-tool.toml` — discovered
-   automatically.
+**Where to put them** — three ways, can be combined:
+1. A `plugins/` folder next to `table-tool.toml` — discovered
+   automatically. `pld init` creates it empty; `pld plugin install
+   <local-path-or-url>` populates it (fetches a single `.py` file, no
+   git clone, refuses to silently overwrite an existing file).
 2. The `PAYLOAD_PLUGIN_PATH` environment variable (list of folders
    separated by `:` on Unix, `;` on Windows) — useful for sharing
    plugins across several projects without publishing them as a
    package.
+3. Copy the file into `plugins/` by hand, or write it directly with
+   `pld plugin new-local <name> --kind reader|writer|doctor-check`
+   (scaffold with stub methods).
 
 **Convention in the file**: expose the class as a module-level
 variable, `READER`/`WRITER`/`DOCTOR_CHECK` for a single plugin, or
@@ -514,7 +539,7 @@ variable, `READER`/`WRITER`/`DOCTOR_CHECK` for a single plugin, or
 same file:
 
 ```python
-# local_plugins/my_writer.py
+# plugins/my_writer.py
 class UpperWriter:
     """Converts the data to uppercase before writing it (example)."""
     name = "upper"
@@ -530,16 +555,16 @@ WRITER = UpperWriter  # <- this line is what makes it discoverable
 
 From that point on `pld build table.raw --to upper` works, with no
 `pip install`. Files starting with `_` are ignored (useful for helper
-modules shared between several local plugins that aren't themselves a
-plugin).
+modules shared between several plugins in the folder that aren't
+themselves a plugin).
 
 ### If the plugin needs third-party libraries
 
-A local plugin can declare its own dependencies with a module-level
+A project plugin can declare its own dependencies with a module-level
 `REQUIRES`:
 
 ```python
-# local_plugins/my_writer.py
+# plugins/my_writer.py
 REQUIRES = ["numpy>=1.20", "pyserial"]
 
 class MyWriter:
@@ -553,14 +578,14 @@ installed, the error you see says exactly which dependency is missing,
 instead of a generic traceback:
 
 ```bash
-pld plugin install-deps local_plugins/my_writer.py
+pld plugin install-deps plugins/my_writer.py
 ```
 
 installs, with `pip`, into the current environment, everything
 `REQUIRES` declares that isn't already present. `pld doctor` also
 includes a check (`local_plugin_deps`, non-blocking) that scans every
-local plugin in the project and flags the ones with missing
-dependencies, without you having to check them one by one.
+project plugin and flags the ones with missing dependencies, without
+you having to check them one by one.
 
 **Honest limitation**: the check only verifies "is the package
 importable, yes or no" — it's not real dependency resolution (it
@@ -584,7 +609,11 @@ installed via pip.
 **No structure is imposed.** A table is a source file; you can have as
 many as you want in the same folder, and the folder hierarchy is free
 — `pld build-all` recursively discovers every source under the root,
-at any depth.
+at any depth. Discovery itself doesn't require a reader to be
+installed for a file's extension — `pld status`/the dashboard show a
+table as soon as it's on disk (excluding `table-tool.toml`, sidecars,
+`output_dir`, `cache_dir`, `plugins/`, and hidden files/dirs), building
+it is the only thing that needs a matching reader.
 
 ```
 project/

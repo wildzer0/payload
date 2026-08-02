@@ -13,8 +13,12 @@ import pytest
 
 from payload.core.errors import ReaderParseError, ToolchainExecutionError, WriterEmitError
 from payload.core.ir import TableIR
-from payload.readers.c_source import CSourceReader
-from payload.writers.obj_writer import ObjWriter, section_name_for
+from tests.example_plugins_helper import load_example_plugin
+
+CSourceReader = load_example_plugin("c_source.py").CSourceReader
+_obj_writer_module = load_example_plugin("obj_writer.py")
+ObjWriter = _obj_writer_module.ObjWriter
+section_name_for = _obj_writer_module.section_name_for
 
 pytestmark = pytest.mark.skipif(
     shutil.which("gcc") is None or shutil.which("objcopy") is None,
@@ -38,13 +42,13 @@ def _host_objcopy_target_arch() -> tuple[str, str]:
 
 @pytest.fixture
 def toolchain_config():
-    return {"toolchain": {"compiler": "gcc", "compiler_flags": [], "objcopy": "objcopy"}}
+    return {"plugin": {"c_source": {"compiler": "gcc", "compiler_flags": [], "objcopy": "objcopy"}}}
 
 
 @pytest.fixture
 def obj_config():
     target, arch = _host_objcopy_target_arch()
-    return {"toolchain": {"objcopy": "objcopy", "objcopy_target": target, "objcopy_arch": arch}}
+    return {"plugin": {"obj": {"objcopy": "objcopy", "objcopy_target": target, "objcopy_arch": arch}}}
 
 
 C_SOURCE_VALID = '''#include <stdint.h>
@@ -110,7 +114,7 @@ def test_obj_writer_produces_real_linkable_object(tmp_path, obj_config):
 def test_obj_writer_missing_target_config_raises(tmp_path):
     ir = TableIR(name="t", data=b"\x01\x02", source_path=tmp_path, source_format="fake")
     with pytest.raises(WriterEmitError):
-        ObjWriter().emit(ir, tmp_path / "out.o", {"toolchain": {}})
+        ObjWriter().emit(ir, tmp_path / "out.o", {"plugin": {"obj": {}}})
 
 
 def test_obj_writer_output_actually_links_with_start_stop_symbols(tmp_path, obj_config):

@@ -203,7 +203,7 @@ def test_doctor_survives_unimplemented_local_doctor_check(tmp_path):
     root = _init_project(tmp_path)
     from payload.plugin_scaffold import scaffold_local_plugin
 
-    scaffold_local_plugin("new_check", "doctor-check", root / "local_plugins")
+    scaffold_local_plugin("new_check", "doctor-check", root / "plugins")
     client = _client(root)
 
     r = client.get("/api/doctor")
