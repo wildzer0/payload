@@ -150,11 +150,14 @@ def test_rename_when_new_source_exists_on_disk(tmp_path):
     assert client.post("/api/table/rename", json={"table_name": "example_table", "new_name": "renamed"}).status_code == 400
 
 
-def test_clone_refuses_batch(tmp_path):
+def test_clone_batch_duplicates_entry(tmp_path):
     root = _init_project(tmp_path)
     client = _client(root)
     client.post("/api/table/import", data={"new_batch": "rows"}, files=[("file", ("ROW1.txt", b"r1", "text/plain"))])
-    assert client.post("/api/table/clone", json={"table_name": "rows", "new_name": "rows2"}).status_code == 400
+    r = client.post("/api/table/clone", json={"table_name": "rows", "new_name": "rows2"})
+    assert r.status_code == 200
+    names = [b["name"] for b in client.get("/api/batch").json()["batches"]]
+    assert "rows2" in names and "rows" in names
 
 
 def test_clone_when_new_source_exists_on_disk(tmp_path):
