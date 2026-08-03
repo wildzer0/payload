@@ -515,10 +515,23 @@ export async function openPipelineEditor(name) {
   };
 
   const addNode = (kind, name, command) => {
-    const x = (state.nodes.reduce((m, n) => Math.max(m, n.x), 0) + NODE_W + 70);
+    // the canvas can't scroll horizontally: a new stage must land INSIDE
+    // the visible area — right after the rightmost visible node, wrapping
+    // to a new row when the current one is full
+    const cw = canvasEl.clientWidth || 1200;
+    const { scale, x: vx } = state.view;
+    const visibleRight = (cw - vx) / scale;
+    const visible = state.nodes.filter((n) => n.x + NODE_W <= visibleRight + 1);
+    const anchor = visible.length ? visible.reduce((m, n) => (n.x > m.x ? n : m)) : null;
+    let x = anchor ? anchor.x + NODE_W + 70 : 0;
+    let y = anchor ? anchor.y : 0;
+    if (!anchor || x + NODE_W > visibleRight + 1) {
+      x = 0;          // current row is full: wrap to the next row
+      y = (anchor ? anchor.y : 0) + 64;
+    }
     const node = kind === "exec"
-      ? { id: "s" + (seq++), kind, command: command || "your-command", on_error: "fail", output_extension: "", x, y: 0 }
-      : { id: "s" + (seq++), kind, name, x, y: 0 };
+      ? { id: "s" + (seq++), kind, command: command || "your-command", on_error: "fail", output_extension: "", x, y }
+      : { id: "s" + (seq++), kind, name, x, y };
     state.nodes.push(node);
     state.selected = node.id;
     render();
