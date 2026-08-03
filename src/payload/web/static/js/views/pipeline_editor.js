@@ -334,9 +334,24 @@ export async function openPipelineEditor(name) {
       render();
       return;
     }
+    if (drag && drag.type === "node") {
+      // a plain click (no movement) must NOT re-render: re-rendering the
+      // props pane replaces its buttons BEFORE the click event fires,
+      // so e.g. "Remove stage" would never run. Only the live edge
+      // overlay (drawn above the nodes while dragging) is cleared.
+      const moved = drag.node.x !== drag.startX || drag.node.y !== drag.startY;
+      drag = null;
+      pan = null;
+      if (moved) {
+        render();
+      } else {
+        const liveEl = document.getElementById("pe-svg-live");
+        if (liveEl) liveEl.innerHTML = "";
+      }
+      return;
+    }
     drag = null;
     pan = null;
-    render(); // clear the live edge overlay
   };
 
   // Removal policy: only the edges touching the removed stage disappear —
@@ -437,7 +452,7 @@ export async function openPipelineEditor(name) {
       if (!n) return; // stale handler from a closed editor: ignore
       state.selected = node.dataset.id;
       const w = toWorld(ev.clientX, ev.clientY);
-      drag = { type: "node", node: n, ox: w.x - n.x, oy: w.y - n.y };
+      drag = { type: "node", node: n, ox: w.x - n.x, oy: w.y - n.y, startX: n.x, startY: n.y };
       render();
       return;
     }
