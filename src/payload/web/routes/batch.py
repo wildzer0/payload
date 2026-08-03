@@ -17,13 +17,32 @@ from payload.core.config import (
     upsert_batch_table,
 )
 from payload.core.discovery import discover_table_sources, is_table_candidate
+from pathlib import Path
+
 from payload.web.errors import InvalidRequestError
+
+
+def _batch_members(root, base) -> set[Path]:
+    batches = resolve_batch_tables(root, base)
+    return {p.resolve() for b in batches for p in b.source_paths}
+
+
+def _tracked_tables(root) -> set[str]:
+    """Tables that have saved history (snapshots). Only these would be
+    shown as 'deleted but restorable' on the dashboard if their source
+    file stopped being a single table — a fresh, never-committed .raw
+    file joining a batch loses nothing and must stay allowed."""
+    from payload.core.history import HistoryStore
+
+    return set(HistoryStore(root).all_tracked_tables())
 
 
 def _clean_sources(sources, root) -> list[str]:
     if not isinstance(sources, list) or not all(isinstance(s, str) and s for s in sources):
         raise InvalidRequestError("'sources' must be a non-empty list of strings")
     base = load_config(root)
+    members = _batch_members(root, base)
+    tracked = _tracked_tables(root)
     out = []
     for s in sources:
         s = s.strip().lstrip("/")
@@ -35,6 +54,16 @@ def _clean_sources(sources, root) -> list[str]:
         # members at build time anyway)
         if not is_table_candidate(root / s, root, base.defaults.output_dir, base.defaults.cache_dir):
             raise InvalidRequestError(f"'{s}' is not a table source file")
+        # A tracked single-file table can't silently become a batch
+        # member: discovery would drop it from the live tables and the
+        # dashboard would show it as 'deleted but restorable'. Files
+        # with no history (never built/committed) are fine to fold in.
+        if Path(s).stem in tracked and (root / s).resolve() not in members:
+            raise InvalidRequestError(
+                f"'{s}' already belongs to the single-file table '{Path(s).stem}' — "
+                "a file can't be both a single table and a batch member "
+                "(drop the table first, or pick another file)"
+            )
         out.append(s)
     return out
 
@@ -132,7 +161,12 @@ async def batch_candidates_route(request: Request) -> JSONResponse:
 
     def _run():
         base = load_config(root)
-        sources = discover_table_sources(root, base.defaults.output_dir, base.defaults.cache_dir)
+        members = _batch_members(root, base)
+        tracked = _tracked_tables(root)
+        sources = [
+            p for p in discover_table_sources(root, base.defaults.output_dir, base.defaults.cache_dir)
+            if p.resolve() in members or p.stem not in tracked
+        ]
         return {"files": [str(p.relative_to(root)) for p in sources]}
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))

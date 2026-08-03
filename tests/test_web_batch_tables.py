@@ -414,3 +414,52 @@ def test_batch_candidates_endpoint(tmp_path):
     assert "side.config.toml" not in files
     assert "build/out.bin" not in files
     assert not any("table-tool.toml" == f for f in files)
+
+
+def _tracked_table_project(tmp_path):
+    """Project where example_table has real history (built + committed)."""
+    root = _init_project(tmp_path)
+    client = _client(root)
+    r = client.post("/api/build", json={"source": str(root / "example_table.raw")})
+    assert r.status_code == 200, r.text
+    r = client.post("/api/commit", json={"message": "v1", "only": ["example_table"]})
+    assert r.status_code == 200, r.text
+    return root
+
+
+def test_batch_create_rejects_tracked_single_table_sources(tmp_path):
+    """A file that backs a tracked single-file table can't become a batch
+    member: discovery would silently orphan the table (still in history,
+    gone from disk) and the dashboard would offer to restore it."""
+    root = _tracked_table_project(tmp_path)
+    client = _client(root)
+
+    r = client.post("/api/batch", json={"name": "sensors", "sources": ["example_table.raw"]})
+    assert r.status_code == 400
+    assert "already belongs to the single-file table" in r.text
+
+    # the table is untouched and still live (not orphaned)
+    live = {t["name"] for t in client.get("/api/report").json()["tables"]}
+    assert "example_table" in live
+    tracked = client.get("/api/log").json()["tables"]
+    assert "example_table" in tracked  # still tracked, not orphaned
+
+
+def test_batch_accepts_fresh_files_even_if_tracked(tmp_path):
+    """A fresh .raw file (no history yet) can freely join a batch."""
+    root = _init_project(tmp_path)
+    client = _client(root)
+    (root / "extra.raw").write_text("# extra\n0x01,\n")
+
+    r = client.post("/api/batch", json={"name": "sensors", "sources": ["extra.raw"]})
+    assert r.status_code == 200
+
+
+def test_batch_candidates_hide_tracked_single_table_sources(tmp_path):
+    root = _tracked_table_project(tmp_path)
+    client = _client(root)
+    (root / "extra.raw").write_text("# extra\n0x01,\n")
+
+    files = client.get("/api/batch/candidates").json()["files"]
+    assert "extra.raw" in files                # a free file is offered
+    assert "example_table.raw" not in files    # a tracked table's source is hidden
