@@ -10,7 +10,6 @@ import { api } from "./js/api.js";
 import { viewDashboard } from "./js/views/dashboard.js";
 import { viewTable } from "./js/views/table.js";
 import { viewFiles } from "./js/views/files.js";
-import { viewBatch } from "./js/views/batch.js";
 import { viewLog } from "./js/views/log.js";
 import { openPalette } from "./js/palette.js";
 import { viewPlugins, viewPluginDetail, viewLocalPluginEditor } from "./js/views/plugins.js";
@@ -26,7 +25,6 @@ const ROUTES = [
   [/^\/$/, viewDashboard],
   [/^\/table\/([^/]+)$/, viewTable],
   [/^\/files(?:\/(.+))?$/, viewFiles],
-  [/^\/batch$/, viewBatch],
   [/^\/log$/, viewLog],
   [/^\/plugins$/, viewPlugins],
   [/^\/plugin\/([^/]+)$/, viewPluginDetail],
@@ -133,7 +131,7 @@ document.getElementById("settings-toggle").onclick = openSettingsModal;
  *   g o doctor, g x config, g e export & clean, g h docs
  * Ignored while typing in an input/textarea/select/contenteditable. */
 const NAV_SHORTCUTS = {
-  d: "#/", f: "#/files", l: "#/log", t: "#/batch",
+  d: "#/", f: "#/files", l: "#/log",
   p: "#/plugins", c: "#/clusters", o: "#/doctor", x: "#/config", e: "#/tools", h: "#/docs",
 };
 const _isTypingTarget = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);

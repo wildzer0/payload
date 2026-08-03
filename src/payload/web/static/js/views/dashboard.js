@@ -53,13 +53,13 @@ function _orphanedTablesHtml(names) {
 /* Default reader/writer <select> for a dashboard row: the 'auto'
  * option shows in parentheses what would actually be resolved today
  * (resolvedValue), the other options are the explicit override. */
-function _defaultSelectHtml(kind, tableName, options, currentValue, resolvedValue, disabled) {
+function _defaultSelectHtml(kind, tableName, options, currentValue, resolvedValue, disabled, isBatch) {
   const id = `dd-${kind}-${tableName}`;
   const autoLabel = disabled ? "pipeline" : (resolvedValue ? `auto (${resolvedValue})` : "auto");
   const opts = [`<option value="">${escapeHtml(autoLabel)}</option>`].concat(
     options.map((o) => `<option value="${escapeHtml(o)}"${o === currentValue ? " selected" : ""}>${escapeHtml(o)}</option>`)
   );
-  return `<select id="${id}" class="inline-select" data-default-kind="${kind}" data-default-table="${escapeHtml(tableName)}"${disabled ? " disabled" : ""}>${opts.join("")}</select>`;
+  return `<select id="${id}" class="inline-select" data-default-kind="${kind}" data-default-table="${escapeHtml(tableName)}"${isBatch ? ` data-batch="true"` : ""}${disabled ? " disabled" : ""}>${opts.join("")}</select>`;
 }
 
 function _tableRowHtml(t, stateByName) {
@@ -80,9 +80,13 @@ function _tableRowHtml(t, stateByName) {
   const snap = t.last_snapshot ? `snapshot #${t.last_snapshot.id} · ` : "";
   // NOTE: PLAIN template — interpolate built HTML strings directly,
   // never raw()/icon() (they return {__raw} markers -> "[object Object]")
+  const batchDetail = t.is_batch
+    ? `<tr class="dash-batch-detail" data-batch-detail="${escapeHtml(t.name)}" hidden><td colspan="11"><div class="dash-batch-manage" id="dash-batch-manage-${escapeHtml(t.name)}"></div></td></tr>`
+    : "";
   return `
     <tr>
-      <td>
+      <td class="dash-name-cell">
+        ${t.is_batch ? `<button class="icon-only dash-batch-toggle" data-batch="${escapeHtml(t.name)}" title="Manage members and overrides">${iconSpan("down")}</button>` : ""}
         <a class="link" href="#/table/${encodeURIComponent(t.name)}" title="${escapeHtml(snap)}modified ${escapeHtml(t.source_mtime)}">${escapeHtml(t.name)}</a>
         ${t.is_batch ? `<span class="batch-marker" title="batch table — ${t.source_count} source files">${iconSpan("layers")}</span>` : ""}
         ${tagsHtml}
@@ -91,9 +95,9 @@ function _tableRowHtml(t, stateByName) {
       <td>${_rawString(statusPill(state))}</td>
       <td>${_rawString(statusPill(t.golden_status || "missing"))}${t.golden_snapshot_id ? goldBadge() : ""}</td>
       <td class="dash-pipeline">
-        ${_defaultSelectHtml("reader", t.name, _dashReaderNames, t.reader_override, t.resolved_reader, t.pipeline_explicit)}
+        ${_defaultSelectHtml("reader", t.name, _dashReaderNames, t.reader_override, t.resolved_reader, t.pipeline_explicit, t.is_batch)}
         <span class="dash-arrow" aria-hidden="true">→</span>
-        ${_defaultSelectHtml("writer", t.name, _dashWriterNames, t.writer_override, t.resolved_writer, t.pipeline_explicit)}
+        ${_defaultSelectHtml("writer", t.name, _dashWriterNames, t.writer_override, t.resolved_writer, t.pipeline_explicit, t.is_batch)}
       </td>
       <td class="mono dash-size">${t.source_count > 1 ? `${t.source_count} files · ` : ""}${fmtBytes(t.source_size)}${t.output_size != null ? ` → ${fmtBytes(t.output_size)}` : ""}</td>
       <td class="dash-actions">
@@ -102,7 +106,8 @@ function _tableRowHtml(t, stateByName) {
         <a class="btn icon-only${t.output_size != null ? "" : " dash-hidden"}" href="/api/table/${encodeURIComponent(t.name)}/download" title="Download the last built output" download>${iconSpan("download")}</a>
         <button class="icon-only" data-quick-build="${t.name}" title="Quick build (default reader/writer)">${iconSpan("play")}</button>
       </td>
-    </tr>`;
+    </tr>
+    ${batchDetail}`;
 }
 
 
@@ -118,9 +123,10 @@ let _dashReaderNames = [];
 let _dashWriterNames = [];
 
 async function viewDashboard() {
-  const [report, status, plugins, tracked, health] = await Promise.all([
-    api("/api/report"), api("/api/status"), getPlugins(), api("/api/log"), api("/api/health"),
+  const [report, status, plugins, tracked, health, batchResp] = await Promise.all([
+    api("/api/report"), api("/api/status"), getPlugins(), api("/api/log"), api("/api/health"), api("/api/batch"),
   ]);
+  const batchByName = new Map((batchResp.batches || []).map((b) => [b.name, b]));
   const stateByName = Object.fromEntries(status.tables.map((t) => [t.name, t.state]));
   _dashReaderNames = plugins.plugins.filter((x) => x.kind === "reader").map((x) => x.name);
   _dashWriterNames = plugins.plugins.filter((x) => x.kind === "writer").map((x) => x.name);
@@ -149,6 +155,20 @@ async function viewDashboard() {
       };
     });
 
+    // expand/collapse the batch management rows (rows are rendered by
+    // applyView BEFORE this runs, so the buttons exist)
+    document.querySelectorAll(".dash-batch-toggle").forEach((btn) => {
+      btn.onclick = async () => {
+        const name = btn.dataset.batch;
+        const detail = document.querySelector(`[data-batch-detail="${escapeHtml(name)}"]`);
+        if (!detail) return;
+        const open = detail.hidden;
+        detail.hidden = !open;
+        btn.innerHTML = iconSpan(open ? "up" : "down");
+        if (open) await renderBatchManage(name);
+      };
+    });
+
     // default reader/writer selects (Pipeline column): persists to the
     // sidecar, same semantics as before
     document.querySelectorAll("[data-default-kind]").forEach((sel) => {
@@ -157,6 +177,21 @@ async function viewDashboard() {
         const table = sel.dataset.defaultTable;
         sel.disabled = true;
         try {
+          if (sel.dataset.batch === "true") {
+            // batch overrides live inline in [[batch_table]], not in a
+            // sidecar (which batches don't have)
+            const b = batchByName.get(table);
+            const body = {
+              sources: b ? b.sources : [],
+              reader: (kind === "reader" ? sel.value : (b && b.reader) || null) || null,
+              writer: (kind === "writer" ? sel.value : (b && b.writer) || null) || null,
+              byte_order: (b && b.byte_order) || null,
+            };
+            await api("/api/batch/" + encodeURIComponent(table), { method: "PUT", body });
+            toast(`Default ${kind} for batch '${table}' updated`, "ok");
+            viewDashboard();
+            return;
+          }
           const current = await api("/api/sidecar/" + encodeURIComponent(table));
           const defaults = { ...(current.defaults || {}) };
           if (sel.value) defaults[kind] = sel.value; else delete defaults[kind];
@@ -220,6 +255,89 @@ async function viewDashboard() {
       ? rows.map((t) => _tableRowHtml(t, stateByName)).join("")
       : '<tr><td colspan="7" class="dash-empty">No table matches the current filter.</td></tr>';
     wireCardHandlers();
+  };
+
+  /* Inline batch management (the old batch page): members, overrides
+   * and delete live in an expandable row under the batch's dashboard
+   * row — the batch page is gone. */
+  const renderBatchManage = async (name) => {
+    const el = document.getElementById("dash-batch-manage-" + name);
+    if (!el) return;
+    const b = batchByName.get(name);
+    if (!b) return;
+    const cands = (await api("/api/batch/candidates")).files || [];
+    const working = [...b.sources];
+    const freeFiles = cands.filter((f) => !working.includes(f));
+    const readerOpts = [`<option value="">auto</option>`].concat(
+      _dashReaderNames.map((r) => `<option value="${escapeHtml(r)}"${r === b.reader ? " selected" : ""}>${escapeHtml(r)}</option>`)
+    ).join("");
+    const writerOpts = [`<option value="">auto</option>`].concat(
+      _dashWriterNames.map((w) => `<option value="${escapeHtml(w)}"${w === b.writer ? " selected" : ""}>${escapeHtml(w)}</option>`)
+    ).join("");
+    el.innerHTML = `
+      <div class="dash-batch-head">
+        <strong>Members (concatenation order)</strong>
+        <span class="subtitle" id="dash-batch-count-${escapeHtml(name)}">${working.length} file${working.length === 1 ? "" : "s"}</span>
+        <span class="flex-1"></span>
+        <a class="btn" href="#/table/${encodeURIComponent(name)}">${iconSpan("box")}Open table</a>
+        <button class="danger" id="dash-batch-del">${iconSpan("trash")}Delete</button>
+      </div>
+      <div class="dash-batch-members" id="dash-batch-members"></div>
+      <div class="dash-batch-toolbar">
+        <select class="inline-select" id="dash-batch-addfile"><option value="">— add a file —</option>${freeFiles.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("")}</select>
+        <button id="dash-batch-add">${iconSpan("plus")}Add</button>
+        <span class="flex-1"></span>
+        <label class="dash-ov-label">Reader</label>
+        <select class="inline-select" id="dash-batch-reader">${readerOpts}</select>
+        <label class="dash-ov-label">Writer</label>
+        <select class="inline-select" id="dash-batch-writer">${writerOpts}</select>
+        <label class="dash-ov-label">Byte order</label>
+        <select class="inline-select" id="dash-batch-byteorder"><option value="little"${b.byte_order !== "big" ? " selected" : ""}>little</option><option value="big"${b.byte_order === "big" ? " selected" : ""}>big</option></select>
+        <button class="primary" id="dash-batch-save">${iconSpan("save")}Save</button>
+      </div>
+    `;
+    const membersEl = document.getElementById("dash-batch-members");
+    const countEl = document.getElementById("dash-batch-count-" + name);
+    const renderMembers = () => {
+      membersEl.innerHTML = working.length
+        ? working.map((m, i) => `
+            <span class="pill pill-dim dash-batch-member"><span class="mono">${i + 1}.</span> ${escapeHtml(m)}
+              <button class="icon-only dash-batch-rm" data-member="${escapeHtml(m)}" title="Remove member">×</button>
+            </span>`).join("")
+        : '<span class="subtitle">No members — a batch needs at least one file.</span>';
+      if (countEl) countEl.textContent = `${working.length} file${working.length === 1 ? "" : "s"}`;
+      membersEl.querySelectorAll(".dash-batch-rm").forEach((rm) => {
+        rm.onclick = () => { working.splice(working.indexOf(rm.dataset.member), 1); renderMembers(); };
+      });
+    };
+    renderMembers();
+    document.getElementById("dash-batch-add").onclick = () => {
+      const sel = document.getElementById("dash-batch-addfile");
+      if (sel.value && !working.includes(sel.value)) { working.push(sel.value); renderMembers(); }
+    };
+    document.getElementById("dash-batch-save").onclick = async () => {
+      if (!working.length) { toast("A batch table needs at least one member", "warn"); return; }
+      const btn = document.getElementById("dash-batch-save");
+      btn.disabled = true;
+      try {
+        await api("/api/batch/" + encodeURIComponent(name), {
+          method: "PUT",
+          body: {
+            sources: working,
+            reader: document.getElementById("dash-batch-reader").value || null,
+            writer: document.getElementById("dash-batch-writer").value || null,
+            byte_order: document.getElementById("dash-batch-byteorder").value || null,
+          },
+        });
+        toast(`Batch '${name}' saved`, "ok");
+        viewDashboard();
+      } catch (e) { toastError(e); btn.disabled = false; }
+    };
+    document.getElementById("dash-batch-del").onclick = async () => {
+      const ok = await confirmDialog(`Delete the batch table '${name}'? Its member files stay on disk.`, { danger: true, confirmLabel: "Delete" });
+      if (!ok) return;
+      try { await api("/api/batch/" + encodeURIComponent(name), { method: "DELETE" }); toast(`Batch '${name}' deleted`, "ok"); viewDashboard(); } catch (e) { toastError(e); }
+    };
   };
 
   const wireSort = () => {
