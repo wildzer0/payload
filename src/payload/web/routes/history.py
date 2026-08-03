@@ -47,7 +47,7 @@ async def status(request: Request) -> JSONResponse:
             last = history.last_snapshot(ref.name)
             if last is None:
                 state = "never_saved"
-            elif history.is_dirty(ref.name, ref.source_paths, output_paths):
+            elif history.is_dirty(ref.name, ref.source_paths, output_paths, byte_order=table_config.defaults.byte_order):
                 state = "dirty"
             else:
                 state = "clean"
@@ -88,12 +88,13 @@ async def commit(request: Request) -> JSONResponse:
 
         dirty = []
         for ref in target_tables:
+            table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
             output_paths = list(output_dir.glob(f"{ref.name}.*"))
-            if history.is_dirty(ref.name, ref.source_paths, output_paths):
-                table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
+            if history.is_dirty(ref.name, ref.source_paths, output_paths, byte_order=table_config.defaults.byte_order):
                 build_info = describe_table_build(
                     ref.source_paths, registry, table_config, output_paths, output_dir, table_name=ref.name,
                 )
+                build_info["byte_order"] = table_config.defaults.byte_order
                 dirty.append((ref, output_paths, build_info))
         if not dirty:
             raise NothingToCommitError()

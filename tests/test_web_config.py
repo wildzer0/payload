@@ -311,3 +311,25 @@ def test_pipeline_layout_bad_coordinate_rejected(tmp_path):
     stages = [{"type": "reader", "name": "raw_text", "x": "not-a-number"}]
     r = client.put("/api/pipeline/example_table", json={"stages": stages})
     assert r.status_code == 400
+
+
+def test_byte_order_change_is_committable(tmp_path):
+    """A byte_order change is a real (committable) change even when the
+    output bytes come out identical (e.g. a reader with no multi-byte
+    fields): the snapshot records the effective byte_order."""
+    root = _init_project(tmp_path)
+    client = _client(root)
+    client.post("/api/build", json={"source": str(root / "example_table.raw")})
+    client.post("/api/commit", json={"message": "v1", "only": ["example_table"]})
+    assert client.get("/api/status").json()["tables"][0]["state"] == "clean"
+
+    # change byte_order only — the output is byte-identical (raw_text
+    # has no multi-byte fields) but the state must become dirty
+    client.put("/api/sidecar/example_table", json={"defaults": {"byte_order": "big"}})
+    assert client.get("/api/status").json()["tables"][0]["state"] == "dirty"
+
+    r = client.post("/api/commit", json={"message": "v2", "only": ["example_table"]})
+    assert r.status_code == 200
+    assert r.json()["committed"][0]["snapshot_id"] == 2
+    # and it's clean again (byte_order is now part of the committed state)
+    assert client.get("/api/status").json()["tables"][0]["state"] == "clean"

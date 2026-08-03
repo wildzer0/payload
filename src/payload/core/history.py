@@ -69,6 +69,10 @@ class SnapshotMeta:
     source_dirs: dict = field(default_factory=dict)
     output_blobs: dict = field(default_factory=dict)  # {filename: blob_hash}
     reader: str | None = None  # reader resolved at commit time, informational only
+    # effective byte_order at commit time — compared in is_dirty: a
+    # byte_order change must be committable even when it doesn't alter
+    # the output bytes (e.g. a reader with no multi-byte fields)
+    byte_order: str | None = None
     writers: list = field(default_factory=list)  # writers inferred from the extension of the committed outputs
     pipeline_explicit: bool = False  # True if an explicit pipeline was in config at commit time (not just reader+writer)
     pipeline_description: str | None = None  # full stages, only if pipeline_explicit
@@ -206,7 +210,7 @@ class HistoryStore:
             return None
         return self.get_snapshot(table_name, head_id)
 
-    def is_dirty(self, table_name: str, source_paths: list[Path], output_paths: list[Path] | None = None) -> bool:
+    def is_dirty(self, table_name: str, source_paths: list[Path], output_paths: list[Path] | None = None, byte_order: str | None = None) -> bool:
         """True if one of the current sources differs from the last
         snapshot, if no snapshot exists yet for this table, or if one
         of the current outputs (output_paths, if given) differs from
@@ -229,6 +233,10 @@ class HistoryStore:
             current_outputs = {p.name: _hash_bytes(p.read_bytes()) for p in output_paths if p.is_file()}
             if current_outputs != last.output_blobs:
                 return True
+        # the effective byte_order is part of the committed state: a
+        # change is dirty even if the bytes came out identical
+        if byte_order is not None and byte_order != last.byte_order:
+            return True
         return False
 
     def commit(
@@ -242,6 +250,7 @@ class HistoryStore:
         pipeline_explicit: bool = False,
         pipeline_description: str | None = None,
         missing_outputs: list[str] | None = None,
+        byte_order: str | None = None,
     ) -> SnapshotMeta:
         snapshots = self._load_manifest(table_name)
         next_id = (snapshots[-1].id + 1) if snapshots else 1
@@ -265,6 +274,7 @@ class HistoryStore:
             pipeline_explicit=pipeline_explicit,
             pipeline_description=pipeline_description,
             missing_outputs=list(missing_outputs) if missing_outputs else [],
+            byte_order=byte_order,
         )
         snapshots.append(snapshot)
         self._save_manifest(table_name, snapshots)

@@ -72,7 +72,7 @@ async def delete_table_route(request: Request) -> JSONResponse:
         else:
             if not confirm:
                 out_paths = list(output_dir.glob(f"{ref.name}.*")) if output_dir.exists() else []
-                dirty = history.is_dirty(ref.name, ref.source_paths, out_paths)
+                dirty = history.is_dirty(ref.name, ref.source_paths, out_paths, byte_order=table_config.defaults.byte_order)
                 return {
                     "status": "confirmation_required",
                     "table_name": table_name,

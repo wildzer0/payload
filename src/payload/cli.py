@@ -151,6 +151,13 @@ def main(
     setup_logging(verbose)
 
 
+def _ref_byte_order(ref, base_config) -> str | None:
+    """The effective defaults.byte_order for a ref (single or batch)."""
+    clusters = resolve_clusters(Path.cwd(), base_config)
+    table_metas = resolve_table_meta(Path.cwd(), base_config, clusters)
+    return resolve_table_config(Path.cwd(), base_config, ref, clusters, table_metas).defaults.byte_order
+
+
 def run_command(fn, verbosity: int):
     """Single catch point: decides exit code and print format for
     every PayloadError. Internal bugs (unexpected exceptions) stay
@@ -569,7 +576,7 @@ def status(ctx: typer.Context, root: Path = typer.Argument(Path("."))):
             if last is None:
                 table.add_row(display, "[yellow]never saved[/]")
                 any_change = True
-            elif history.is_dirty(ref.name, ref.source_paths, output_paths):
+            elif history.is_dirty(ref.name, ref.source_paths, output_paths, byte_order=_ref_byte_order(ref, config)):
                 table.add_row(display, "[red]changed[/]")
                 any_change = True
             else:
@@ -614,12 +621,13 @@ def commit(
         table_metas = resolve_table_meta(root, config, clusters)
         dirty = []
         for ref in tables:
+            table_config = resolve_table_config(root, config, ref, clusters, table_metas)
             output_paths = list(output_dir.glob(f"{ref.name}.*"))
-            if history.is_dirty(ref.name, ref.source_paths, output_paths):
-                table_config = resolve_table_config(root, config, ref, clusters, table_metas)
+            if history.is_dirty(ref.name, ref.source_paths, output_paths, byte_order=table_config.defaults.byte_order):
                 build_info = describe_table_build(
                     ref.source_paths, registry, table_config, output_paths, output_dir, table_name=ref.name,
                 )
+                build_info["byte_order"] = table_config.defaults.byte_order
                 dirty.append((ref, output_paths, build_info))
         if not dirty:
             raise NothingToCommitError()
@@ -887,7 +895,7 @@ def rm_cmd(
                 console.print(f"The following will be deleted: source(s) of {kind} '{table_name}' and its output in {output_dir}.")
                 console.print("[dim]History stays intact and browsable with 'pld log'.[/]")
                 out_paths = list(output_dir.glob(f"{ref.name}.*")) if output_dir.exists() else []
-                if history.is_dirty(ref.name, ref.source_paths, out_paths):
+                if history.is_dirty(ref.name, ref.source_paths, out_paths, byte_order=_ref_byte_order(ref, config)):
                     console.print("[yellow]![/] this table has uncommitted changes: they will be lost forever.")
                 if ref.is_batch:
                     console.print(f"[dim]— the \\[\\[batch_table]] '{table_name}' will also be removed from table-tool.toml[/]")
