@@ -7,9 +7,8 @@
 
 import {
   escapeHtml, raw, render, icon, iconSpan, toast, toastError,
-  confirmDialog, detailsCard, pageHeader, statusPill, metaChip,
-  formatDescription, val, debounce, registerDirtyGuard, clearDirtyGuards,
-  loadCodeMirror,
+  confirmDialog, openDialog, pageHeader, statusPill, emptyCard,
+  val, debounce, registerDirtyGuard, clearDirtyGuards, loadCodeMirror,
 } from "../ui.js";
 import { api, apiUpload, invalidatePluginsCache } from "../api.js";
 
@@ -83,231 +82,138 @@ async function viewPlugins() {
     </div>
   `);
 
+  const openInstallModal = () => {
+    const dialog = openDialog({
+      title: "Install plugin",
+      body: render`
+        <p class="subtitle m-0">Payload ships no reader/writer of its own — install one from a local .py file, a raw .py URL, or drag one in. See the <a class="link" href="#/docs/plugins">plugin guide</a> for ready-to-use ones in examples/plugins/.</p>
+        <label class="import-drop" id="plugin-install-drop" for="plugin-install-file-input">
+          ${icon("download")}
+          <span>Drag a .py plugin file here, or click to choose</span>
+        </label>
+        <input type="file" id="plugin-install-file-input" accept=".py" multiple hidden>
+        <div class="field-row mt-14">
+          <div class="field"><label>Local path or http(s):// URL</label><input type="text" id="pi-source" placeholder="examples/plugins/raw_text.py"></div>
+          <div class="field"><label>Install as (optional)</label><input type="text" id="pi-as-name" placeholder="my_reader.py"></div>
+        </div>
+      `,
+      actions: [{ label: "Install", className: "primary", autofocus: true, value: true }],
+    });
+
+    const pluginDropZone = document.getElementById("plugin-install-drop");
+    const pluginInstallFileInput = document.getElementById("plugin-install-file-input");
+    ["dragenter", "dragover"].forEach((evt) => pluginDropZone.addEventListener(evt, (ev) => {
+      ev.preventDefault();
+      pluginDropZone.classList.add("import-drop-active");
+    }));
+    ["dragleave", "drop"].forEach((evt) => pluginDropZone.addEventListener(evt, (ev) => {
+      ev.preventDefault();
+      pluginDropZone.classList.remove("import-drop-active");
+    }));
+    pluginDropZone.addEventListener("drop", (ev) => _handlePluginInstallFiles(ev.dataTransfer.files));
+    pluginInstallFileInput.addEventListener("change", () => {
+      _handlePluginInstallFiles(pluginInstallFileInput.files);
+      pluginInstallFileInput.value = "";
+    });
+
+    dialog.then(async (confirmed) => {
+      if (confirmed !== true) return;
+      const source = val("pi-source");
+      if (!source) { toast("Enter a local path or URL first", "warn"); return; }
+      const asName = val("pi-as-name");
+      const formData = new FormData();
+      formData.append("source", source);
+      if (asName) formData.append("as_name", asName);
+      try {
+        let r;
+        try {
+          r = await apiUpload("/api/plugin/install", formData);
+        } catch (e) {
+          if (e.data && e.data.error === "PluginAlreadyExistsError") {
+            const ok = await confirmDialog(`${e.message}. Overwrite it?`, { danger: true, confirmLabel: "Overwrite" });
+            if (!ok) return;
+            formData.append("overwrite", "true");
+            r = await apiUpload("/api/plugin/install", formData);
+          } else {
+            throw e;
+          }
+        }
+        invalidatePluginsCache();
+        if (r.sanity_ok) {
+          toast(`'${r.filename}' installed (${r.kinds.join(", ")})`, "ok");
+        } else {
+          toast(`'${r.filename}' installed, but doesn't look like a valid plugin: ${r.sanity_issues.join("; ")}`, "warn");
+        }
+        viewPlugins();
+      } catch (e) {
+        toastError(e);
+      }
+    });
+  };
+
+  const openNewPluginModal = () => {
+    const dialog = openDialog({
+      title: "New plugin",
+      body: render`
+        <div class="field-row">
+          <div class="field"><label>Name</label><input type="text" id="pn-name" placeholder="my_format"></div>
+          <div class="field"><label>Kind</label>
+            <select id="pn-kind"><option value="reader">reader</option><option value="writer">writer</option><option value="doctor-check">doctor-check</option></select>
+          </div>
+        </div>
+      `,
+      actions: [{ label: "Create and open in editor", className: "primary", autofocus: true, value: true }],
+    });
+    dialog.then(async (confirmed) => {
+      if (confirmed !== true) return;
+      try {
+        const r2 = await api("/api/plugin/new-local", { body: { name: val("pn-name"), kind: document.getElementById("pn-kind").value } });
+        const createdFilename = r2.created.split(/[\\/]/).pop();
+        invalidatePluginsCache();
+        toast(`Created ${r2.created}`, "ok");
+        location.hash = "#/local-plugin/" + encodeURIComponent(createdFilename);
+      } catch (e) {
+        toastError(e);
+      }
+    });
+  };
+
   document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Plugins"))}
+    ${raw(pageHeader("Plugins",
+      "Readers, writers and doctor-checks — installed ones and this project's own loose plugins in plugins/.",
+      render`<button class="btn" id="btn-install-plugin">${icon("download")}Install</button><button class="btn primary" id="btn-new-plugin">${icon("plus")}New plugin</button>`))}
     ${raw(_pluginToolbarHtml(r.plugins))}
     <div id="plugin-grid-wrap">${raw(_pluginGridHtml(r.plugins, kindFilter, showInstalled))}</div>
-    ${raw(detailsCard(
-      "Plugins (plugins/)",
-      `<div class="local-plugin-list">${localRows.join("") || '<p class="empty-state">No plugin in this project.</p>'}</div>`,
-      { open: local.files.length > 0 },
-    ))}
     <div class="card">
-      <h2>Install plugin</h2>
-      <p class="subtitle">Payload ships no reader/writer of its own — install one from a local .py file, a raw .py URL, or drag one in. See the <a href="#/docs/plugins">plugin guide</a> for ready-to-use ones in examples/plugins/.</p>
-      <label class="import-drop" id="plugin-install-drop" for="plugin-install-file-input">
-        ${icon("download")}
-        <span>Drag a .py plugin file here, or click to choose</span>
-      </label>
-      <input type="file" id="plugin-install-file-input" accept=".py" multiple hidden>
-      <div class="field-row mt-14">
-        <div class="field"><label>Local path or http(s):// URL</label><input type="text" id="pi-source" placeholder="examples/plugins/raw_text.py"></div>
-        <div class="field"><label>Install as (optional)</label><input type="text" id="pi-as-name" placeholder="my_reader.py"></div>
-      </div>
-      <button class="primary" id="pi-install">${icon("download")}Install</button>
-    </div>
-    <div class="card">
-      <h2>New plugin</h2>
-      <div class="field-row">
-        <div class="field"><label>Name</label><input type="text" id="pn-name" placeholder="my_format"></div>
-        <div class="field"><label>Kind</label>
-          <select id="pn-kind"><option value="reader">reader</option><option value="writer">writer</option><option value="doctor-check">doctor-check</option></select>
-        </div>
-      </div>
-      <button class="primary" id="pn-create">${icon("plus")}Create and open in editor</button>
+      <h2 class="settings-section-title">Project plugins (plugins/)</h2>
+      <p class="subtitle">Loose .py files in this project's plugins/ folder — open them in the built-in editor.</p>
+      <div class="local-plugin-list">${raw(localRows.join("") || '<p class="empty-state">No plugin in this project.</p>')}</div>
     </div>
   `;
+  document.getElementById("btn-install-plugin").onclick = openInstallModal;
+  document.getElementById("btn-new-plugin").onclick = openNewPluginModal;
 
-  const pluginDropZone = document.getElementById("plugin-install-drop");
-  const pluginInstallFileInput = document.getElementById("plugin-install-file-input");
-  ["dragenter", "dragover"].forEach((evt) => pluginDropZone.addEventListener(evt, (ev) => {
-    ev.preventDefault();
-    pluginDropZone.classList.add("import-drop-active");
-  }));
-  ["dragleave", "drop"].forEach((evt) => pluginDropZone.addEventListener(evt, (ev) => {
-    ev.preventDefault();
-    pluginDropZone.classList.remove("import-drop-active");
-  }));
-  pluginDropZone.addEventListener("drop", (ev) => _handlePluginInstallFiles(ev.dataTransfer.files));
-  pluginInstallFileInput.addEventListener("change", () => {
-    _handlePluginInstallFiles(pluginInstallFileInput.files);
-    pluginInstallFileInput.value = "";
+  // kind filter chips + "show installed" toggle (re-render the grid)
+  const gridWrap = document.getElementById("plugin-grid-wrap");
+  const applyGrid = () => {
+    gridWrap.innerHTML = _pluginGridHtml(r.plugins, kindFilter, showInstalled);
+    document.querySelectorAll("[data-kind-filter]").forEach((chip) => {
+      chip.classList.toggle("active", chip.dataset.kindFilter === kindFilter);
+    });
+  };
+  // delegation on the toolbar container: the chips don't need to exist
+  // at wire time and a click on the pill/count inside a chip still hits
+  document.getElementById("plugin-kind-filters").addEventListener("click", (ev) => {
+    const chip = ev.target.closest("[data-kind-filter]");
+    if (!chip) return;
+    kindFilter = chip.dataset.kindFilter;
+    applyGrid();
   });
-
-  document.getElementById("pi-install").onclick = async () => {
-    const source = val("pi-source");
-    if (!source) { toast("Enter a local path or URL first", "warn"); return; }
-    const asName = val("pi-as-name");
-    const formData = new FormData();
-    formData.append("source", source);
-    if (asName) formData.append("as_name", asName);
-    try {
-      let r;
-      try {
-        r = await apiUpload("/api/plugin/install", formData);
-      } catch (e) {
-        if (e.data && e.data.error === "PluginAlreadyExistsError") {
-          const ok = await confirmDialog(`${e.message}. Overwrite it?`, { danger: true, confirmLabel: "Overwrite" });
-          if (!ok) return;
-          formData.append("overwrite", "true");
-          r = await apiUpload("/api/plugin/install", formData);
-        } else {
-          throw e;
-        }
-      }
-      invalidatePluginsCache();
-      if (r.sanity_ok) {
-        toast(`'${r.filename}' installed (${r.kinds.join(", ")})`, "ok");
-      } else {
-        toast(`'${r.filename}' installed, but doesn't look like a valid plugin: ${r.sanity_issues.join("; ")}`, "warn");
-      }
-      viewPlugins();
-    } catch (e) {
-      toastError(e);
-    }
-  };
-
-  document.getElementById("pn-create").onclick = async () => {
-    try {
-      const r2 = await api("/api/plugin/new-local", { body: { name: val("pn-name"), kind: document.getElementById("pn-kind").value } });
-      const createdFilename = r2.created.split(/[\\/]/).pop();
-      invalidatePluginsCache();
-      toast(`Created ${r2.created}`, "ok");
-      location.hash = "#/local-plugin/" + encodeURIComponent(createdFilename);
-    } catch (e) {
-      toastError(e);
-    }
-  };
-
-  document.querySelectorAll("[data-del-local-plugin]").forEach((btn) => {
-    btn.onclick = () => deleteLocalPlugin(btn.dataset.delLocalPlugin, viewPlugins);
+  document.getElementById("plugin-show-installed").addEventListener("change", (ev) => {
+    showInstalled = ev.target.checked;
+    localStorage.setItem("showInstalledPlugins", String(showInstalled));
+    applyGrid();
   });
-
-  const rerenderPluginGrid = () => {
-    document.getElementById("plugin-grid-wrap").innerHTML = _pluginGridHtml(r.plugins, kindFilter, showInstalled);
-  };
-
-  document.querySelectorAll("#plugin-kind-filters [data-kind-filter]").forEach((btn) => {
-    btn.onclick = () => {
-      kindFilter = btn.dataset.kindFilter;
-      document.querySelectorAll("#plugin-kind-filters [data-kind-filter]").forEach((b) => b.classList.toggle("active", b === btn));
-      rerenderPluginGrid();
-    };
-  });
-
-  const showInstalledCheckbox = document.getElementById("plugin-show-installed");
-  if (showInstalledCheckbox) {
-    showInstalledCheckbox.checked = showInstalled;
-    showInstalledCheckbox.onchange = (e) => {
-      showInstalled = e.target.checked;
-      localStorage.setItem("showInstalledPlugins", showInstalled);
-      rerenderPluginGrid();
-    };
-  }
-}
-
-
-/* Installs one already-selected/dropped .py file — on a name
- * collision, asks to overwrite instead of silently refusing (same
- * pattern as _handleImportFiles for tables), then retries once with
- * 'overwrite'. Throws if the user declines the overwrite. */
-async function _installOnePluginFile(file) {
-  const formData = new FormData();
-  formData.append("file", file);
-  try {
-    return await apiUpload("/api/plugin/install", formData);
-  } catch (e) {
-    if (e.data && e.data.error === "PluginAlreadyExistsError") {
-      const ok = await confirmDialog(`${e.message}. Overwrite it?`, { danger: true, confirmLabel: "Overwrite" });
-      if (!ok) throw e;
-      formData.append("overwrite", "true");
-      return await apiUpload("/api/plugin/install", formData);
-    }
-    throw e;
-  }
-}
-
-/* Drag&drop / file-picker install: N .py files dropped together are
- * installed one by one (a collision on one doesn't stop the others —
- * same 'partial but explicit' spirit as bulk table import, just
- * without a summary dialog since a failure is already reported as it
- * happens via toast, and plugin drops are a handful of files, not
- * hundreds). */
-async function _handlePluginInstallFiles(fileList) {
-  const files = Array.from(fileList);
-  if (!files.length) return;
-  const pyFiles = files.filter((f) => f.name.endsWith(".py"));
-  const skipped = files.filter((f) => !f.name.endsWith(".py"));
-  if (skipped.length) {
-    toast(`Only .py files can be installed as a plugin (ignored: ${skipped.map((f) => f.name).join(", ")})`, "warn");
-  }
-
-  let installed = 0;
-  for (const f of pyFiles) {
-    try {
-      const r = await _installOnePluginFile(f);
-      installed++;
-      if (!r.sanity_ok) {
-        toast(`'${r.filename}' installed, but doesn't look like a valid plugin: ${r.sanity_issues.join("; ")}`, "warn");
-      }
-    } catch (e) {
-      toastError(e);
-    }
-  }
-  if (installed) {
-    invalidatePluginsCache();
-    toast(`${installed} plugin${installed === 1 ? "" : "s"} installed`, "ok");
-    viewPlugins();
-  }
-}
-
-async function deleteLocalPlugin(filename, onDeleted) {
-  const ok = await confirmDialog(`Permanently delete '${filename}'? This action can't be undone.`, { danger: true, confirmLabel: "Delete" });
-  if (!ok) return;
-  try {
-    await api("/api/local-plugins/" + encodeURIComponent(filename), { method: "DELETE" });
-    invalidatePluginsCache();
-    toast(`'${filename}' deleted`, "ok");
-    onDeleted();
-  } catch (e) {
-    toastError(e);
-  }
-}
-
-async function viewPluginDetail(name) {
-  const p = await api("/api/plugin/" + encodeURIComponent(name));
-
-  const chips = [
-    p.extensions ? metaChip("Extensions", p.extensions.join(", ")) : "",
-    p.extension ? metaChip("Output extension", p.extension) : "",
-    p.default_writer ? metaChip("Suggested writer", p.default_writer) : "",
-    p.compatible_readers ? metaChip("Only compatible with", p.compatible_readers.join(", ")) : "",
-  ].filter(Boolean).join("");
-
-  document.getElementById("content").innerHTML = render`
-    <div class="breadcrumb"><a class="link" href="#/plugins">← Plugins</a></div>
-    ${raw(pageHeader(p.name, `${p.kind} · API v${p.api_version}${p.installed ? " · installed (pip)" : ""}`))}
-    <div class="card">
-      ${raw(chips ? `<div class="plugin-meta-row">${chips}</div>` : "")}
-      <div class="plugin-description">${raw(formatDescription(p.docstring))}</div>
-    </div>
-    <div class="card">
-      <h2>Validate conformance</h2>
-      <div class="field"><label>Sample file (reader only)</label><input type="text" id="pv-sample" placeholder="example.raw"></div>
-      <button id="pv-run">Validate</button>
-      <div id="pv-result"></div>
-    </div>
-  `;
-  document.getElementById("pv-run").onclick = async () => {
-    const r = await api("/api/plugin/validate", { body: { name, sample: val("pv-sample") || undefined } });
-    const el = document.getElementById("pv-result");
-    if (r.conforms) {
-      el.innerHTML = render`<div class="result-line">${statusPill("ok")}<span>conforms to the contract${r.skipped_behavior_check ? " (structure only, no sample provided)" : ""}</span></div>`;
-    } else {
-      const items = r.issues.map((i) => render`<li><strong>${i.check}</strong>: ${i.detail}</li>`);
-      el.innerHTML = render`<div class="result-line">${statusPill("fail")}<span>doesn't conform</span><ul>${items}</ul></div>`;
-    }
-  };
 }
 
 /* ---------- local plugin editor (CodeMirror 5, vendored) ---------- */
@@ -434,6 +340,96 @@ async function viewLocalPluginEditor(rawFilename) {
   };
 
   document.getElementById("lpe-delete").onclick = () => deleteLocalPlugin(filename, () => { clearDirtyGuards(); location.hash = "#/plugins"; });
+}
+
+/* Install .py files picked in the install modal (drop or file input). */
+async function _handlePluginInstallFiles(fileList) {
+  const files = Array.from(fileList);
+  if (!files.length) return;
+  const pyFiles = files.filter((f) => f.name.endsWith(".py"));
+  const skipped = files.filter((f) => !f.name.endsWith(".py"));
+  if (skipped.length) {
+    toast(`Only .py files can be installed as a plugin (ignored: ${skipped.map((f) => f.name).join(", ")})`, "warn");
+  }
+  for (const f of pyFiles) {
+    const formData = new FormData();
+    formData.append("file", f);
+    try {
+      let r;
+      try {
+        r = await apiUpload("/api/plugin/install", formData);
+      } catch (e) {
+        if (e.data && e.data.error === "PluginAlreadyExistsError") {
+          const ok = await confirmDialog(`${e.message}. Overwrite it?`, { danger: true, confirmLabel: "Overwrite" });
+          if (!ok) continue;
+          formData.append("overwrite", "true");
+          r = await apiUpload("/api/plugin/install", formData);
+        } else {
+          throw e;
+        }
+      }
+      invalidatePluginsCache();
+      if (r.sanity_ok) toast(`'${r.filename}' installed (${r.kinds.join(", ")})`, "ok");
+      else toast(`'${r.filename}' installed, but doesn't look like a valid plugin: ${r.sanity_issues.join("; ")}`, "warn");
+    } catch (e) {
+      toastError(e);
+    }
+  }
+  viewPlugins();
+}
+
+function deleteLocalPlugin(filename, done) {
+  confirmDialog(`Delete the local plugin '${filename}'?`, { danger: true, confirmLabel: "Delete" }).then((ok) => {
+    if (!ok) return;
+    api(`/api/local-plugins/${encodeURIComponent(filename)}`, { method: "DELETE" })
+      .then(() => { invalidatePluginsCache(); toast(`'${filename}' deleted`, "ok"); done(); })
+      .catch(toastError);
+  });
+}
+
+/* Plugin detail page: metadata + conformance validation. */
+async function viewPluginDetail(name) {
+  const r = await api("/api/plugin/" + encodeURIComponent(name));
+  const kindMeta = PLUGIN_KIND_META[r.kind] || { title: r.kind, icon: "box" };
+  const chip = (label, value) => (value ? `<span class="pill pill-dim">${escapeHtml(label)}: ${escapeHtml(value)}</span>` : "");
+  const content = document.getElementById("content");
+  content.innerHTML = render`
+    ${raw(pageHeader(r.name, `${kindMeta.title} plugin.`, render`<a class="btn" href="#/plugins">${icon("edit")}← All plugins</a>`))}
+    <div class="card">
+      <div class="fs-detail-meta">
+        <span class="meta-chip"><strong>Kind</strong><span>${escapeHtml(kindMeta.title)}</span></span>
+        <span class="meta-chip"><strong>API version</strong><span class="mono">v${escapeHtml(r.api_version)}</span></span>
+        ${raw(chip("Default writer", r.default_writer))}
+        ${raw(chip("Compatible readers", r.compatible_readers ? r.compatible_readers.join(", ") : null))}
+        ${raw(r.installed ? '<span class="pill pill-current">installed</span>' : '<span class="pill pill-dim">project plugin</span>')}
+      </div>
+      ${raw(r.extensions && r.extensions.length ? `<div class="fs-detail-meta mt-8">${r.extensions.map((e) => `<span class="pill pill-dim mono">${escapeHtml(e)}</span>`).join("")}</div>` : "")}
+      ${raw(r.docstring ? `<div class="plugin-doc mt-14">${escapeHtml(r.docstring)}</div>` : "")}
+      <div class="field-row mt-14">
+        <div class="field"><label>Validate with a sample source file (optional)</label><input type="text" id="pd-sample" placeholder="relative path, e.g. example_table.raw"></div>
+      </div>
+      <div class="build-actions">
+        <button class="primary" id="pd-validate">${icon("check")}Validate conformance</button>
+      </div>
+      <div id="pd-result"></div>
+    </div>
+  `;
+  const run = async () => {
+    const resultEl = document.getElementById("pd-result");
+    resultEl.innerHTML = '<p class="empty-state m-0">Validating…</p>';
+    try {
+      const sample = document.getElementById("pd-sample").value.trim() || null;
+      const v = await api("/api/plugin/validate", { body: { name, sample } });
+      const items = (v.issues || []).map((i) => render`<li><strong>${i.check}</strong>: ${i.detail}</li>`);
+      resultEl.innerHTML = render`
+        <div class="result-line">${statusPill(v.conforms ? "ok" : "fail")}<span>${v.conforms ? "conforms to the plugin contract" : "doesn't conform to the plugin contract"}</span>${raw(v.skipped_behavior_check ? `<span class="subtitle"> — structure only, no sample provided</span>` : "")}</div>
+        ${raw(items.length ? `<ul>${items.join("")}</ul>` : "")}
+      `;
+    } catch (e) {
+      resultEl.innerHTML = emptyCard(e.message, e.hint);
+    }
+  };
+  document.getElementById("pd-validate").onclick = run;
 }
 
 export { viewPlugins, viewPluginDetail, viewLocalPluginEditor };

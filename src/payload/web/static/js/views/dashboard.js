@@ -235,7 +235,7 @@ async function viewDashboard() {
   document.getElementById("content").innerHTML = render`
     ${raw(pageHeader(health.project_name, `Dashboard · ${total} tables discovered in this project.`))}
     ${raw((report.warnings || []).length
-      ? `<div class="card dashboard-warnings">${icon("warnTri")}<div><strong>Project needs attention</strong><ul>${report.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div></div>`
+      ? `<div class="card dashboard-warnings">${iconSpan("warnTri")}<div><strong>Project needs attention</strong><ul>${report.warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join("")}</ul></div></div>`
       : "")}
     ${raw(_importZoneHtml())}
     <div class="stat-grid">

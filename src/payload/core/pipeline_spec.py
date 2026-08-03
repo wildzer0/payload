@@ -34,12 +34,18 @@ VALID_ON_ERROR = ("fail", "warn")
 class ReaderStage:
     name: str
     kind: str = "reader"
+    # optional editor layout (canvas position) — purely presentational,
+    # never part of the cache signature / validation
+    x: int | None = None
+    y: int | None = None
 
 
 @dataclass
 class WriterStage:
     name: str
     kind: str = "writer"
+    x: int | None = None
+    y: int | None = None
 
 
 @dataclass
@@ -51,6 +57,8 @@ class ExecStage:
     # to determine the final output file's extension, which for
     # reader/writer is read from writer.extension)
     output_extension: str | None = None
+    x: int | None = None
+    y: int | None = None
 
 
 Stage = Union[ReaderStage, WriterStage, ExecStage]
@@ -62,17 +70,26 @@ def parse_stage(raw: dict, index: int) -> Stage:
 
     stage_type = raw.get("type")
 
+    def _coord(key):
+        value = raw.get(key)
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise InvalidPipelineError(index, f"'{key}' must be an integer")
+
     if stage_type == "reader":
         name = raw.get("name")
         if not name:
             raise InvalidPipelineError(index, "'reader' stage requires 'name'")
-        return ReaderStage(name=name)
+        return ReaderStage(name=name, x=_coord("x"), y=_coord("y"))
 
     if stage_type == "writer":
         name = raw.get("name")
         if not name:
             raise InvalidPipelineError(index, "'writer' stage requires 'name'")
-        return WriterStage(name=name)
+        return WriterStage(name=name, x=_coord("x"), y=_coord("y"))
 
     if stage_type == "exec":
         command = raw.get("command")
@@ -87,6 +104,8 @@ def parse_stage(raw: dict, index: int) -> Stage:
             command=command,
             on_error=on_error,
             output_extension=raw.get("output_extension"),
+            x=_coord("x"),
+            y=_coord("y"),
         )
 
     raise InvalidPipelineError(

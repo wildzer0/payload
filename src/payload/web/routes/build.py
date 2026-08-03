@@ -5,6 +5,7 @@ via Server-Sent Events instead of a static rich table: it uses GET
 no custom body/headers."""
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import queue
@@ -210,7 +211,98 @@ async def build_all_stream(request: Request) -> StreamingResponse:
     )
 
 
+async def preview_diff_route(request: Request) -> JSONResponse:
+    """Live build-diff: builds the table into a TEMP folder
+    (.payload_cache/preview/<table>, never the real output) and diffs
+    the result byte-by-byte against the golden (if set) or the current
+    output on disk. The frontend renders the changed runs with the
+    reader's comments; Accept re-builds for real + commits, Discard
+    does nothing (the real output is untouched)."""
+    table = request.path_params["table_name"]
+    body = await request.json()
+    root = request.app.state.root
+
+    def _run():
+        from payload.core.discovery import discover_for_history, resolve_table_ref
+        from payload.core.errors import TableNotFoundError
+
+        sources, batch_tables, _ = discover_for_history(root)
+        ref = resolve_table_ref(sources, batch_tables, table)
+        if ref is None:
+            raise TableNotFoundError(table)
+        registry = load_plugins(project_root=root)
+
+        if ref.is_batch:
+            base_config = load_config(root)
+            batch = next((b for b in resolve_batch_tables(root, base_config) if b.name == table), None)
+            clusters = resolve_clusters(root, base_config)
+            table_metas = resolve_table_meta(root, base_config, clusters)
+            meta = table_metas.get(table)
+            cluster = clusters.get(meta.cluster) if meta and meta.cluster else None
+            config = effective_config(base_config, batch, cluster=cluster)
+        else:
+            config = load_config(root, source_path=ref.source_paths[0])
+
+        preview_dir = resolve(root, f".payload_cache/preview/{table}")
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        # clear stale preview outputs so a removed writer can't leave ghosts
+        for stale in preview_dir.glob(f"{table}.*"):
+            stale.unlink(missing_ok=True)
+
+        build(
+            ref.source_paths, registry, config, preview_dir, cache=None,
+            reader_name=body.get("from") or None, writer_name=body.get("to") or None,
+            force=True, table_name=ref.name,
+        )
+
+        history = HistoryStore(root)
+        golden_id = history.golden_snapshot_id(table)
+        real_out = resolve(root, config.defaults.output_dir)
+        preview_outputs = sorted(preview_dir.glob(f"{ref.name}.*"))
+        outputs = []
+        for p in preview_outputs:
+            cur = p.read_bytes()
+            if golden_id is not None:
+                snap = history.get_snapshot(table, golden_id)
+                blob_hash = snap.output_blobs.get(p.name)
+                prev = history.read_blob(blob_hash) if blob_hash else b""
+                baseline = "golden"
+                # golden exists but has no output for THIS file: the
+                # file is new, "every byte differs" would be noise
+                new_file = blob_hash is None
+            else:
+                real = real_out / p.name
+                prev = real.read_bytes() if real.is_file() else b""
+                baseline = "current"
+                new_file = not real.is_file()
+            runs = []
+            if not new_file:
+                max_len = max(len(cur), len(prev))
+                for i in range(0, max_len, 8):
+                    c, e = cur[i:i + 8], prev[i:i + 8]
+                    if c != e:
+                        runs.append({"offset": i, "current": c.hex(" "), "previous": e.hex(" ")})
+            # full blobs (capped) so the frontend can render a real
+            # side-by-side compare with highlights, not just the runs
+            COMPARE_CAP = 65536
+            outputs.append({
+                "filename": p.name, "size": len(cur), "new_file": new_file, "runs": runs,
+                "prev_base64": base64.b64encode(prev[:COMPARE_CAP]).decode("ascii"),
+                "cur_base64": base64.b64encode(cur[:COMPARE_CAP]).decode("ascii"),
+            })
+        return {
+            "table": table,
+            "preview_dir": str(preview_dir),
+            "baseline": baseline,
+            "golden_snapshot_id": golden_id,
+            "outputs": outputs,
+        }
+
+    return JSONResponse(await anyio.to_thread.run_sync(_run))
+
+
 ROUTES = [
     Route("/api/build", build_route, methods=["POST"]),
+    Route("/api/table/{table_name}/preview-diff", preview_diff_route, methods=["POST"]),
     Route("/api/build-all/stream", build_all_stream, methods=["GET"]),
 ]

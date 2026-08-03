@@ -1,6 +1,6 @@
 [project]
 name = "payload"
-version = "0.6.0"
+version = "0.7.0"
 description = "Tool da terminale per gestire tabelle di sistemi embedded"
 requires-python = ">=3.10"
 license = { text = "Elastic-2.0" }

@@ -151,13 +151,20 @@ async def sidecar_delete_route(request: Request) -> JSONResponse:
 
 
 def _stage_to_raw(stage: Stage) -> dict:
+    raw = {}
     if isinstance(stage, ReaderStage):
-        return {"type": "reader", "name": stage.name}
-    if isinstance(stage, WriterStage):
-        return {"type": "writer", "name": stage.name}
-    raw = {"type": "exec", "command": stage.command, "on_error": stage.on_error}
-    if stage.output_extension:
-        raw["output_extension"] = stage.output_extension
+        raw.update({"type": "reader", "name": stage.name})
+    elif isinstance(stage, WriterStage):
+        raw.update({"type": "writer", "name": stage.name})
+    else:
+        raw.update({"type": "exec", "command": stage.command, "on_error": stage.on_error})
+        if stage.output_extension:
+            raw["output_extension"] = stage.output_extension
+    # presentational canvas position (kept out of the cache signature)
+    if stage.x is not None:
+        raw["x"] = stage.x
+    if stage.y is not None:
+        raw["y"] = stage.y
     return raw
 
 
@@ -185,7 +192,12 @@ def _pipeline_payload(root: Path, ref, base_config, table: str) -> dict:
         elif isinstance(stage, WriterStage):
             entry = {"index": i, "kind": "writer", "name": stage.name}
         else:
-            entry = {"index": i, "kind": "exec", "command": stage.command, "on_error": stage.on_error}
+            entry = {"index": i, "kind": "exec", "command": stage.command, "on_error": stage.on_error,
+                     "output_extension": getattr(stage, "output_extension", None) or ""}
+        if stage.x is not None:
+            entry["x"] = stage.x
+        if stage.y is not None:
+            entry["y"] = stage.y
 
         if isinstance(stage, (WriterStage, ExecStage)):
             if i >= terminal_start:

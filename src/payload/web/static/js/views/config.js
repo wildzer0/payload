@@ -106,8 +106,11 @@ async function viewConfig() {
 
   const defaultsRows = schema.defaults.map((f) => _cfgFieldMarkup("defaults", f, currentByKey, originByKey));
 
+  const originPill = (origin) => origin === "default"
+    ? '<span class="pill pill-dim">default</span>'
+    : `${statusPill(origin.startsWith("sidecar") ? "warn" : "ok").__raw} ${escapeHtml(origin)}`;
   const rows = r.fields.map((f) => render`
-    <tr><td class="mono">${f.key}</td><td class="mono">${JSON.stringify(f.value)}</td><td>${statusPill(f.origin === "default" ? "never_saved" : f.origin.startsWith("sidecar") ? "warn" : "ok")} ${f.origin}</td></tr>
+    <tr><td class="mono">${f.key}</td><td class="mono">${JSON.stringify(f.value)}</td><td>${raw(originPill(f.origin))}</td></tr>
   `);
 
   document.getElementById("content").innerHTML = render`
@@ -122,18 +125,16 @@ async function viewConfig() {
         <button class="primary" id="cfg-save" disabled>${icon("save")}Save</button>
       </div>
     </div>
-    <details class="section-collapse">
-      <summary>TOML preview</summary>
-      <div class="card mt-10"><pre class="settings-preview" id="cfg-preview"></pre></div>
-    </details>
-    <details class="section-collapse">
-      <summary>Detailed resolution (default → global → sidecar)</summary>
-      <div class="card mt-10">
-        <div class="table-scroll">
-          <table><thead><tr><th>Field</th><th>Value</th><th>Origin</th></tr></thead><tbody>${rows}</tbody></table>
-        </div>
+    <div class="card mt-14">
+      <h2 class="settings-section-title">TOML preview</h2>
+      <pre class="settings-preview" id="cfg-preview"></pre>
+    </div>
+    <div class="card mt-14">
+      <h2 class="settings-section-title">Detailed resolution (default → global → sidecar)</h2>
+      <div class="table-scroll">
+        <table><thead><tr><th>Field</th><th>Value</th><th>Origin</th></tr></thead><tbody>${rows}</tbody></table>
       </div>
-    </details>
+    </div>
   `;
 
   const originalValues = _cfgReadFormValues(schema);

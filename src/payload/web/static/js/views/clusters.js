@@ -7,7 +7,7 @@
 
 import {
   escapeHtml, raw, render, icon, iconSpan, toast, toastError,
-  confirmDialog, pageHeader, val,
+  confirmDialog, openDialog, pageHeader, val,
 } from "../ui.js";
 import { api } from "../api.js";
 
@@ -52,11 +52,14 @@ async function viewClusters() {
   const r = await api("/api/clusters");
   const cards = r.clusters.map(_clusterCardHtml).join("");
 
-  document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Clusters", "A cluster bundles config overrides that a table can opt into — global → cluster → sidecar → CLI flags. Assigning a table to a cluster happens on the table page."))}
-    <div class="card" id="cluster-form-card">
-      <h2 class="card-title" id="cluster-form-title">New cluster</h2>
-      <div class="field"><label>Name</label><input type="text" id="cf-name" placeholder="sensors"></div>
+  // create/edit cluster form, shared by the "New cluster" header button
+  // and each card's edit action — a modal, so the grid stays visible
+  const openClusterForm = (cluster) => {
+    const editing = !!cluster;
+    const actions = [];
+    if (editing) actions.push({ label: "Cancel" });
+    const formBody = render`
+      <div class="field"><label>Name</label><input type="text" id="cf-name" placeholder="sensors" ${editing ? "disabled" : ""}></div>
       <div class="field-row">
         <div class="field"><label>Writer</label><input type="text" id="cf-writer" placeholder="no override"></div>
         <div class="field"><label>Reader</label><input type="text" id="cf-reader" placeholder="no override"></div>
@@ -65,74 +68,61 @@ async function viewClusters() {
         <div class="field"><label>Output folder</label><input type="text" id="cf-output-dir" placeholder="no override"></div>
         <div class="field"><label>Cache folder</label><input type="text" id="cf-cache-dir" placeholder="no override"></div>
       </div>
-      <div class="field-row">
-        <div class="field">
-          <label>Byte order</label>
-          <select id="cf-byte-order"><option value="">no override</option><option value="little">little</option><option value="big">big</option></select>
-        </div>
+      <div class="field">
+        <label>Byte order</label>
+        <select id="cf-byte-order"><option value="">no override</option><option value="little">little</option><option value="big">big</option></select>
       </div>
-      <div class="build-actions">
-        <button class="primary" id="cf-save">${icon("plus")}Create cluster</button>
-        <button id="cf-cancel" hidden>Cancel edit</button>
-      </div>
-    </div>
+    `;
+    const dialog = openDialog({
+      title: editing ? `Edit cluster '${cluster.name}'` : "New cluster",
+      body: formBody,
+      actions: [{ label: editing ? "Save changes" : "Create cluster", className: "primary", autofocus: true, value: true }],
+    });
+    if (editing) {
+      document.getElementById("cf-name").value = cluster.name;
+      document.getElementById("cf-writer").value = cluster.defaults.writer || "";
+      document.getElementById("cf-reader").value = cluster.defaults.reader || "";
+      document.getElementById("cf-output-dir").value = cluster.defaults.output_dir || "";
+      document.getElementById("cf-cache-dir").value = cluster.defaults.cache_dir || "";
+      document.getElementById("cf-byte-order").value = cluster.defaults.byte_order || "";
+    }
+    dialog.then(async (result) => {
+      if (result !== true) return; // cancelled
+      const name = val("cf-name");
+      if (!name) { toast("Enter a cluster name first", "warn"); return; }
+      const defaults = {};
+      for (const [key, id] of [["writer", "cf-writer"], ["reader", "cf-reader"], ["output_dir", "cf-output-dir"], ["cache_dir", "cf-cache-dir"]]) {
+        const v = val(id);
+        if (v) defaults[key] = v;
+      }
+      const byteOrder = document.getElementById("cf-byte-order").value;
+      if (byteOrder) defaults.byte_order = byteOrder;
+      try {
+        if (editing) {
+          await api(`/api/clusters/${encodeURIComponent(cluster.name)}`, { method: "PUT", body: { defaults } });
+          toast(`Cluster '${cluster.name}' updated`, "ok");
+        } else {
+          await api("/api/clusters", { method: "POST", body: { name, defaults } });
+          toast(`Cluster '${name}' created`, "ok");
+        }
+        viewClusters();
+      } catch (e) {
+        toastError(e);
+      }
+    });
+  };
+
+  document.getElementById("content").innerHTML = render`
+    ${raw(pageHeader("Clusters", "A cluster bundles config overrides that a table can opt into — global → cluster → sidecar → CLI flags. Assigning a table to a cluster happens on the table page.", render`<button class="btn primary" id="btn-new-cluster">${icon("plus")}New cluster</button>`))}
     <div class="cluster-grid" id="cluster-grid">${raw(cards || '<p class="empty-state card">No cluster declared in this project.</p>')}</div>
   `;
 
-  let editingName = null;
-
-  const resetForm = () => {
-    editingName = null;
-    document.getElementById("cluster-form-title").textContent = "New cluster";
-    document.getElementById("cf-save").innerHTML = `${iconSpan("plus")}Create cluster`;
-    document.getElementById("cf-cancel").hidden = true;
-    document.getElementById("cf-name").disabled = false;
-    ["cf-name", "cf-writer", "cf-reader", "cf-output-dir", "cf-cache-dir"].forEach((id) => { document.getElementById(id).value = ""; });
-    document.getElementById("cf-byte-order").value = "";
-  };
-
-  document.getElementById("cf-cancel").onclick = resetForm;
-
-  document.getElementById("cf-save").onclick = async () => {
-    const name = editingName || val("cf-name");
-    if (!name) { toast("Enter a cluster name first", "warn"); return; }
-    const defaults = {};
-    const writer = val("cf-writer"); if (writer) defaults.writer = writer;
-    const reader = val("cf-reader"); if (reader) defaults.reader = reader;
-    const outputDir = val("cf-output-dir"); if (outputDir) defaults.output_dir = outputDir;
-    const cacheDir = val("cf-cache-dir"); if (cacheDir) defaults.cache_dir = cacheDir;
-    const byteOrder = document.getElementById("cf-byte-order").value; if (byteOrder) defaults.byte_order = byteOrder;
-
-    try {
-      if (editingName) {
-        await api(`/api/clusters/${encodeURIComponent(editingName)}`, { method: "PUT", body: { defaults } });
-        toast(`Cluster '${editingName}' updated`, "ok");
-      } else {
-        await api("/api/clusters", { method: "POST", body: { name, defaults } });
-        toast(`Cluster '${name}' created`, "ok");
-      }
-      viewClusters();
-    } catch (e) {
-      toastError(e);
-    }
-  };
+  document.getElementById("btn-new-cluster").onclick = () => openClusterForm(null);
 
   document.querySelectorAll("[data-edit-cluster]").forEach((btn) => {
     btn.onclick = () => {
       const c = r.clusters.find((x) => x.name === btn.dataset.editCluster);
-      if (!c) return;
-      editingName = c.name;
-      document.getElementById("cluster-form-title").textContent = `Edit '${c.name}'`;
-      document.getElementById("cf-save").innerHTML = `${iconSpan("save")}Save changes`;
-      document.getElementById("cf-cancel").hidden = false;
-      document.getElementById("cf-name").value = c.name;
-      document.getElementById("cf-name").disabled = true;
-      document.getElementById("cf-writer").value = c.defaults.writer || "";
-      document.getElementById("cf-reader").value = c.defaults.reader || "";
-      document.getElementById("cf-output-dir").value = c.defaults.output_dir || "";
-      document.getElementById("cf-cache-dir").value = c.defaults.cache_dir || "";
-      document.getElementById("cf-byte-order").value = c.defaults.byte_order || "";
-      document.getElementById("cluster-form-card").scrollIntoView({ behavior: "smooth", block: "start" });
+      if (c) openClusterForm(c);
     };
   });
 

@@ -466,3 +466,52 @@ def test_batch_cli_list_and_mutate(tmp_path, monkeypatch):
     assert r.exit_code == 0
     r = runner.invoke(app, ["batch", "--root", str(root)])
     assert "no batch table" in r.stdout
+
+
+def test_ls_lists_tables(tmp_path, monkeypatch):
+    root = _init_project(tmp_path, monkeypatch, "proj")
+    # no build yet -> never built
+    r = runner.invoke(app, ["ls", str(root)])
+    assert r.exit_code == 0
+    assert "example_table" in r.stdout
+    assert "never built" in r.stdout
+
+    # build -> built state
+    r = runner.invoke(app, ["build", "example_table.raw"])
+    assert r.exit_code == 0, r.stdout
+    r = runner.invoke(app, ["ls", str(root)])
+    assert "built" in r.stdout
+
+    # quiet: plain names only
+    r = runner.invoke(app, ["ls", "--quiet", str(root)])
+    assert r.exit_code == 0
+    assert r.stdout.strip() == "example_table"
+
+
+def test_ls_shows_golden_mismatch(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw"])
+    runner.invoke(app, ["commit", "-m", "v1"])
+    runner.invoke(app, ["golden", "set", "example_table"])
+    # corrupt the output file: the source is untouched, so check_golden
+    # reports MISMATCH (a changed source would be reported as "stale")
+    out = proj / "build" / "example_table.bin"
+    out.write_bytes(out.read_bytes() + b"\x00")
+
+    r = runner.invoke(app, ["ls"])
+    assert r.exit_code == 0
+    assert "mismatch" in r.stdout
+
+
+def test_ls_shows_stale_when_source_changed(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    runner.invoke(app, ["build", "example_table.raw"])
+    runner.invoke(app, ["commit", "-m", "v1"])
+    runner.invoke(app, ["golden", "set", "example_table"])
+    # a changed source makes the golden outdated -> STALE (priority over
+    # the output comparison, see check_golden)
+    (proj / "example_table.raw").write_text("# changed\n0x2A,\n")
+
+    r = runner.invoke(app, ["ls"])
+    assert r.exit_code == 0
+    assert "stale" in r.stdout

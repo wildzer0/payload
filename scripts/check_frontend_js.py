@@ -37,7 +37,7 @@ GLOBALS = {
     "requestAnimationFrame", "cancelAnimationFrame", "queueMicrotask",
     "console", "Intl", "structuredClone", "performance", "globalThis", "undefined",
     "Infinity", "NaN", "TextEncoder", "TextDecoder", "DOMParser", "DOMException",
-    "CSS", "matchMedia",
+    "CSS", "matchMedia", "CustomEvent",
 }
 
 
@@ -243,6 +243,62 @@ def imports_and_exports(tree):
     return exports, imports
 
 
+def check_template_context(tree) -> list[str]:
+    """iconSpan() returns a plain HTML string: interpolated inside a
+    render`...` template it gets ESCAPED (shows as literal
+    &lt;span class="icon">...). icon()/raw() return raw() markers:
+    interpolated inside a PLAIN template they stringify as
+    "[object Object]". Flag both directions so the classic
+    "wrong helper in the wrong template" bug can't come back.
+
+    Context is decided by the template's OWN tag (a render`...` template
+    escapes its direct interpolations; a plain template — including a
+    sub-template nested inside a render one — interpolates as-is)."""
+
+    problems = []
+
+    def callee_name(node):
+        if isinstance(node, dict) and node.get("type") == "Identifier":
+            return node.get("name")
+        return None
+
+    def is_call(node, *names):
+        return (isinstance(node, dict) and node.get("type") == "CallExpression"
+                and callee_name(node.get("callee")) in names)
+
+    def line(node):
+        return (node.get("loc") or {}).get("start", {}).get("line", "?")
+
+    render_quasis = set()  # TemplateLiteral nodes already checked as render-tagged
+
+    def walk(node):
+        if isinstance(node, list):
+            for item in node:
+                walk(item)
+            return
+        if not isinstance(node, dict):
+            return
+        ntype = node.get("type")
+        if ntype == "TaggedTemplateExpression" and callee_name(node.get("tag")) == "render":
+            quasi = node.get("quasi") or {}
+            render_quasis.add(id(quasi))
+            for expr in quasi.get("expressions", []):
+                if is_call(expr, "iconSpan"):
+                    problems.append(f"iconSpan() inside render`...` (escaped) at line {line(expr)}")
+        elif ntype == "TemplateLiteral" and id(node) not in render_quasis:
+            for expr in node.get("expressions", []):
+                if is_call(expr, "icon", "raw"):
+                    problems.append(f"icon()/raw() inside a plain template ([object Object]) at line {line(expr)}")
+        for key, value in node.items():
+            if key in ("loc", "range", "start", "end"):
+                continue
+            if isinstance(value, (list, dict)):
+                walk(value)
+
+    walk(tree)
+    return problems
+
+
 def main() -> int:
     js_files = sorted(STATIC.rglob("*.js"))
     js_files = [p for p in js_files if "vendor" not in p.parts]
@@ -292,6 +348,12 @@ def main() -> int:
         )
         if missing:
             errors.append(f"UNDEFINED {rel}: {', '.join(missing)}")
+
+    # 4. template context: iconSpan in render (escaped) / icon+raw in
+    # plain templates ([object Object])
+    for rel, tree in modules.items():
+        for problem in check_template_context(tree):
+            errors.append(f"TEMPLATE {rel}: {problem}")
 
     if errors:
         print(f"{len(errors)} problem(s) found:")

@@ -279,3 +279,35 @@ def test_pipeline_checkpoint_state_transitions(tmp_path):
     after = client.get("/api/pipeline/example_table").json()
     writer_stage_after = next(s for s in after["stages"] if s["kind"] == "writer")
     assert writer_stage_after["checkpoint"] == "valid"
+
+
+def test_pipeline_layout_round_trips(tmp_path):
+    """The canvas position (x/y) of each stage survives a save + reopen."""
+    root = _init_project(tmp_path)
+    client = _client(root)
+    stages = [
+        {"type": "reader", "name": "raw_text", "x": 120, "y": 40},
+        {"type": "writer", "name": "hex", "x": 480, "y": 40},
+    ]
+
+    r = client.put("/api/pipeline/example_table", json={"stages": stages})
+    assert r.status_code == 200
+    body = r.json()
+    assert [(s["x"], s["y"]) for s in body["stages"]] == [(120, 40), (480, 40)]
+
+    # a fresh GET (reopen) restores the same positions
+    r2 = client.get("/api/pipeline/example_table")
+    assert r2.status_code == 200
+    assert [(s["x"], s["y"]) for s in r2.json()["stages"]] == [(120, 40), (480, 40)]
+
+    # the position is also persisted in the sidecar
+    sidecar = (root / "example_table.config.toml").read_text()
+    assert "x = 120" in sidecar and "y = 40" in sidecar
+
+
+def test_pipeline_layout_bad_coordinate_rejected(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+    stages = [{"type": "reader", "name": "raw_text", "x": "not-a-number"}]
+    r = client.put("/api/pipeline/example_table", json={"stages": stages})
+    assert r.status_code == 400

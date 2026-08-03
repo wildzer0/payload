@@ -11,12 +11,14 @@ import {
   registerDirtyGuard, removeDirtyGuard, loadCodeMirror, emptyCard, openTextEditorModal,
 } from "../ui.js";
 import { api, getPlugins, ensureTableSources, findSourcePath, invalidateTableSources } from "../api.js";
+import { openPipelineEditor } from "./pipeline_editor.js";
 
 const COMMIT_MESSAGE_MAX_LENGTH = 1024;
 const HISTORY_PAGE_SIZE = 4;
 
 async function viewTable(name) {
   const content = document.getElementById("content");
+  document.addEventListener("pipeline-saved", () => loadPipelineBuilder(name));
 
   const buildBody = `
     <div class="field-row">
@@ -33,6 +35,7 @@ async function viewTable(name) {
       <label class="toggle-chip"><input type="checkbox" id="f-force"><span>--force</span></label>
       <label class="toggle-chip"><input type="checkbox" id="f-dry"><span>--dry-run</span></label>
       <label class="toggle-chip"><input type="checkbox" id="f-golden"><span>--check-golden</span></label>
+      <label class="toggle-chip"><input type="checkbox" id="f-preview"><span>--preview-diff</span></label>
     </div>
     <div class="build-actions">
       <button class="primary" id="btn-build">${iconSpan("play")}Build</button>
@@ -54,9 +57,13 @@ async function viewTable(name) {
       <textarea id="commit-message" class="commit-message-input mono" rows="3" maxlength="${COMMIT_MESSAGE_MAX_LENGTH}" placeholder="Describe what changed…"></textarea>
       <div class="field-hint"><span id="commit-message-count">0</span>/${COMMIT_MESSAGE_MAX_LENGTH}</div>
     </div>
-    <div class="toggle-chip-row">
-      <label class="switch"><input type="checkbox" id="commit-golden"><span class="track"></span><span>${iconSpan("star")}Also set as golden</span></label>
-    </div>
+    <label class="commit-golden-row">
+      <span class="switch switch-lg"><input type="checkbox" id="commit-golden"><span class="track"></span></span>
+      <span class="commit-golden-label">
+        <span class="commit-golden-title">${iconSpan("star")}Also set as golden</span>
+        <small>Save this snapshot as the golden reference for future diff checks</small>
+      </span>
+    </label>
     <div class="build-actions">
       <button id="btn-commit">${iconSpan("save")}Commit changes</button>
     </div>
@@ -248,6 +255,17 @@ async function viewTable(name) {
   }).catch(() => {});
 
   document.getElementById("btn-build").onclick = async () => {
+    if (chk("f-preview")) {
+      try {
+        const r = await api(`/api/table/${encodeURIComponent(name)}/preview-diff`, {
+          body: { from: val("f-from") || undefined, to: val("f-to") || undefined },
+        });
+        await renderPreviewDiff(r);
+      } catch (e) {
+        toastError(e);
+      }
+      return;
+    }
     const body = {
       source: findSourcePath(name), to: val("f-to") || undefined, from: val("f-from") || undefined,
       force: chk("f-force"), dry_run: chk("f-dry"), check_golden: chk("f-golden"),
@@ -265,7 +283,140 @@ async function viewTable(name) {
     }
   };
 
-  /* ---------- inspect: diff vs snapshot/golden, analyze output ---------- */
+  /* ---------- live build-diff (--preview-diff) ---------- */
+  const renderPreviewDiff = async (r) => {
+    // the summary is a disappearing toast — never inline (it used to
+    // render into the Build card and broke the page layout)
+    const baselineLabel = r.baseline === "golden" ? `golden #${r.golden_snapshot_id}` : "current output";
+    const newFiles = r.outputs.filter((o) => o.new_file).length;
+    const changedRuns = r.outputs.reduce((n, o) => n + o.runs.length, 0);
+    if (!r.outputs.length) {
+      toast("Preview produced no output — check the reader/writer resolution", "warn");
+      return;
+    }
+    if (!newFiles && !changedRuns) {
+      toast(`Preview: identical to the ${baselineLabel}`, "ok");
+      return;
+    }
+    if (newFiles && !changedRuns) {
+      toast(`Preview: ${newFiles} new file${newFiles === 1 ? "" : "s"} — first build, nothing to compare`, "warn");
+    } else {
+      toast(`Preview: ${changedRuns} byte run${changedRuns === 1 ? "" : "s"} differ${newFiles ? ` + ${newFiles} new` : ""} vs ${baselineLabel}`, "warn");
+    }
+    openPreviewCompare(r);
+  };
+
+  /* Side-by-side blob compare (modal): previous vs current hex, with
+   * the differing lines highlighted and the reader's comments. */
+  const openPreviewCompare = (r) => {
+    const overlay = document.getElementById("modal-overlay");
+    const box = document.getElementById("modal-box");
+    const baselineLabel = r.baseline === "golden" ? `golden #${r.golden_snapshot_id}` : "current output";
+    box.classList.add("modal-large");
+    box.innerHTML = render`
+      <div class="preview-compare">
+        <div class="preview-compare-head">
+          <h3 class="m-0">Preview vs ${baselineLabel}</h3>
+          <span class="subtitle">Changed lines are highlighted: <span class="cmp-legend-l">previous</span> → <span class="cmp-legend-r">new</span></span>
+          <span class="flex-1"></span>
+          <button class="primary" id="btn-preview-accept">${icon("save")}Accept & commit</button>
+          <button class="ghost" id="btn-preview-discard">${icon("close")}Discard</button>
+        </div>
+        <div class="preview-compare-body">
+          ${raw(r.outputs.filter((o) => o.new_file || o.runs.length).map((o) => outputCompareHtml(o, r)).join(""))}
+        </div>
+      </div>
+    `;
+    overlay.hidden = false;
+
+    // synchronized scrolling between the two panes of each file
+    box.querySelectorAll(".cmp-file").forEach((wrap) => {
+      const left = wrap.querySelector(".cmp-left");
+      const right = wrap.querySelector(".cmp-right");
+      if (left && right) {
+        const sync = (ev, other) => { other.scrollTop = ev.target.scrollTop; };
+        left.addEventListener("scroll", (ev) => { right.scrollTop = ev.target.scrollTop; });
+        right.addEventListener("scroll", (ev) => { left.scrollTop = ev.target.scrollTop; });
+      }
+    });
+
+    const close = () => { overlay.hidden = true; box.classList.remove("modal-large"); box.innerHTML = ""; };
+    document.getElementById("btn-preview-accept").onclick = async () => {
+      const btn = document.getElementById("btn-preview-accept");
+      btn.disabled = true;
+      try {
+        const message = (document.getElementById("commit-message").value || "").trim() || "Accept preview build";
+        await api("/api/build", {
+          body: { source: findSourcePath(name), to: val("f-to") || undefined, from: val("f-from") || undefined, force: true },
+        });
+        await api("/api/commit", { body: { message, only: [name] } });
+        toast("Preview accepted and committed", "ok");
+        close();
+        loadPipelineBuilder(name);
+        loadHistory(name);
+      } catch (e) {
+        toastError(e);
+        btn.disabled = false;
+      }
+    };
+    document.getElementById("btn-preview-discard").onclick = close;
+  };
+
+  // hex+ascii lines for one side of the compare (capped so a huge
+  // blob can't build a multi-megabyte DOM)
+  const MAX_CMP_LINES = 600;
+  const hexLines = (b64) => {
+    const bytes = atob(b64 || "");
+    const lines = [];
+    const n = Math.min(bytes.length, MAX_CMP_LINES * 8);
+    for (let i = 0; i < n; i += 8) {
+      const chunk = bytes.slice(i, i + 8);
+      const hex = Array.from(chunk).map((c) => c.charCodeAt(0).toString(16).padStart(2, "0")).join(" ");
+      const ascii = Array.from(chunk).map((c) => (c.charCodeAt(0) >= 32 && c.charCodeAt(0) <= 126 ? c : ".")).join("");
+      lines.push({ hex, ascii });
+    }
+    return lines;
+  };
+
+  const cmpTable = (lines, diffIdx, isNew) => {
+    if (isNew) return `<p class="empty-state m-0">— no previous output —</p>`;
+    return `<table class="cmp-table"><tbody>${
+      lines.map((ln, i) => `
+        <tr${diffIdx.has(i) ? ` class="cmp-diff"` : ""}>
+          <td class="cmp-off">0x${(i * 8).toString(16).padStart(4, "0").toUpperCase()}</td>
+          <td class="cmp-hex">${escapeHtml(ln.hex)}</td>
+          <td class="cmp-ascii">${escapeHtml(ln.ascii)}</td>
+        </tr>`).join("")
+    }</tbody></table>`;
+  };
+
+  const outputCompareHtml = (o) => {
+    const prevLines = hexLines(o.prev_base64);
+    const curLines = hexLines(o.cur_base64);
+    const diffIdx = new Set(o.runs.map((run) => run.offset / 8));
+    const n = Math.max(prevLines.length, curLines.length);
+    // pad the shorter side to the same line count so the two panes stay
+    // in sync while scrolling
+    const pad = (lines) => { while (lines.length < n) lines.push({ hex: "", ascii: "" }); return lines; };
+    const left = pad(prevLines.slice());
+    const right = pad(curLines.slice());
+    const truncated = o.size > MAX_CMP_LINES * 8;
+    return `
+      <div class="cmp-file">
+        <div class="cmp-file-head">
+          <strong>${escapeHtml(o.filename)}</strong>
+          ${o.new_file ? '<span class="pill pill-warn">new file</span>' : ""}
+          <span class="subtitle mono">${o.runs.length} run${o.runs.length === 1 ? "" : "s"} differ</span>
+        </div>
+        ${truncated ? `<p class="subtitle m-0">Showing the first ${MAX_CMP_LINES} rows (${o.size} bytes total).</p>` : ""}
+        <div class="cmp-panes">
+          <div class="cmp-pane cmp-left">${cmpTable(left, diffIdx, o.new_file)}</div>
+          <div class="cmp-pane cmp-right">${cmpTable(right, diffIdx, false)}</div>
+        </div>
+      </div>`;
+  };
+
+  /* ---------- inspect: diff vs snapshot/golden, analyze output ---------- */  /* ---------- inspect: diff vs snapshot/golden, analyze output ---------- */  /* ---------- inspect: diff vs snapshot/golden, analyze output ---------- */
   const inspectResult = document.getElementById("inspect-result");
 
   const renderDiff = (r, labelRef) => {
@@ -582,151 +733,20 @@ function _stageToRawJs(stage) {
 async function loadPipelineBuilder(name) {
   const el = document.getElementById("pipeline-result");
   try {
-    const [p, plugins] = await Promise.all([api("/api/pipeline/" + encodeURIComponent(name)), getPlugins()]);
-    const readerNames = plugins.plugins.filter((x) => x.kind === "reader").map((x) => x.name);
-    const writerNames = plugins.plugins.filter((x) => x.kind === "writer").map((x) => x.name);
-
-    const stages = p.stages.map((s) => (
-      s.kind === "exec"
-        ? { type: "exec", command: s.command, on_error: s.on_error, output_extension: "" }
-        : { type: s.kind, name: s.name }
-    ));
-    let lastError = null;
-
-    function optionList(names, selected, disabled) {
-      return names.map((n) => `<option value="${escapeHtml(n)}" ${n === selected ? "selected" : ""}${disabled && disabled.has(n) ? " disabled" : ""}>${escapeHtml(n)}</option>`).join("");
-    }
-
-    function renderStages() {
-      const cards = stages.map((s, i) => {
-        const badgeCls = s.type === "reader" ? "badge-reader" : s.type === "writer" ? "badge-writer" : "";
-        const hasError = lastError && lastError.stage_index === i;
-        let fields;
-        if (s.type === "reader" || s.type === "writer") {
-          const names = s.type === "reader" ? readerNames : writerNames;
-          if (s.type === "writer") {
-            // a writer name must be unique WITHIN the contiguous fan-out
-            // group (two consecutive stages with the same writer would
-            // collide on the same output file): the options taken by the
-            // OTHER writers of the same group are disabled. Two writers
-            // separated by a reader are separate pairs and may repeat.
-            const run = [];
-            for (let k = i; k >= 0 && stages[k].type === "writer"; k--) run.unshift(k);
-            for (let k = i + 1; k < stages.length && stages[k].type === "writer"; k++) run.push(k);
-            const taken = new Set(run.filter((j) => j !== i).map((j) => stages[j].name));
-            fields = `<select data-field="name" data-idx="${i}">${optionList(names, s.name, taken)}</select>`;
-          } else {
-            fields = `<select data-field="name" data-idx="${i}">${optionList(names, s.name)}</select>`;
-          }
-        } else {
-          fields = `
-            <input type="text" data-field="command" data-idx="${i}" value="${escapeHtml(s.command || "")}" placeholder="external command, e.g. objcopy {input} {output}" class="flex-1 min-w-220">
-            <select data-field="on_error" data-idx="${i}">
-              <option value="fail" ${s.on_error !== "warn" ? "selected" : ""}>on_error: fail</option>
-              <option value="warn" ${s.on_error === "warn" ? "selected" : ""}>on_error: warn</option>
-            </select>
-            <input type="text" data-field="output_extension" data-idx="${i}" value="${escapeHtml(s.output_extension || "")}" placeholder="extension if final, e.g. .signed.bin" class="w-200">
-          `;
-        }
-        return `
-          <div class="stage-card ${hasError ? "stage-error" : ""}">
-            <span class="stage-badge ${badgeCls}">${s.type}</span>
-            <div class="stage-fields">${fields}</div>
-            <div class="stage-actions">
-              <button type="button" class="icon-only ghost" data-move="up" data-idx="${i}" ${i === 0 ? "disabled" : ""} aria-label="Move up">${iconSpan("up")}</button>
-              <button type="button" class="icon-only ghost" data-move="down" data-idx="${i}" ${i === stages.length - 1 ? "disabled" : ""} aria-label="Move down">${iconSpan("down")}</button>
-              <button type="button" class="icon-only ghost danger" data-remove="${i}" aria-label="Remove">${iconSpan("trash")}</button>
-            </div>
-          </div>
-          ${hasError ? `<div class="stage-error-msg">${escapeHtml(lastError.message)}</div>` : ""}
-        `;
-      }).join("");
-
-      el.innerHTML = `
-        <div class="stage-list">${cards || '<p class="empty-state">No stage — add one to get started.</p>'}</div>
-        <div class="add-stage-row">
-          <select id="pb-add-type">
-            <option value="reader">reader</option>
-            <option value="writer">writer</option>
-            <option value="exec">exec</option>
-          </select>
-          <button type="button" id="pb-add"><span class="icon">${ICONS.plus}</span>Add stage</button>
-          <span class="flex-1"></span>
-          <button type="button" id="pb-reset">${iconSpan("refresh")}Restore implicit</button>
-          <button type="button" class="primary" id="pb-save">${iconSpan("save")}Save pipeline</button>
-        </div>
-        <div class="pipeline-output-row">
-          <span class="pipeline-output-label">Output</span>
-          ${p.outputs.length
-            ? p.outputs.map((o) => `<span class="pill pill-dim mono" title="${escapeHtml(o)}">${escapeHtml(baseName(o))}</span>`).join("")
-            : '<span class="subtitle">—</span>'}
-          ${p.explicit ? '<span class="pill pill-warn">explicit (sidecar)</span>' : '<span class="pill pill-dim">automatic</span>'}
-        </div>
-      `;
-
-      // Every local change invalidates the last save attempt's error:
-      // both because stage indices might have changed (the highlight
-      // would land on the wrong stage), and because the user may have
-      // already fixed the problem — the error signal must disappear
-      // right away, not stay stuck until Save is pressed again.
-      el.querySelectorAll("[data-move]").forEach((btn) => {
-        btn.onclick = () => {
-          const i = Number(btn.getAttribute("data-idx"));
-          const j = i + (btn.getAttribute("data-move") === "up" ? -1 : 1);
-          if (j < 0 || j >= stages.length) return;
-          const tmp = stages[i]; stages[i] = stages[j]; stages[j] = tmp;
-          lastError = null;
-          renderStages();
-        };
-      });
-      el.querySelectorAll("[data-remove]").forEach((btn) => {
-        btn.onclick = () => {
-          stages.splice(Number(btn.getAttribute("data-remove")), 1);
-          lastError = null;
-          renderStages();
-        };
-      });
-      el.querySelectorAll("[data-field]").forEach((input) => {
-        input.onchange = () => {
-          stages[Number(input.getAttribute("data-idx"))][input.getAttribute("data-field")] = input.value;
-          lastError = null;
-          renderStages();
-        };
-      });
-
-      document.getElementById("pb-add").onclick = () => {
-        const type = document.getElementById("pb-add-type").value;
-        if (type === "exec") {
-          stages.push({ type: "exec", command: "", on_error: "fail", output_extension: "" });
-        } else {
-          const names = type === "reader" ? readerNames : writerNames;
-          let name = names[0] || "";
-          if (type === "writer") {
-            // the new writer joins the trailing fan-out group (if the
-            // last stage is a writer): pick a name not used there
-            const used = new Set();
-            for (let j = stages.length - 1; j >= 0 && stages[j].type === "writer"; j--) used.add(stages[j].name);
-            name = names.find((n) => !used.has(n)) || names[0] || "";
-          }
-          stages.push({ type, name });
-        }
-        lastError = null;
-        renderStages();
-      };
-
-      document.getElementById("pb-save").onclick = async () => {
-        try {
-          await api("/api/pipeline/" + encodeURIComponent(name), { method: "PUT", body: { stages: stages.map(_stageToRawJs) } });
-          toast("Pipeline saved", "ok");
-          loadPipelineBuilder(name);
-        } catch (e) {
-          lastError = { stage_index: e.data && typeof e.data.stage_index === "number" ? e.data.stage_index : -1, message: e.message };
-          renderStages();
-          toastError(e);
-        }
-      };
-
-      document.getElementById("pb-reset").onclick = async () => {
+    const p = await api("/api/pipeline/" + encodeURIComponent(name));
+    el.innerHTML = render`
+      <p class="subtitle m-0">${p.explicit
+        ? `Explicit pipeline saved in the sidecar — ${p.stages.length} stage${p.stages.length === 1 ? "" : "s"}.`
+        : `Automatic resolution: ${p.stages.map((st) => st.kind === "exec" ? "exec" : st.name).join(" → ")}.`}</p>
+      <div class="pipeline-actions mt-10">
+        <button class="primary" id="pb-edit-graph">${icon("box")}Edit graph</button>
+        ${raw(p.explicit ? `<button id="pb-reset">${iconSpan("refresh")}Restore implicit</button>` : "")}
+      </div>
+    `;
+    document.getElementById("pb-edit-graph").onclick = () => openPipelineEditor(name);
+    const resetBtn = document.getElementById("pb-reset");
+    if (resetBtn) {
+      resetBtn.onclick = async () => {
         const ok = await confirmDialog("Go back to automatic resolution from --from/--to? The explicit pipeline saved in the sidecar will be removed.", { danger: true, confirmLabel: "Restore" });
         if (!ok) return;
         try {
@@ -738,8 +758,6 @@ async function loadPipelineBuilder(name) {
         }
       };
     }
-
-    renderStages();
   } catch (e) {
     el.innerHTML = render`<p class="empty-state">${e.message}</p>`;
   }

@@ -901,12 +901,12 @@ async function viewFiles(rawPath) {
     ${raw(pageHeader("Files", "Browse and manage the whole project folder from here — no need to touch the filesystem."))}
     ${raw(localStorage.getItem("payload-fs-warning-dismissed") === "true" ? "" : `
       <div class="card fs-warning">
-        ${icon("warnTri")}
+        ${iconSpan("warnTri")}
         <div>
           <strong>Advanced area</strong>
           <p>Operations here touch the real files on disk (rename, move, copy, delete, edit) and are meant for users who know what they're doing — there is no undo, and they can affect table data. Use the Dashboard for normal table work.</p>
         </div>
-        <button type="button" class="ghost fs-warning-dismiss" id="fs-warning-dismiss" title="Don't show again">${icon("close")}</button>
+        <button type="button" class="ghost fs-warning-dismiss" id="fs-warning-dismiss" title="Don't show again">${iconSpan("close")}</button>
       </div>`)}
     <div class="card fs-toolbar">
       <div class="fs-toolbar-row">

@@ -1232,6 +1232,59 @@ def report(
     run_command(_run, ctx.obj["verbosity"])
 
 
+@app.command(name="ls")
+def ls_cmd(
+    ctx: typer.Context,
+    quiet: bool = typer.Option(False, "--quiet", "-q", help="Print only the table names, one per line (for scripting)"),
+    root: Path = typer.Argument(Path(".")),
+):
+    """Lists the active tables in this project — the quick 'what do I
+    have?' view. One row per table with its build/golden state; batch
+    tables are marked. Use -q to get plain names for scripts."""
+
+    def _run():
+        require_project_root(root)
+        sources, batch_tables, base_config = discover_for_history(root)
+        history = HistoryStore(root)
+        tables = all_table_refs(sources, batch_tables)
+        clusters = resolve_clusters(root, base_config)
+        table_metas = resolve_table_meta(root, base_config, clusters)
+
+        if quiet:
+            for ref in tables:
+                console.print(ref.name)
+            return
+
+        t = Table(title=f"Tables ({len(tables)})")
+        t.add_column("Table")
+        t.add_column("State")
+        t.add_column("Golden")
+
+        for ref in tables:
+            name = ref.name
+            display = f"{name} [dim](batch, {len(ref.source_paths)} files)[/]" if ref.is_batch else name
+            table_config = resolve_table_config(root, base_config, ref, clusters, table_metas)
+            out_dir = Path(table_config.defaults.output_dir)
+            output_files = list(out_dir.glob(f"{name}.*")) if out_dir.exists() else []
+            golden = check_golden(history, name, ref.source_paths, output_files)
+
+            if output_files:
+                if golden.status == "mismatch":
+                    state = "[red]mismatch[/]"
+                elif golden.status == "stale":
+                    state = "[yellow]stale[/]"
+                else:
+                    state = "[green]built[/]"
+            else:
+                state = "[dim]never built[/]"
+            golden_str = f"#{golden.golden_snapshot_id}" if golden.golden_snapshot_id is not None else "[dim]—[/]"
+            t.add_row(display, state, golden_str)
+
+        console.print(t)
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
 @app.command()
 def export(
     ctx: typer.Context,

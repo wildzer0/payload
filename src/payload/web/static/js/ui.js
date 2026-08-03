@@ -201,7 +201,7 @@ function openTextEditorModal(opts) {
   box.innerHTML = render`
     <h3 class="modal-title">${opts.title || "Edit"}</h3>
     ${opts.subtitle ? raw(`<p class="subtitle mb-14">${escapeHtml(opts.subtitle)}</p>`) : ""}
-    ${opts.readOnly ? `<div class="result-line">${icon("warnTri")}<span class="subtitle">Read-only preview — saving is disabled (file too large).</span></div>` : ""}
+    ${opts.readOnly ? `<div class="result-line">${iconSpan("warnTri")}<span class="subtitle">Read-only preview — saving is disabled (file too large).</span></div>` : ""}
     <div class="modal-editor-wrap">
       <textarea id="modal-editor" class="source-editor mono" spellcheck="false" rows="20">${opts.initialContent || ""}</textarea>
     </div>
