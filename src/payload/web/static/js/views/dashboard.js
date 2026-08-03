@@ -80,13 +80,9 @@ function _tableRowHtml(t, stateByName) {
   const snap = t.last_snapshot ? `snapshot #${t.last_snapshot.id} · ` : "";
   // NOTE: PLAIN template — interpolate built HTML strings directly,
   // never raw()/icon() (they return {__raw} markers -> "[object Object]")
-  const batchDetail = t.is_batch
-    ? `<tr class="dash-batch-detail" data-batch-detail="${escapeHtml(t.name)}" hidden><td colspan="11"><div class="dash-batch-manage" id="dash-batch-manage-${escapeHtml(t.name)}"></div></td></tr>`
-    : "";
   return `
     <tr>
-      <td class="dash-name-cell">
-        ${t.is_batch ? `<button class="icon-only dash-batch-toggle" data-batch="${escapeHtml(t.name)}" title="Manage members and overrides">${iconSpan("down")}</button>` : ""}
+      <td>
         <a class="link" href="#/table/${encodeURIComponent(t.name)}" title="${escapeHtml(snap)}modified ${escapeHtml(t.source_mtime)}">${escapeHtml(t.name)}</a>
         ${t.is_batch ? `<span class="batch-marker" title="batch table — ${t.source_count} source files">${iconSpan("layers")}</span>` : ""}
         ${tagsHtml}
@@ -95,9 +91,11 @@ function _tableRowHtml(t, stateByName) {
       <td>${_rawString(statusPill(state))}</td>
       <td>${_rawString(statusPill(t.golden_status || "missing"))}${t.golden_snapshot_id ? goldBadge() : ""}</td>
       <td class="dash-pipeline">
-        ${_defaultSelectHtml("reader", t.name, _dashReaderNames, t.reader_override, t.resolved_reader, t.pipeline_explicit, t.is_batch)}
-        <span class="dash-arrow" aria-hidden="true">→</span>
-        ${_defaultSelectHtml("writer", t.name, _dashWriterNames, t.writer_override, t.resolved_writer, t.pipeline_explicit, t.is_batch)}
+        ${t.is_batch
+          ? `<button class="dash-batch-settings" data-batch-settings="${escapeHtml(t.name)}" title="Batch settings — members, overrides, pipeline">${iconSpan("sliders")}Settings</button>`
+          : `${_defaultSelectHtml("reader", t.name, _dashReaderNames, t.reader_override, t.resolved_reader, t.pipeline_explicit)}
+             <span class="dash-arrow" aria-hidden="true">→</span>
+             ${_defaultSelectHtml("writer", t.name, _dashWriterNames, t.writer_override, t.resolved_writer, t.pipeline_explicit)}`}
       </td>
       <td class="mono dash-size">${t.source_count > 1 ? `${t.source_count} files · ` : ""}${fmtBytes(t.source_size)}${t.output_size != null ? ` → ${fmtBytes(t.output_size)}` : ""}</td>
       <td class="dash-actions">
@@ -106,8 +104,7 @@ function _tableRowHtml(t, stateByName) {
         <a class="btn icon-only${t.output_size != null ? "" : " dash-hidden"}" href="/api/table/${encodeURIComponent(t.name)}/download" title="Download the last built output" download>${iconSpan("download")}</a>
         <button class="icon-only" data-quick-build="${t.name}" title="Quick build (default reader/writer)">${iconSpan("play")}</button>
       </td>
-    </tr>
-    ${batchDetail}`;
+    </tr>`;
 }
 
 
@@ -152,20 +149,6 @@ async function viewDashboard() {
           toastError(e);
           btn.disabled = false;
         }
-      };
-    });
-
-    // expand/collapse the batch management rows (rows are rendered by
-    // applyView BEFORE this runs, so the buttons exist)
-    document.querySelectorAll(".dash-batch-toggle").forEach((btn) => {
-      btn.onclick = async () => {
-        const name = btn.dataset.batch;
-        const detail = document.querySelector(`[data-batch-detail="${escapeHtml(name)}"]`);
-        if (!detail) return;
-        const open = detail.hidden;
-        detail.hidden = !open;
-        btn.innerHTML = iconSpan(open ? "up" : "down");
-        if (open) await renderBatchManage(name);
       };
     });
 
@@ -257,47 +240,64 @@ async function viewDashboard() {
     wireCardHandlers();
   };
 
-  /* Inline batch management (the old batch page): members, overrides
-   * and delete live in an expandable row under the batch's dashboard
-   * row — the batch page is gone. */
-  const renderBatchManage = async (name) => {
-    const el = document.getElementById("dash-batch-manage-" + name);
-    if (!el) return;
-    const b = batchByName.get(name);
+  /* Batch settings modal (the old batch page + inline panel, in modal
+   * form): members, overrides (reader/writer/byte order) and a link to
+   * the pipeline editor. */
+  const openBatchSettingsModal = async (name) => {
+    const overlay = document.getElementById("modal-overlay");
+    const box = document.getElementById("modal-box");
+    const [batchResp, candResp, pipelineResp] = await Promise.all([
+      api("/api/batch"), api("/api/batch/candidates"), api("/api/pipeline/" + encodeURIComponent(name)),
+    ]);
+    const b = (batchResp.batches || []).find((x) => x.name === name);
     if (!b) return;
-    const cands = (await api("/api/batch/candidates")).files || [];
+    const cands = candResp.files || [];
     const working = [...b.sources];
     const freeFiles = cands.filter((f) => !working.includes(f));
-    const readerOpts = [`<option value="">auto</option>`].concat(
-      _dashReaderNames.map((r) => `<option value="${escapeHtml(r)}"${r === b.reader ? " selected" : ""}>${escapeHtml(r)}</option>`)
-    ).join("");
-    const writerOpts = [`<option value="">auto</option>`].concat(
-      _dashWriterNames.map((w) => `<option value="${escapeHtml(w)}"${w === b.writer ? " selected" : ""}>${escapeHtml(w)}</option>`)
-    ).join("");
-    el.innerHTML = `
-      <div class="dash-batch-head">
-        <strong>Members (concatenation order)</strong>
-        <span class="subtitle" id="dash-batch-count-${escapeHtml(name)}">${working.length} file${working.length === 1 ? "" : "s"}</span>
-        <span class="flex-1"></span>
-        <a class="btn" href="#/table/${encodeURIComponent(name)}">${iconSpan("box")}Open table</a>
-        <button class="danger" id="dash-batch-del">${iconSpan("trash")}Delete</button>
+
+    box.classList.add("modal-large");
+    box.innerHTML = render`
+      <div class="modal-head-row">
+        <h3 class="modal-title m-0">Batch — ${escapeHtml(name)}</h3>
+        <button type="button" class="modal-x modal-x-static" id="dash-batch-x" aria-label="Close" title="Close">×</button>
       </div>
-      <div class="dash-batch-members" id="dash-batch-members"></div>
-      <div class="dash-batch-toolbar">
-        <select class="inline-select" id="dash-batch-addfile"><option value="">— add a file —</option>${freeFiles.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("")}</select>
-        <button id="dash-batch-add">${iconSpan("plus")}Add</button>
+      <div class="settings-modal-scroll">
+        <div class="card settings-section">
+          <h2 class="settings-section-title">Members (concatenation order)</h2>
+          <p class="settings-section-desc">The order determines how the source files are concatenated.</p>
+          <div class="dash-batch-members" id="dash-batch-members"></div>
+          <div class="dash-batch-toolbar">
+            <select class="inline-select" id="dash-batch-addfile"><option value="">— add a file —</option>${freeFiles.map((f) => `<option value="${escapeHtml(f)}">${escapeHtml(f)}</option>`).join("")}</select>
+            <button id="dash-batch-add">${icon("plus")}Add</button>
+          </div>
+        </div>
+        <div class="card settings-section">
+          <h2 class="settings-section-title">Overrides</h2>
+          <p class="settings-section-desc">Leave on auto to fall back to the project defaults.</p>
+          <div class="dash-batch-toolbar">
+            <label class="dash-ov-label">Reader</label>
+            <select class="inline-select" id="dash-batch-reader"><option value="">auto</option>${_dashReaderNames.map((r) => `<option value="${escapeHtml(r)}"${r === b.reader ? " selected" : ""}>${escapeHtml(r)}</option>`).join("")}</select>
+            <label class="dash-ov-label">Writer</label>
+            <select class="inline-select" id="dash-batch-writer"><option value="">auto</option>${_dashWriterNames.map((w) => `<option value="${escapeHtml(w)}"${w === b.writer ? " selected" : ""}>${escapeHtml(w)}</option>`).join("")}</select>
+            <label class="dash-ov-label">Byte order</label>
+            <select class="inline-select" id="dash-batch-byteorder"><option value="little"${b.byte_order !== "big" ? " selected" : ""}>little</option><option value="big"${b.byte_order === "big" ? " selected" : ""}>big</option></select>
+          </div>
+        </div>
+        <div class="card settings-section">
+          <h2 class="settings-section-title">Pipeline</h2>
+          <p class="settings-section-desc">${pipelineResp && pipelineResp.explicit ? `explicit — ${pipelineResp.stages.length} stage${pipelineResp.stages.length === 1 ? "" : "s"}` : "automatic resolution (from the overrides above)"}</p>
+          <a class="btn" href="#/table/${encodeURIComponent(name)}">${icon("box")}Open table — pipeline editor &amp; build</a>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="danger" id="dash-batch-del">${icon("trash")}Delete</button>
         <span class="flex-1"></span>
-        <label class="dash-ov-label">Reader</label>
-        <select class="inline-select" id="dash-batch-reader">${readerOpts}</select>
-        <label class="dash-ov-label">Writer</label>
-        <select class="inline-select" id="dash-batch-writer">${writerOpts}</select>
-        <label class="dash-ov-label">Byte order</label>
-        <select class="inline-select" id="dash-batch-byteorder"><option value="little"${b.byte_order !== "big" ? " selected" : ""}>little</option><option value="big"${b.byte_order === "big" ? " selected" : ""}>big</option></select>
-        <button class="primary" id="dash-batch-save">${iconSpan("save")}Save</button>
+        <button class="primary" id="dash-batch-save">${icon("save")}Save</button>
       </div>
     `;
+    overlay.hidden = false;
+
     const membersEl = document.getElementById("dash-batch-members");
-    const countEl = document.getElementById("dash-batch-count-" + name);
     const renderMembers = () => {
       membersEl.innerHTML = working.length
         ? working.map((m, i) => `
@@ -305,12 +305,19 @@ async function viewDashboard() {
               <button class="icon-only dash-batch-rm" data-member="${escapeHtml(m)}" title="Remove member">×</button>
             </span>`).join("")
         : '<span class="subtitle">No members — a batch needs at least one file.</span>';
-      if (countEl) countEl.textContent = `${working.length} file${working.length === 1 ? "" : "s"}`;
       membersEl.querySelectorAll(".dash-batch-rm").forEach((rm) => {
         rm.onclick = () => { working.splice(working.indexOf(rm.dataset.member), 1); renderMembers(); };
       });
     };
     renderMembers();
+
+    const close = () => {
+      overlay.hidden = true;
+      box.classList.remove("modal-large");
+      box.innerHTML = "";
+    };
+    document.getElementById("dash-batch-x").onclick = close;
+
     document.getElementById("dash-batch-add").onclick = () => {
       const sel = document.getElementById("dash-batch-addfile");
       if (sel.value && !working.includes(sel.value)) { working.push(sel.value); renderMembers(); }
@@ -330,15 +337,21 @@ async function viewDashboard() {
           },
         });
         toast(`Batch '${name}' saved`, "ok");
+        close();
         viewDashboard();
       } catch (e) { toastError(e); btn.disabled = false; }
     };
     document.getElementById("dash-batch-del").onclick = async () => {
       const ok = await confirmDialog(`Delete the batch table '${name}'? Its member files stay on disk.`, { danger: true, confirmLabel: "Delete" });
       if (!ok) return;
-      try { await api("/api/batch/" + encodeURIComponent(name), { method: "DELETE" }); toast(`Batch '${name}' deleted`, "ok"); viewDashboard(); } catch (e) { toastError(e); }
+      try { await api("/api/batch/" + encodeURIComponent(name), { method: "DELETE" }); toast(`Batch '${name}' deleted`, "ok"); close(); viewDashboard(); } catch (e) { toastError(e); }
     };
   };
+
+  // batch rows: the Settings button opens the modal
+  document.querySelectorAll("[data-batch-settings]").forEach((btn) => {
+    btn.onclick = () => openBatchSettingsModal(btn.dataset.batchSettings);
+  });
 
   const wireSort = () => {
     document.querySelectorAll(".sortable").forEach((th) => {
