@@ -30,9 +30,10 @@ async function viewBatch() {
 
   const content = document.getElementById("content");
   content.innerHTML = render`
-    ${raw(pageHeader("Batch tables", "Tables built from several source files ([[batch_table]]) — managed here without editing table-tool.toml by hand."))}
+    ${raw(pageHeader("Batch tables", "Created by dragging several files onto the Dashboard (or here, from project files). This page manages their members and overrides — no table-tool.toml editing by hand."))}
     <div class="card">
       <h2>New batch table</h2>
+      <p class="subtitle">From files already in the project that aren't single tables yet — the Dashboard import is the main way to bring new files in.</p>
       <div class="field-row">
         <div class="field">
           <label>Name</label>

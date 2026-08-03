@@ -94,7 +94,7 @@ function _tableRowHtml(t, stateByName) {
         <span class="dash-arrow" aria-hidden="true">→</span>
         ${_defaultSelectHtml("writer", t.name, _dashWriterNames, t.writer_override, t.resolved_writer, t.pipeline_explicit)}
       </td>
-      <td class="mono dash-size">${fmtBytes(t.source_size)}${t.output_size != null ? ` → ${fmtBytes(t.output_size)}` : ""}</td>
+      <td class="mono dash-size">${t.source_count > 1 ? `${t.source_count} files · ` : ""}${fmtBytes(t.source_size)}${t.output_size != null ? ` → ${fmtBytes(t.output_size)}` : ""}</td>
       <td class="dash-actions">
         <!-- download slot is ALWAYS rendered (visibility-hidden when no
              output): the build button stays at the same x on every row -->
