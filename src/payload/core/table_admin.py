@@ -143,7 +143,17 @@ def clone_table(root: Path, name: str, new_name: str) -> dict:
     if new_name in _existing_table_names(sources, batch_tables):
         raise TableAlreadyExistsError(new_name)
     if ref.is_batch:
-        raise InvalidImportError("can't clone a batch table as a single file")
+        # duplicate the [[batch_table]] entry: same members and
+        # overrides (reader/writer/byte_order/pipeline), shared source
+        # files, fresh history — symmetric with single-table clones
+        b = ref.batch
+        create_batch_table(
+            root, new_name,
+            [str(p.relative_to(root)) for p in b.source_paths],
+            reader=b.reader, writer=b.writer, byte_order=b.byte_order,
+            stages=b.stages,
+        )
+        return {"from": name, "to": new_name}
 
     old_src = ref.source_paths[0]
     new_src = old_src.with_name(new_name + old_src.suffix)

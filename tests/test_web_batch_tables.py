@@ -504,3 +504,28 @@ def test_batch_pipeline_round_trip(tmp_path):
     assert r.status_code == 200
     assert r.json()["explicit"] is False
     assert "stages" not in (root / "table-tool.toml").read_text()
+
+
+def test_clone_batch_table_duplicates_entry(tmp_path):
+    """Cloning a batch duplicates the [[batch_table]] entry — members,
+    overrides and pipeline included — with fresh history."""
+    root = _init_project(tmp_path)
+    client = _client(root)
+    (root / "a.raw").write_text("# a\n0x01,\n")
+    (root / "b.raw").write_text("# b\n0x02,\n")
+    client.post("/api/batch", json={"name": "sensors", "sources": ["a.raw", "b.raw"], "reader": "raw_text", "byte_order": "big"})
+    client.put("/api/pipeline/sensors", json={"stages": [{"type": "reader", "name": "raw_text"}, {"type": "writer", "name": "bin"}]})
+
+    r = client.post("/api/table/clone", json={"table_name": "sensors", "new_name": "sensors_v2"})
+    assert r.status_code == 200
+    assert r.json()["to"] == "sensors_v2"
+
+    batches = {b["name"]: b for b in client.get("/api/batch").json()["batches"]}
+    assert "sensors_v2" in batches
+    assert batches["sensors_v2"]["sources"] == ["a.raw", "b.raw"]
+    assert batches["sensors_v2"]["reader"] == "raw_text"
+    assert batches["sensors_v2"]["byte_order"] == "big"
+    # the clone keeps the explicit pipeline
+    assert client.get("/api/pipeline/sensors_v2").json()["explicit"] is True
+    # the original is untouched and still there
+    assert "sensors" in batches

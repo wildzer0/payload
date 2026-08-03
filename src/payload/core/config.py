@@ -525,6 +525,7 @@ def _write_batch_table_list(path: Path, merged: dict, batch_table_list: list[dic
 def create_batch_table(
     project_root: Path, name: str, sources: list[str],
     reader: str | None = None, writer: str | None = None, byte_order: str | None = None,
+    stages: list | None = None,
 ) -> Path:
     """Adds a new [[batch_table]] to table-tool.toml — used when the
     user imports several files together as a new batch table. Fails
@@ -541,6 +542,8 @@ def create_batch_table(
         entry["writer"] = writer
     if byte_order:
         entry["byte_order"] = byte_order
+    if stages:
+        entry["stages"] = list(stages)
 
     batch_table_list.append(entry)
     _write_batch_table_list(path, merged, batch_table_list)
