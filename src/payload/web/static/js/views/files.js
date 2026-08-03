@@ -377,7 +377,6 @@ async function viewFiles(rawPath) {
       large: true,
       title: _baseOf(rel),
       body: render`<p class="empty-state m-0">Loading…</p>`,
-      actions: [{ label: "Close" }],
     });
     try {
       const hex = (r && Array.isArray(r.rows)) ? r : await api(`/api/fs/read?path=${encodeURIComponent(rel)}&as_hex=1`);

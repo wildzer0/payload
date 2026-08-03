@@ -123,7 +123,10 @@ async function openSettingsModal() {
     `);
 
     box.innerHTML = render`
-      <h3 class="modal-title" id="modal-title">Settings</h3>
+      <div class="modal-head-row">
+        <h3 class="modal-title m-0" id="modal-title">Settings</h3>
+        <button type="button" class="modal-x modal-x-static" id="cfg-x" aria-label="Close" title="Close">×</button>
+      </div>
       <p class="subtitle">Global project configuration (table-tool.toml) — applies to every table that has no sidecar of its own.</p>
       <div class="settings-modal-scroll">
         <div class="card settings-section">
@@ -147,7 +150,6 @@ async function openSettingsModal() {
         </div>
       </div>
       <div class="modal-actions">
-        <button type="button" id="cfg-cancel">Close</button>
         <button class="primary" id="cfg-save" disabled>${icon("save")}Save</button>
       </div>
     `;
@@ -199,7 +201,7 @@ async function openSettingsModal() {
       box.innerHTML = "";
     };
 
-    document.getElementById("cfg-cancel").onclick = close;
+    document.getElementById("cfg-x").onclick = close;
     document.getElementById("cfg-reset").onclick = () => build(); // fresh copy from disk
     document.getElementById("cfg-save").onclick = async () => {
       try {

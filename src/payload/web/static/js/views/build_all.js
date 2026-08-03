@@ -51,7 +51,6 @@ function openBuildAllModal() {
       <div class="log" id="ba-log"><span class="log-empty">Waiting…</span></div>
     </div>
     `,
-    actions: [{ label: "Close" }],
   });
 
   getPlugins().then((plugins) => {

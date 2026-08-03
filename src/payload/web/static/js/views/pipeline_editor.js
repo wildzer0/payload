@@ -397,6 +397,7 @@ export async function openPipelineEditor(name) {
     <div class="pipe-editor">
       <div class="pipe-editor-toolbar">
         <h3 class="m-0">Edit pipeline — ${escapeHtml(name)}</h3>
+        <button class="modal-x modal-x-static" id="pe-x" type="button" aria-label="Close" title="Close">×</button>
         <span class="pipe-zoom">
           <button id="pe-zoom-out" title="Zoom out">−</button>
           <span class="mono" id="pe-zoom-label">100%</span>
@@ -593,4 +594,5 @@ export async function openPipelineEditor(name) {
   };
 
   document.getElementById("pe-cancel").onclick = close;
+  document.getElementById("pe-x").onclick = close;
 }

@@ -317,6 +317,7 @@ async function viewTable(name) {
       <div class="preview-compare">
         <div class="preview-compare-head">
           <h3 class="m-0">Preview vs ${baselineLabel}</h3>
+          <button class="modal-x modal-x-static" id="btn-preview-x" type="button" aria-label="Close" title="Close">×</button>
           <span class="subtitle">Changed lines are highlighted: <span class="cmp-legend-l">previous</span> → <span class="cmp-legend-r">new</span></span>
           <span class="flex-1"></span>
           <button class="primary" id="btn-preview-accept">${icon("save")}Accept & commit</button>
@@ -360,6 +361,8 @@ async function viewTable(name) {
       }
     };
     document.getElementById("btn-preview-discard").onclick = close;
+    const previewX = document.getElementById("btn-preview-x");
+    if (previewX) previewX.onclick = close;
   };
 
   // hex+ascii lines for one side of the compare (capped so a huge
@@ -711,7 +714,6 @@ function openTableHexModal(name) {
     large: true,
     title: name,
     body: render`<div id="source-hex"></div>`,
-    actions: [{ label: "Close" }],
   });
   renderPagedHex(document.getElementById("source-hex"), name, 0);
 }
@@ -928,12 +930,12 @@ function _openSnapshotModal(s, name, goldenId, headId) {
   `;
   const downloadUrl = `/api/log/${encodeURIComponent(name)}/${s.id}/download`;
   const actions = [
-    { label: "Close", value: "close", autofocus: true },
-    { label: "Download", value: "download" },
+    { label: "Download", value: "download", autofocus: true },
   ];
   if (!isGolden) actions.push({ label: "Set as golden", value: "golden" });
   if (!isCurrent) actions.push({ label: "Restore", danger: true, value: "restore" });
-  openDialog({ title: `Snapshot #${s.id}`, body, actions }).then((action) => {
+  // the window-style X doubles as Close (cancelValue === "close")
+  openDialog({ title: `Snapshot #${s.id}`, body, actions, cancelValue: "close" }).then((action) => {
     if (action === "restore") restoreSnapshotFlow(name, s.id);
     else if (action === "golden") goldenSnapshotFlow(name, s.id);
     else if (action === "download") window.location.href = downloadUrl;

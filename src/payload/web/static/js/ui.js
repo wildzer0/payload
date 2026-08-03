@@ -137,6 +137,7 @@ function openDialog(opts) {
       `<button type="button" id="modal-action-${i}" class="${a.className || ""}"${a.autofocus ? " data-autofocus" : ""}>${escapeHtml(a.label)}</button>`
     ).join("");
     box.innerHTML = render`
+      ${opts.title ? raw(`<button type="button" class="modal-x" id="modal-x" aria-label="Close" title="Close">×</button>`) : ""}
       ${opts.title ? raw(`<h3 class="modal-title" id="modal-title">${escapeHtml(opts.title)}</h3>`) : ""}
       ${raw(opts.body || "")}
       <div class="modal-actions">${raw(actionsHtml)}</div>
@@ -159,6 +160,8 @@ function openDialog(opts) {
       if (previouslyFocused && previouslyFocused.focus) previouslyFocused.focus();
       resolveFn(result);
     };
+    const xBtn = document.getElementById("modal-x");
+    if (xBtn) xBtn.onclick = () => finish(cancelValue);
     const onKey = (ev) => {
       if (ev.key === "Escape") { ev.preventDefault(); finish(cancelValue); return; }
       if (ev.key === "Tab") {
@@ -199,7 +202,10 @@ function openTextEditorModal(opts) {
 
   box.classList.add("modal-large");
   box.innerHTML = render`
-    <h3 class="modal-title">${opts.title || "Edit"}</h3>
+    <div class="modal-head-row">
+      <h3 class="modal-title m-0">${opts.title || "Edit"}</h3>
+      <button type="button" class="modal-x modal-x-static" id="modal-editor-x" aria-label="Close" title="Close">×</button>
+    </div>
     ${opts.subtitle ? raw(`<p class="subtitle mb-14">${escapeHtml(opts.subtitle)}</p>`) : ""}
     ${opts.readOnly ? `<div class="result-line">${iconSpan("warnTri")}<span class="subtitle">Read-only preview — saving is disabled (file too large).</span></div>` : ""}
     <div class="modal-editor-wrap">
@@ -216,6 +222,8 @@ function openTextEditorModal(opts) {
   const textarea = document.getElementById("modal-editor");
   const saveBtn = document.getElementById("modal-editor-save");
   const cancelBtn = document.getElementById("modal-editor-cancel");
+  const xBtn = document.getElementById("modal-editor-x");
+  if (xBtn) xBtn.onclick = () => void finish(false);
 
   const close = () => {
     overlay.hidden = true;
