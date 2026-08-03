@@ -14,9 +14,9 @@ import { viewBatch } from "./js/views/batch.js";
 import { viewLog } from "./js/views/log.js";
 import { openPalette } from "./js/palette.js";
 import { viewPlugins, viewPluginDetail, viewLocalPluginEditor } from "./js/views/plugins.js";
+import { openSettingsModal } from "./js/views/config.js";
 import { viewClusters } from "./js/views/clusters.js";
 import { viewDoctor } from "./js/views/doctor.js";
-import { viewConfig } from "./js/views/config.js";
 import { viewTools } from "./js/views/tools.js";
 import { viewDocsList, viewDocDetail } from "./js/views/docs.js";
 
@@ -33,7 +33,6 @@ const ROUTES = [
   [/^\/clusters$/, viewClusters],
   [/^\/local-plugin\/([^/]+)$/, viewLocalPluginEditor],
   [/^\/doctor$/, viewDoctor],
-  [/^\/config$/, viewConfig],
   [/^\/tools$/, viewTools],
   [/^\/docs$/, viewDocsList],
   [/^\/docs\/([^/]+)$/, viewDocDetail],
@@ -123,6 +122,9 @@ window.addEventListener("beforeunload", (e) => {
 /* ---------- bootstrap ---------- */
 
 initTheme();
+
+/* sidebar gear -> global settings modal (the old /config page) */
+document.getElementById("settings-toggle").onclick = openSettingsModal;
 
 /* global keyboard shortcuts:
  *   /  -> command palette       ?  -> this list

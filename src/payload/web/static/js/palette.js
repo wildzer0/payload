@@ -5,6 +5,7 @@
 "use strict";
 
 import { api } from "./api.js";
+import { openSettingsModal } from "./views/config.js";
 
 let _palette = null; // { overlay, input, results, footer }
 
@@ -14,7 +15,7 @@ const PAGES = [
   { label: "Plugins", action: () => { location.hash = "#/plugins"; } },
   { label: "Clusters", action: () => { location.hash = "#/clusters"; } },
   { label: "Doctor", action: () => { location.hash = "#/doctor"; } },
-  { label: "Configuration", action: () => { location.hash = "#/config"; } },
+  { label: "Settings", action: () => openSettingsModal() },
   { label: "Export & clean", action: () => { location.hash = "#/tools"; } },
   { label: "Documentation", action: () => { location.hash = "#/docs"; } },
   { label: "Activity log", action: () => { location.hash = "#/log"; } },

@@ -2913,3 +2913,14 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
   padding: 8px 12px;
   font-size: 13px;
 }
+
+/* settings modal: scrollable body between the title and the actions */
+.settings-modal-scroll { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
+.sidebar-footer-actions { display: flex; gap: 6px; }
+.settings-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0;
+  color: var(--text-dim);
+}
+.settings-toggle .icon { width: 15px; height: 15px; }
+.settings-toggle:hover { color: var(--text); }

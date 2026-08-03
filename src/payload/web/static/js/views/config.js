@@ -1,10 +1,14 @@
-/* Configuration view (route "/config"): the global table-tool.toml
- * form (with dirty tracking, TOML preview, per-field origin pills)
- * plus the detailed resolution table. Split out of the former
- * single-file app.js — no behavior change. */
+/* Settings modal: the global table-tool.toml form (defaults + plugin
+ * options, dirty tracking, TOML preview, per-field origin pills) plus
+ * the detailed resolution table. Opened from the sidebar gear — the
+ * former "/config" page became a modal. Closing with unsaved changes
+ * asks for confirmation. */
 "use strict";
 
-import { escapeHtml, raw, render, pageHeader, statusPill, icon, val, toast, toastError, registerDirtyGuard } from "../ui.js";
+import {
+  escapeHtml, raw, render, statusPill, icon, val, toast, toastError,
+  registerDirtyGuard, removeDirtyGuard, confirmDialog,
+} from "../ui.js";
 import { api } from "../api.js";
 
 function _cfgFieldId(section, key) { return `cfg-${section}-${key}`; }
@@ -98,94 +102,120 @@ function _cfgTomlPreview(values) {
   return section("defaults", values.defaults);
 }
 
-async function viewConfig() {
-  const r = await api("/api/config");
-  const schema = r.schema;
-  const currentByKey = Object.fromEntries(r.fields.map((f) => [f.key, f.value]));
-  const originByKey = Object.fromEntries(r.fields.map((f) => [f.key, f.origin]));
+async function openSettingsModal() {
+  const overlay = document.getElementById("modal-overlay");
+  const box = document.getElementById("modal-box");
+  box.classList.add("modal-large");
 
-  const defaultsRows = schema.defaults.map((f) => _cfgFieldMarkup("defaults", f, currentByKey, originByKey));
+  const build = async () => {
+    const r = await api("/api/config");
+    const schema = r.schema;
+    const currentByKey = Object.fromEntries(r.fields.map((f) => [f.key, f.value]));
+    const originByKey = Object.fromEntries(r.fields.map((f) => [f.key, f.origin]));
 
-  const originPill = (origin) => origin === "default"
-    ? '<span class="pill pill-dim">default</span>'
-    : `${statusPill(origin.startsWith("sidecar") ? "warn" : "ok").__raw} ${escapeHtml(origin)}`;
-  const rows = r.fields.map((f) => render`
-    <tr><td class="mono">${f.key}</td><td class="mono">${JSON.stringify(f.value)}</td><td>${raw(originPill(f.origin))}</td></tr>
-  `);
+    const defaultsRows = schema.defaults.map((f) => _cfgFieldMarkup("defaults", f, currentByKey, originByKey));
 
-  document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Configuration", "Global project configuration (table-tool.toml) — applies to every table that has no sidecar of its own."))}
-    <div class="card settings-section">
-      <h2 class="settings-section-title">Default paths and formats</h2>
-      <p class="settings-section-desc">Used for every table that has no explicit command-line preference.</p>
-      ${defaultsRows}
-      <div class="settings-toolbar">
-        <span class="settings-toolbar-status" id="cfg-dirty-status">No changes</span>
-        <button type="button" id="cfg-reset">${icon("refresh")}Reset</button>
+    const originPill = (origin) => origin === "default"
+      ? '<span class="pill pill-dim">default</span>'
+      : `${statusPill(origin.startsWith("sidecar") ? "warn" : "ok").__raw} ${escapeHtml(origin)}`;
+    const rows = r.fields.map((f) => render`
+      <tr><td class="mono">${f.key}</td><td class="mono">${JSON.stringify(f.value)}</td><td>${raw(originPill(f.origin))}</td></tr>
+    `);
+
+    box.innerHTML = render`
+      <h3 class="modal-title" id="modal-title">Settings</h3>
+      <p class="subtitle">Global project configuration (table-tool.toml) — applies to every table that has no sidecar of its own.</p>
+      <div class="settings-modal-scroll">
+        <div class="card settings-section">
+          <h2 class="settings-section-title">Default paths and formats</h2>
+          <p class="settings-section-desc">Used for every table that has no explicit command-line preference.</p>
+          ${defaultsRows}
+          <div class="settings-toolbar">
+            <span class="settings-toolbar-status" id="cfg-dirty-status">No changes</span>
+            <button type="button" id="cfg-reset">${icon("refresh")}Reset</button>
+          </div>
+        </div>
+        <div class="card">
+          <h2 class="settings-section-title">TOML preview</h2>
+          <pre class="settings-preview" id="cfg-preview"></pre>
+        </div>
+        <div class="card">
+          <h2 class="settings-section-title">Detailed resolution (default → global → sidecar)</h2>
+          <div class="table-scroll">
+            <table><thead><tr><th>Field</th><th>Value</th><th>Origin</th></tr></thead><tbody>${rows}</tbody></table>
+          </div>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" id="cfg-cancel">Close</button>
         <button class="primary" id="cfg-save" disabled>${icon("save")}Save</button>
       </div>
-    </div>
-    <div class="card mt-14">
-      <h2 class="settings-section-title">TOML preview</h2>
-      <pre class="settings-preview" id="cfg-preview"></pre>
-    </div>
-    <div class="card mt-14">
-      <h2 class="settings-section-title">Detailed resolution (default → global → sidecar)</h2>
-      <div class="table-scroll">
-        <table><thead><tr><th>Field</th><th>Value</th><th>Origin</th></tr></thead><tbody>${rows}</tbody></table>
-      </div>
-    </div>
-  `;
+    `;
+    overlay.hidden = false;
 
-  const originalValues = _cfgReadFormValues(schema);
-  const preview = document.getElementById("cfg-preview");
-  const dirtyStatus = document.getElementById("cfg-dirty-status");
-  const saveBtn = document.getElementById("cfg-save");
+    const originalValues = _cfgReadFormValues(schema);
+    const preview = document.getElementById("cfg-preview");
+    const dirtyStatus = document.getElementById("cfg-dirty-status");
+    const saveBtn = document.getElementById("cfg-save");
+    let unsavedCount = 0;
 
-  // unsaved-changes guard: dirty while the form differs from disk
-  // (refresh() keeps unsavedCount in sync with what it computes)
-  let unsavedCount = 0;
-  registerDirtyGuard("config-page", {
-    message: "The project configuration has unsaved changes.",
-    isDirty: () => unsavedCount > 0,
-  });
+    const fieldOriginal = (section, key) => originalValues.defaults[key];
 
-  const fieldOriginal = (section, key) => originalValues.defaults[key];
+    const refresh = () => {
+      const values = _cfgReadFormValues(schema);
+      preview.textContent = _cfgTomlPreview(values);
+      let changedCount = 0;
+      document.querySelectorAll(".settings-row").forEach((row) => {
+        const [section, ...rest] = row.dataset.rowKey.split(".");
+        const fieldKey = rest.join(".");
+        const current = values.defaults[fieldKey];
+        const changed = JSON.stringify(current) !== JSON.stringify(fieldOriginal(section, fieldKey));
+        row.querySelector(".settings-row-dirty-note").hidden = !changed;
+        if (changed) changedCount += 1;
+      });
+      unsavedCount = changedCount;
+      dirtyStatus.textContent = changedCount ? `${changedCount} unsaved changes` : "No changes";
+      dirtyStatus.className = "settings-toolbar-status" + (changedCount ? " settings-toolbar-status-dirty" : "");
+      saveBtn.disabled = changedCount === 0;
+    };
+    document.querySelectorAll("[data-cfg-field]").forEach((el) => el.addEventListener("input", refresh));
+    refresh();
 
-  const refresh = () => {
-    const values = _cfgReadFormValues(schema);
-    preview.textContent = _cfgTomlPreview(values);
-
-    let changedCount = 0;
-    document.querySelectorAll(".settings-row").forEach((row) => {
-      const [section, ...rest] = row.dataset.rowKey.split(".");
-      const fieldKey = rest.join(".");
-      const current = values.defaults[fieldKey];
-      const changed = JSON.stringify(current) !== JSON.stringify(fieldOriginal(section, fieldKey));
-      row.querySelector(".settings-row-dirty-note").hidden = !changed;
-      if (changed) changedCount += 1;
+    // unsaved-changes guard while the modal is open (navigation and
+    // beforeunload both consult it)
+    registerDirtyGuard("settings-modal", {
+      message: "The project configuration has unsaved changes.",
+      isDirty: () => unsavedCount > 0,
     });
-    unsavedCount = changedCount;
 
-    dirtyStatus.textContent = changedCount ? `${changedCount} unsaved changes` : "No changes";
-    dirtyStatus.className = "settings-toolbar-status" + (changedCount ? " settings-toolbar-status-dirty" : "");
-    saveBtn.disabled = changedCount === 0;
+    const close = async () => {
+      if (unsavedCount > 0) {
+        const ok = await confirmDialog("Discard unsaved settings?", { danger: true, confirmLabel: "Discard" });
+        if (!ok) return;
+      }
+      removeDirtyGuard("settings-modal");
+      overlay.hidden = true;
+      box.classList.remove("modal-large");
+      box.innerHTML = "";
+    };
+
+    document.getElementById("cfg-cancel").onclick = close;
+    document.getElementById("cfg-reset").onclick = () => build(); // fresh copy from disk
+    document.getElementById("cfg-save").onclick = async () => {
+      try {
+        await api("/api/config", { method: "PUT", body: _cfgReadFormValues(schema) });
+        toast("Global configuration saved", "ok");
+        removeDirtyGuard("settings-modal");
+        overlay.hidden = true;
+        box.classList.remove("modal-large");
+        box.innerHTML = "";
+      } catch (e) {
+        toastError(e);
+      }
+    };
   };
 
-  document.querySelectorAll("[data-cfg-field]").forEach((el) => el.addEventListener("input", refresh));
-  refresh();
-
-  document.getElementById("cfg-reset").onclick = () => viewConfig();
-
-  document.getElementById("cfg-save").onclick = async () => {
-    try {
-      await api("/api/config", { method: "PUT", body: _cfgReadFormValues(schema) });
-      toast("Global configuration saved", "ok");
-      viewConfig();
-    } catch (e) {
-      toastError(e);
-    }
-  };
+  await build();
 }
 
-export { viewConfig };
+export { openSettingsModal };
