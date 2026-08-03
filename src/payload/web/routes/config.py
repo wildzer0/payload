@@ -20,6 +20,7 @@ from payload.core.config import (
     delete_sidecar_config,
     read_raw_sidecar,
     resolve_config_with_provenance,
+    upsert_batch_table,
     write_global_config,
     write_sidecar_config,
 )
@@ -241,14 +242,23 @@ async def pipeline_put_route(request: Request) -> JSONResponse:
     def _run():
         sources, batch_tables, config = discover_for_history(root)
         ref = _find_ref(sources, batch_tables, table)
-        _reject_batch(ref)
 
         registry = load_plugins(project_root=root)
         spec = PipelineSpec.from_raw_stages(raw_stages)
         validate_pipeline_against_registry(spec, registry)
 
-        write_sidecar_config(ref.source_paths[0], pipeline_stages=[_stage_to_raw(s) for s in spec.stages])
-        return _pipeline_payload(root, ref, config, table)
+        serialized = [_stage_to_raw(s) for s in spec.stages]
+        if ref.is_batch:
+            # a batch has no sidecar: its pipeline lives inline in the
+            # [[batch_table]] entry (the 'stages' field), exactly like
+            # the reader/writer/byte_order overrides
+            entry = next((e for e in config.batch_tables if e.get("name") == table), None)
+            upsert_batch_table(root, table, list(entry["sources"]) if entry else [], stages=serialized)
+        else:
+            write_sidecar_config(ref.source_paths[0], pipeline_stages=serialized)
+        # re-discover: the payload must reflect the just-written stages
+        sources, batch_tables, config = discover_for_history(root)
+        return _pipeline_payload(root, _find_ref(sources, batch_tables, table), config, table)
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
 
@@ -260,9 +270,13 @@ async def pipeline_delete_route(request: Request) -> JSONResponse:
     def _run():
         sources, batch_tables, config = discover_for_history(root)
         ref = _find_ref(sources, batch_tables, table)
-        _reject_batch(ref)
-        write_sidecar_config(ref.source_paths[0], pipeline_stages=[])
-        return _pipeline_payload(root, ref, config, table)
+        if ref.is_batch:
+            entry = next((e for e in config.batch_tables if e.get("name") == table), None)
+            upsert_batch_table(root, table, list(entry["sources"]) if entry else [], stages=[])
+        else:
+            write_sidecar_config(ref.source_paths[0], pipeline_stages=[])
+        sources, batch_tables, config = discover_for_history(root)
+        return _pipeline_payload(root, _find_ref(sources, batch_tables, table), config, table)
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))
 

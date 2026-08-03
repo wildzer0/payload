@@ -287,16 +287,21 @@ def test_pipeline_get_batch_table_reports_non_terminal_writer_checkpoint(tmp_pat
     assert writer_stage["checkpoint"] == "none"
 
 
-def test_pipeline_write_routes_reject_batch_table(tmp_path):
+def test_pipeline_write_routes_accept_batch_table(tmp_path):
+    """Batches carry their pipeline inline in [[batch_table]] — the
+    write routes accept them (this used to be rejected because the
+    routes were written for the sidecar path only)."""
     root = _init_project(tmp_path)
     _write_rows(root)
     _add_batch_table(root)
     client = _client(root)
 
     put_r = client.put("/api/pipeline/rows", json={"stages": [{"type": "reader", "name": "raw_text"}, {"type": "writer", "name": "bin"}]})
-    assert put_r.status_code == 400
+    assert put_r.status_code == 200
+    assert put_r.json()["explicit"] is True
     delete_r = client.delete("/api/pipeline/rows")
-    assert delete_r.status_code == 400
+    assert delete_r.status_code == 200
+    assert delete_r.json()["explicit"] is False
 
 
 def test_source_editor_rejects_batch_table(tmp_path):
@@ -463,3 +468,39 @@ def test_batch_candidates_hide_tracked_single_table_sources(tmp_path):
     files = client.get("/api/batch/candidates").json()["files"]
     assert "extra.raw" in files                # a free file is offered
     assert "example_table.raw" not in files    # a tracked table's source is hidden
+
+
+def test_batch_pipeline_round_trip(tmp_path):
+    """A batch table can carry its own pipeline: the stages live inline
+    in the [[batch_table]] entry (no sidecar), survive a GET, and are
+    cleared by DELETE — same editor, same UX as single tables."""
+    root = _init_project(tmp_path)
+    client = _client(root)
+    (root / "a.raw").write_text("# a\n0x01,\n")
+    (root / "b.raw").write_text("# b\n0x02,\n")
+    r = client.post("/api/batch", json={"name": "sensors", "sources": ["a.raw", "b.raw"]})
+    assert r.status_code == 200
+
+    # GET resolves the implicit 2-stage pipeline from the batch defaults
+    r = client.get("/api/pipeline/sensors")
+    assert r.status_code == 200
+    assert [s["kind"] for s in r.json()["stages"]] == ["reader", "writer"]
+
+    # PUT an explicit pipeline (same payload shape as single tables)
+    stages = [{"type": "reader", "name": "raw_text"}, {"type": "writer", "name": "hex"}]
+    r = client.put("/api/pipeline/sensors", json={"stages": stages})
+    assert r.status_code == 200
+    assert r.json()["explicit"] is True
+
+    # persisted inline in [[batch_table]], NOT in a sidecar
+    config_text = (root / "table-tool.toml").read_text()
+    assert "stages" in config_text
+    assert not (root / "a.config.toml").exists()
+    assert not (root / "b.config.toml").exists()
+
+    # GET returns it, DELETE clears it
+    assert client.get("/api/pipeline/sensors").json()["explicit"] is True
+    r = client.delete("/api/pipeline/sensors")
+    assert r.status_code == 200
+    assert r.json()["explicit"] is False
+    assert "stages" not in (root / "table-tool.toml").read_text()

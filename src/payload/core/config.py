@@ -613,6 +613,7 @@ def upsert_batch_table(
     reader: str | None = None,
     writer: str | None = None,
     byte_order: str | None = None,
+    stages: list | None = None,
 ) -> Path:
     """Creates the [[batch_table]] if missing, otherwise replaces its
     'sources' and sets/clears the optional reader/writer/byte_order —
@@ -628,11 +629,11 @@ def upsert_batch_table(
         batch_table_list.append(entry)
     else:
         entry["sources"] = list(sources)
-    for field, value in (("reader", reader), ("writer", writer), ("byte_order", byte_order)):
+    for field, value in (("reader", reader), ("writer", writer), ("byte_order", byte_order), ("stages", stages)):
         if value is None:
             continue
         if value:
-            entry[field] = value
+            entry[field] = list(value) if field == "stages" else value
         else:
             entry.pop(field, None)
     _write_batch_table_list(path, merged, batch_table_list)
