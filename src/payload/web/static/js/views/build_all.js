@@ -1,8 +1,10 @@
-/* Build-all view (route "/build-all"): the SSE live log for a batch
- * build of every table (see routes/build.py). */
+/* Build-all modal: the SSE live log for a batch build of every table
+ * (see routes/build.py). Opened from the Dashboard — the former
+ * "/build-all" page became a modal so the config + live log live where
+ * the action starts. */
 "use strict";
 
-import { render, raw, pageHeader, icon, iconSpan, val, chk, attachAutocomplete } from "../ui.js";
+import { render, raw, icon, iconSpan, val, chk, attachAutocomplete, openDialog } from "../ui.js";
 import { getPlugins } from "../api.js";
 
 const MAX_BUILD_ALL_JOBS = 32;
@@ -14,9 +16,11 @@ function _fmtSummary(d) {
   return parts.join(" · ");
 }
 
-function viewBuildAll() {
-  document.getElementById("content").innerHTML = render`
-    ${raw(pageHeader("Build all", "Build every table discovered under the project root."))}
+function openBuildAllModal() {
+  const dialog = openDialog({
+    large: true,
+    title: "Build all",
+    body: render`
     <div class="card">
       <h2 class="card-title">Configuration</h2>
       <div class="field-row">
@@ -46,7 +50,9 @@ function viewBuildAll() {
       <h2 class="card-title">Log</h2>
       <div class="log" id="ba-log"><span class="log-empty">Waiting…</span></div>
     </div>
-  `;
+    `,
+    actions: [{ label: "Close" }],
+  });
 
   getPlugins().then((plugins) => {
     const writerNames = plugins.plugins.filter((x) => x.kind === "writer").map((x) => x.name);
@@ -62,6 +68,7 @@ function viewBuildAll() {
 
   const statusEl = document.getElementById("ba-status");
   const setStatus = (html) => { statusEl.innerHTML = html; };
+  let es = null;
 
   document.getElementById("ba-start").onclick = () => {
     clampJobs();
@@ -77,7 +84,7 @@ function viewBuildAll() {
     const btn = document.getElementById("ba-start");
     btn.disabled = true;
     setStatus(`Running…`);
-    const es = new EventSource("/api/build-all/stream?" + params.toString());
+    es = new EventSource("/api/build-all/stream?" + params.toString());
     const appendLine = (text, cls) => {
       const line = document.createElement("div");
       line.className = "log-line" + (cls ? " log-line-" + cls : "");
@@ -106,6 +113,10 @@ function viewBuildAll() {
       btn.disabled = false;
     });
   };
+
+  // closing the modal stops the stream (a live build shouldn't keep
+  // running in the background once the log is gone)
+  dialog.then(() => { if (es) es.close(); });
 }
 
-export { viewBuildAll };
+export { openBuildAllModal };

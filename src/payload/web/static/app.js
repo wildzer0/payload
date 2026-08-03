@@ -9,7 +9,6 @@ import { initTheme, toggleTheme, _animateDetailsToggle, emptyCard, toastError, c
 import { api } from "./js/api.js";
 import { viewDashboard } from "./js/views/dashboard.js";
 import { viewTable } from "./js/views/table.js";
-import { viewBuildAll } from "./js/views/build_all.js";
 import { viewFiles } from "./js/views/files.js";
 import { viewBatch } from "./js/views/batch.js";
 import { viewLog } from "./js/views/log.js";
@@ -26,7 +25,6 @@ import { viewDocsList, viewDocDetail } from "./js/views/docs.js";
 const ROUTES = [
   [/^\/$/, viewDashboard],
   [/^\/table\/([^/]+)$/, viewTable],
-  [/^\/build-all$/, viewBuildAll],
   [/^\/files(?:\/(.+))?$/, viewFiles],
   [/^\/batch$/, viewBatch],
   [/^\/log$/, viewLog],
@@ -129,11 +127,11 @@ initTheme();
 /* global keyboard shortcuts:
  *   /  -> command palette       ?  -> this list
  *   g <key> -> jump (two-key navigation): g d dashboard, g f files,
- *   g l log, g b build-all, g t batch, g p plugins, g c clusters,
+ *   g l log, g t batch, g p plugins, g c clusters,
  *   g o doctor, g x config, g e export & clean, g h docs
  * Ignored while typing in an input/textarea/select/contenteditable. */
 const NAV_SHORTCUTS = {
-  d: "#/", f: "#/files", l: "#/log", b: "#/build-all", t: "#/batch",
+  d: "#/", f: "#/files", l: "#/log", t: "#/batch",
   p: "#/plugins", c: "#/clusters", o: "#/doctor", x: "#/config", e: "#/tools", h: "#/docs",
 };
 const _isTypingTarget = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);

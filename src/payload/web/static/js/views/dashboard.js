@@ -10,6 +10,7 @@ import {
   goldBadge, fmtBytes,
 } from "../ui.js";
 import { api, apiUpload, getPlugins, invalidateTableSources } from "../api.js";
+import { openBuildAllModal } from "./build_all.js";
 
 
 
@@ -249,6 +250,7 @@ async function viewDashboard() {
       <span class="subtitle" id="dash-count"></span>
       <span class="flex-1"></span>
       <a class="btn" href="/api/report/html" target="_blank">${icon("book")}Report</a>
+      <button id="dash-build-all">${icon("play")}Build all</button>
     </div>
     <div class="dash-table-wrap">
       <table class="dash-table">
@@ -267,6 +269,7 @@ async function viewDashboard() {
     ${raw(_orphanedTablesHtml(orphanedNames))}
   `;
 
+  document.getElementById("dash-build-all").onclick = openBuildAllModal;
   document.getElementById("dash-filter").addEventListener("input", (ev) => {
     filterText = ev.target.value;
     applyView();

@@ -10,7 +10,6 @@ let _palette = null; // { overlay, input, results, footer }
 
 const PAGES = [
   { label: "Dashboard", action: () => { location.hash = "#/"; } },
-  { label: "Build all", action: () => { location.hash = "#/build-all"; } },
   { label: "Files", action: () => { location.hash = "#/files"; } },
   { label: "Plugins", action: () => { location.hash = "#/plugins"; } },
   { label: "Clusters", action: () => { location.hash = "#/clusters"; } },
