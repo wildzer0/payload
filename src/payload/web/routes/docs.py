@@ -19,6 +19,10 @@ DOCS = [
         "description": "Every command with its options, the config file, exit codes, end-to-end workflows.",
     },
     {
+        "slug": "howto", "filename": "HOWTO.md", "title": "HOW TO — guided tour",
+        "description": "A step-by-step walkthrough of every operation, with the sample files in examples/howto/.",
+    },
+    {
         "slug": "plugins", "filename": "PLUGINS.md", "title": "Plugin guide",
         "description": "The full Reader/Writer/TableIR contract, explained with commented examples.",
     },

@@ -27,7 +27,7 @@ def test_docs_list(tmp_path):
 
     assert r.status_code == 200
     slugs = {d["slug"] for d in r.json()["docs"]}
-    assert slugs == {"usage", "plugins", "pipeline", "batch", "clusters"}
+    assert slugs == {"usage", "howto", "plugins", "pipeline", "batch", "clusters"}
 
 
 def test_doc_detail_returns_real_markdown_content(tmp_path):

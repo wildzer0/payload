@@ -1,0 +1,4 @@
+value,width,comment
+0x0A,1,min threshold
+0x1234,2,timeout in ms
+0xDEADBEEF,4,magic number

@@ -1,0 +1,2 @@
+# device status block — mode, reserved, flags
+0x01, 0x00, 0xFF
