@@ -2961,6 +2961,9 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 }
 .dash-batch-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .dash-batch-members { display: flex; flex-wrap: wrap; gap: 6px; }
+/* breathing room between the member list and the add-file form */
+.dash-batch-members + .dash-batch-toolbar { margin-top: 14px; }
+.dash-batch-members:empty + .dash-batch-toolbar { margin-top: 8px; }
 .dash-batch-member { display: inline-flex; align-items: center; gap: 6px; }
 .dash-batch-member .icon-only { color: var(--text-dim); width: 18px; height: 18px; }
 .dash-batch-member .icon-only:hover { color: var(--fail); }
