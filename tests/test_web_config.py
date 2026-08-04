@@ -333,3 +333,21 @@ def test_byte_order_change_is_committable(tmp_path):
     assert r.json()["committed"][0]["snapshot_id"] == 2
     # and it's clean again (byte_order is now part of the committed state)
     assert client.get("/api/status").json()["tables"][0]["state"] == "clean"
+
+
+def test_config_put_plugin_options(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    r = client.put("/api/config", json={"plugin": {"c_source": {"compiler": "gcc"}}})
+    assert r.status_code == 200
+    assert r.json()["plugin"]["c_source"]["compiler"] == "gcc"
+    assert 'compiler = "gcc"' in (root / "table-tool.toml").read_text()
+
+    # defaults alone still works; invalid plugin types are rejected
+    r = client.put("/api/config", json={"defaults": {"writer": "hex"}})
+    assert r.status_code == 200
+    r = client.put("/api/config", json={"defaults": "nope"})
+    assert r.status_code == 400
+    r = client.put("/api/config", json={"plugin": ["not", "a", "dict"]})
+    assert r.status_code == 400

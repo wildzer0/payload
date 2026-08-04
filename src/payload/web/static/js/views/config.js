@@ -9,7 +9,7 @@ import {
   escapeHtml, raw, render, statusPill, icon, val, toast, toastError,
   registerDirtyGuard, removeDirtyGuard, confirmDialog,
 } from "../ui.js";
-import { api } from "../api.js";
+import { api, getPlugins } from "../api.js";
 
 function _cfgFieldId(section, key) { return `cfg-${section}-${key}`; }
 
@@ -108,7 +108,8 @@ async function openSettingsModal() {
   box.classList.add("modal-large");
 
   const build = async () => {
-    const r = await api("/api/config");
+    const [r, plugins] = await Promise.all([api("/api/config"), getPlugins()]);
+    const pluginNames = (plugins.plugins || []).map((p) => p.name);
     const schema = r.schema;
     const currentByKey = Object.fromEntries(r.fields.map((f) => [f.key, f.value]));
     const originByKey = Object.fromEntries(r.fields.map((f) => [f.key, f.origin]));
@@ -138,6 +139,17 @@ async function openSettingsModal() {
             <button type="button" id="cfg-reset">${icon("refresh")}Reset</button>
           </div>
         </div>
+        <div class="card settings-section">
+          <h2 class="settings-section-title">Plugin options</h2>
+          <p class="settings-section-desc">Options the installed plugins read (e.g. the compiler/objcopy the c_source/obj plugins need) — written to [plugin.*] in table-tool.toml. A value starting with [ is treated as a list.</p>
+          <div class="cfg-plugin-rows" id="cfg-plugin-rows"></div>
+          <div class="cfg-plugin-addrow">
+            <select id="cfg-plugin-name"><option value="">— plugin —</option>${pluginNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("")}</select>
+            <input type="text" id="cfg-plugin-key" placeholder="key (e.g. compiler)">
+            <input type="text" id="cfg-plugin-value" placeholder="value (e.g. arm-none-eabi-gcc)">
+            <button id="cfg-plugin-add">${icon("plus")}Add</button>
+          </div>
+        </div>
         <div class="card">
           <h2 class="settings-section-title">TOML preview</h2>
           <pre class="settings-preview" id="cfg-preview"></pre>
@@ -163,6 +175,72 @@ async function openSettingsModal() {
 
     const fieldOriginal = (section, key) => originalValues.defaults[key];
 
+    /* ---------- plugin options (free-form [plugin.<name>]) ---------- */
+
+    // working copy: {pluginName: {key: value}} — values may be strings
+    // or arrays; a key with an empty value is removed on save
+    const originalPlugin = JSON.parse(JSON.stringify(r.plugin || {}));
+    const pluginState = JSON.parse(JSON.stringify(originalPlugin));
+    const pluginDirty = () => JSON.stringify(pluginState) !== JSON.stringify(originalPlugin);
+
+    const parsePluginValue = (raw) => {
+      const v = raw.trim();
+      if (v.startsWith("[") && v.endsWith("]")) {
+        try { return JSON.parse(v); } catch (e) { /* keep as string */ }
+      }
+      return v;
+    };
+    const fmtPluginValue = (v) => (Array.isArray(v) ? JSON.stringify(v) : String(v));
+
+    const renderPluginRows = () => {
+      const rowsEl = document.getElementById("cfg-plugin-rows");
+      if (!rowsEl) return;
+      const names = Object.keys(pluginState);
+      rowsEl.innerHTML = names.length
+        ? names.map((name) => Object.keys(pluginState[name] || {}).map((key) => {
+          const id = `cfg-pl-${name}-${key}`;
+          return `
+            <div class="cfg-plugin-row">
+              <span class="mono cfg-plugin-key">${escapeHtml(name)}.${escapeHtml(key)}</span>
+              <input type="text" class="mono" id="${id}" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" value="${escapeHtml(fmtPluginValue(pluginState[name][key]))}">
+              <button type="button" class="icon-only cfg-plugin-rm" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" title="Remove option">×</button>
+            </div>`;
+        }).join("")).join("")
+        : '<p class="subtitle m-0">No plugin options configured yet — add one below.</p>';
+      rowsEl.querySelectorAll("input[data-plugin-name]").forEach((input) => {
+        input.oninput = () => {
+          const name = input.dataset.pluginName;
+          const key = input.dataset.pluginKey;
+          pluginState[name][key] = parsePluginValue(input.value);
+          refresh();
+        };
+      });
+      rowsEl.querySelectorAll(".cfg-plugin-rm").forEach((btn) => {
+        btn.onclick = () => {
+          const name = btn.dataset.pluginName;
+          const key = btn.dataset.pluginKey;
+          delete pluginState[name][key];
+          if (!Object.keys(pluginState[name] || {}).length) delete pluginState[name];
+          renderPluginRows();
+          refresh();
+        };
+      });
+    };
+
+    document.getElementById("cfg-plugin-add").onclick = () => {
+      const name = document.getElementById("cfg-plugin-name").value;
+      const key = document.getElementById("cfg-plugin-key").value.trim();
+      const value = document.getElementById("cfg-plugin-value").value;
+      if (!name || !key) { toast("Pick a plugin and enter a key", "warn"); return; }
+      pluginState[name] = pluginState[name] || {};
+      pluginState[name][key] = parsePluginValue(value);
+      document.getElementById("cfg-plugin-name").value = "";
+      document.getElementById("cfg-plugin-key").value = "";
+      document.getElementById("cfg-plugin-value").value = "";
+      renderPluginRows();
+      refresh();
+    };
+
     const refresh = () => {
       const values = _cfgReadFormValues(schema);
       preview.textContent = _cfgTomlPreview(values);
@@ -175,12 +253,14 @@ async function openSettingsModal() {
         row.querySelector(".settings-row-dirty-note").hidden = !changed;
         if (changed) changedCount += 1;
       });
+      if (pluginDirty()) changedCount += 1;
       unsavedCount = changedCount;
-      dirtyStatus.textContent = changedCount ? `${changedCount} unsaved changes` : "No changes";
+      dirtyStatus.textContent = changedCount ? `${changedCount} unsaved change${changedCount === 1 ? "" : "s"}` : "No changes";
       dirtyStatus.className = "settings-toolbar-status" + (changedCount ? " settings-toolbar-status-dirty" : "");
       saveBtn.disabled = changedCount === 0;
     };
     document.querySelectorAll("[data-cfg-field]").forEach((el) => el.addEventListener("input", refresh));
+    renderPluginRows();
     refresh();
 
     // unsaved-changes guard while the modal is open (navigation and
@@ -205,7 +285,7 @@ async function openSettingsModal() {
     document.getElementById("cfg-reset").onclick = () => build(); // fresh copy from disk
     document.getElementById("cfg-save").onclick = async () => {
       try {
-        await api("/api/config", { method: "PUT", body: _cfgReadFormValues(schema) });
+        await api("/api/config", { method: "PUT", body: { ..._cfgReadFormValues(schema), plugin: pluginState } });
         toast("Global configuration saved", "ok");
         removeDirtyGuard("settings-modal");
         overlay.hidden = true;

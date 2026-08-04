@@ -218,6 +218,20 @@ await config.openSettingsModal();
 await flush();
 const cfgHtml = document.getElementById("modal-box").innerHTML;
 check("config: settings modal with default pill, no page", cfgHtml.includes("default") && !cfgHtml.includes("section-collapse"));
+const pluginRowsHtml = document.getElementById("cfg-plugin-rows").innerHTML;
+check("config: settings modal shows the plugin options",
+  cfgHtml.includes("Plugin options") && pluginRowsHtml.includes("c_source.compiler"));
+// saving sends the plugin dict too
+{
+  const puts = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (p2, o) => { if (String(p2).includes("/api/config") && o && o.method === "PUT") puts.push(JSON.parse(o.body)); return realFetch(p2, o); };
+  document.getElementById("cfg-save").fire("click");
+  await flush();
+  globalThis.fetch = realFetch;
+  const lastPut = puts[puts.length - 1];
+  check("config: save sends defaults + plugin", lastPut && lastPut.plugin && lastPut.plugin.c_source.compiler === "gcc");
+}
 document.getElementById("modal-overlay").hidden = true;
 
 // markdown

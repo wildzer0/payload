@@ -95,12 +95,17 @@ async def config_route(request: Request) -> JSONResponse:
 async def config_put_route(request: Request) -> JSONResponse:
     body = await request.json()
     defaults = body.get("defaults")
-    if not isinstance(defaults, dict):
-        raise InvalidRequestError("missing or invalid 'defaults' parameter (expected a table)")
+    if defaults is None and body.get("plugin") is None:
+        raise InvalidRequestError("missing 'defaults'/'plugin' — nothing to write")
+    if defaults is not None and not isinstance(defaults, dict):
+        raise InvalidRequestError("'defaults' must be a table")
+    plugin = body.get("plugin")
+    if plugin is not None and not isinstance(plugin, dict):
+        raise InvalidRequestError("'plugin' must be a table (name -> {key: value})")
     root = request.app.state.root
 
     def _run():
-        write_global_config(root, defaults)
+        write_global_config(root, defaults=defaults, plugin=plugin)
         return _config_payload(root, None)
 
     return JSONResponse(await anyio.to_thread.run_sync(_run))

@@ -137,7 +137,7 @@ const RESPONSES = {
   "/api/table/example_table/meta": { cluster: null, tags: [], notes: "", properties: {} },
   "/api/sidecar/example_table": { defaults: {} },
   "/api/table/example_table/analyze": { path: "build/example_table.bin", size: 10, analyzed: 10, capped: false, entropy: 3.2, printable_ratio: 0.5, distinct: 8, null_ratio: 0.1, ascii_runs: 1, magic: [], freq: [[0x41, 5]] },
-  "/api/config": { schema: { defaults: [] }, fields: [{ key: "defaults.writer", value: "bin", origin: "default" }] },
+  "/api/config": { schema: { defaults: [] }, fields: [{ key: "defaults.writer", value: "bin", origin: "default" }], plugin: { c_source: { compiler: "gcc" } } },
 };
 globalThis.fetch = (path) => {
   const url = String(path);
