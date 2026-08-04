@@ -26,6 +26,7 @@ function makeElement() {
       if (this._phantom[0]) return this._phantom[0];
       if (sel === ".toast-close") { this._toastClose = this._toastClose || makeElement(); return this._toastClose; }
       if (sel === "[data-table-settings]") { return document._els["dash-settings-btn"] ||= Object.assign(makeElement(), { dataset: { tableSettings: "sensors", isBatch: "1" } }); }
+      if (sel === "[data-offset]") { return this._stringBtn ||= Object.assign(makeElement(), { dataset: { offset: "0" } }); }
       return null;
     },
     querySelectorAll(sel) {
@@ -34,6 +35,7 @@ function makeElement() {
         const singleBtn = document._els["dash-settings-single"] ||= Object.assign(makeElement(), { dataset: { tableSettings: "example_table", isBatch: "" } });
         return [batchBtn, singleBtn];
       }
+      if (sel === "[data-offset]") return [this._stringBtn ||= Object.assign(makeElement(), { dataset: { offset: "0" } })];
       return this._phantom;
     },
     closest() { return null; },

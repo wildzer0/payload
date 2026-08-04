@@ -195,6 +195,18 @@ pld config show                # global config, no sidecar/cluster involved
 pld config show temp_table     # includes this table's cluster (if any) and sidecar (if any)
 ```
 
+#### `pld config set <table> --reader X [--writer Y] [--byte-order big] [--root <dir>]`
+
+Sets per-table overrides (the sidecar) — the CLI counterpart of the
+webapp's per-row **Settings** modal. Pass `""` to clear an override
+back to the project default. A batch table has no sidecar: use
+`pld batch --reader/--writer/--byte-order` for those.
+
+```bash
+pld config set temp_table --reader raw_text --byte-order big
+pld config set temp_table --reader ""     # back to auto
+```
+
 ### `pld cluster ...`, `pld tag`/`pld tags`, `pld meta`
 
 One cluster per table (shared `defaults`/`plugin` config overrides),
@@ -248,25 +260,42 @@ pld report
 pld report --html report.html
 ```
 
-### `pld batch [name] [--add <file>]... [--remove <file>]... [--delete] [--root <dir>]`
+### `pld batch [name] [--add <file>]... [--remove <file>]... [--reader X] [--writer Y] [--byte-order BO] [--stage STAGE]... [--delete] [--root <dir>]`
 
 Lists the `[[batch_table]]` declarations (no name), or mutates one:
-`--add`/`--remove` a member file (relative path, repeatable) or
-`--delete` the whole entry. The same config the webapp's **Batch**
-page (`/batch`) edits — no hand-editing `table-tool.toml`.
+`--add`/`--remove` a member file (relative path, repeatable),
+`--reader`/`--writer`/`--byte-order` overrides (`""` clears), `--stage`
+for an explicit pipeline (`reader:NAME` | `writer:NAME` | `exec:CMD`,
+repeatable; `--stage ""` clears the pipeline), or `--delete` the whole
+entry. The same config the webapp's batch **Settings** modal edits —
+no hand-editing `table-tool.toml`.
 
 ```bash
 pld batch
 pld batch sensors --add ROW2.txt
-pld batch sensors            # show members
+pld batch sensors            # show members + overrides
+pld batch sensors --reader raw_text --byte-order big
+pld batch sensors --stage reader:raw_text --stage writer:bin
 pld batch sensors --delete
+```
+
+### `pld ls [root] [-q/--quiet]`
+
+Lists the active tables with their build/golden state — the quick
+"what do I have?" view. `-q` prints just the names, one per line, for
+scripting.
+
+```bash
+pld ls
+pld ls -q | xargs pld build-all   # build everything by name
 ```
 
 ### `pld clone <table> <new_name> [--root <dir>]`
 
-Duplicates a single-file table (source, sidecar, tags/cluster) as a
-new table with fresh history — the webapp's "Clone" button does the
-same thing.
+Duplicates a table as a new one with fresh history — the webapp's
+"Clone" button does the same thing. A single-file table copies source,
+sidecar and tags/cluster; a batch table duplicates its `[[batch_table]]`
+entry (members + overrides + pipeline).
 
 ```bash
 pld clone example_table example_table_v2
@@ -698,18 +727,24 @@ interface: the same features as the CLI, plus the parts that only make
 sense in a browser. It talks to the same core, so a table built from
 the web is the same table built from the CLI.
 
-**Dashboard** (`/`): every table as a card — status (clean/dirty),
-golden state, reader/writer defaults (changeable here, saved to the
-sidecar), size, last modified, snapshot; import by drag&drop (a single
-file becomes a table, several files together offer a batch table).
-Tables and files are searchable from the command palette.
+**Dashboard** (`/`): a minimal table (name, status, golden, size,
+actions) — searchable/filterable by name, tag, cluster, note or
+property, quick build and download per row, a **Settings** button per
+row opening a modal (reader/writer/byte-order overrides — the sidecar
+for single tables, the `[[batch_table]]` entry for batches, including
+member management), a **Build all** modal, an HTML **Report**, and
+import by drag&drop (a single file becomes a table, several files
+together offer a batch table). Tables and files are searchable from
+the command palette.
 
-**Table page** (`/table/<name>`): build form, source editor
-(CodeMirror), visual pipeline builder, sidecar overrides, tags &
-cluster, history (commit/restore/golden), and the **Inspect** actions —
-`Diff vs snapshot` and `Diff vs golden` (the CLI's `pld diff` and
-`pld golden diff`, in the browser) and `Analyze output` (entropy/magic
-of the last build).
+**Table page** (`/table/<name>`): build form (with `--preview-diff`:
+builds to a temp dir and shows a side-by-side byte diff vs golden or
+the current output before committing), source editor (CodeMirror),
+visual pipeline editor (free canvas, drag-to-connect stages, auto
+layout, Save validates), tags & cluster + notes/properties, history
+(commit/restore/golden), and the **Inspect** actions — `Diff vs
+snapshot`, `Diff vs golden` and `Analyze output`. Batch tables show
+their members and inline overrides instead of the source editor.
 
 **Files** (`/files`): the whole project folder from the browser — tree
 with expand/collapse, multi-selection (Cmd/Ctrl+click, Shift+click,

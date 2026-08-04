@@ -28,8 +28,11 @@ from payload.core.config import (
     GLOBAL_CONFIG_FILENAME,
     add_batch_table_source,
     create_batch_table,
+    read_raw_sidecar,
     remove_batch_table_entry,
     remove_batch_table_source,
+    write_sidecar_config,
+    upsert_batch_table,
     create_cluster,
     delete_cluster,
     load_config,
@@ -57,6 +60,7 @@ from payload.core.errors import (
     DuplicateTableNameError,
     GoldenMismatchError,
     GoldenStaleError,
+    TableNotFoundError,
     InvalidCliOptionError,
     NoOutputToCommitError,
     NothingToCommitError,
@@ -149,6 +153,18 @@ def main(
     ctx.ensure_object(dict)
     ctx.obj["verbosity"] = verbose
     setup_logging(verbose)
+
+
+def _parse_cli_stage(raw: str) -> dict:
+    """'reader:raw_text' | 'writer:bin' | 'exec:objcopy ...' -> a raw
+    stage dict (same shape the webapp's pipeline editor PUTs)."""
+    if raw.startswith("reader:"):
+        return {"type": "reader", "name": raw.split(":", 1)[1]}
+    if raw.startswith("writer:"):
+        return {"type": "writer", "name": raw.split(":", 1)[1]}
+    if raw.startswith("exec:"):
+        return {"type": "exec", "command": raw.split(":", 1)[1].strip()}
+    raise PayloadError(f"invalid --stage '{raw}' (expected reader:NAME, writer:NAME or exec:COMMAND)")
 
 
 def _ref_byte_order(ref, base_config) -> str | None:
@@ -1015,6 +1031,55 @@ def import_cmd(
 # config show / report / export
 # --------------------------------------------------------------------------
 
+@config_app.command("set")
+def config_set(
+    ctx: typer.Context,
+    table: str = typer.Argument(..., help="Table name (a batch table has no sidecar — use 'pld batch --reader/--writer/--byte-order')"),
+    reader: Optional[str] = typer.Option(None, "--reader", help="Default reader for this table (\"\" clears the override)"),
+    writer: Optional[str] = typer.Option(None, "--writer", help="Default writer for this table (\"\" clears the override)"),
+    byte_order: Optional[str] = typer.Option(None, "--byte-order", help="Default byte order: little | big (\"\" clears the override)"),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Sets per-table overrides (the sidecar) — the CLI counterpart of
+    the webapp's per-row Settings modal. Pass \"\" to clear an override
+    back to the project default."""
+
+    def _run():
+        require_project_root(root)
+        if reader is None and writer is None and byte_order is None:
+            console.print("[yellow]![/] nothing to set — pass at least one of --reader/--writer/--byte-order")
+            return
+        sources, batch_tables, _ = discover_for_history(root)
+        ref = resolve_table_ref(sources, batch_tables, table)
+        if ref is None:
+            raise TableNotFoundError(table)
+        if ref.is_batch:
+            raise PayloadError("a batch table has no sidecar — set its overrides with 'pld batch --reader/--writer/--byte-order'")
+
+        current = read_raw_sidecar(ref.source_paths[0])
+        defaults = dict((current or {}).get("defaults", {}))
+        if reader is not None:
+            if reader:
+                defaults["reader"] = reader
+            else:
+                defaults.pop("reader", None)
+        if writer is not None:
+            if writer:
+                defaults["writer"] = writer
+            else:
+                defaults.pop("writer", None)
+        if byte_order is not None:
+            if byte_order:
+                defaults["byte_order"] = byte_order
+            else:
+                defaults.pop("byte_order", None)
+
+        write_sidecar_config(ref.source_paths[0], defaults=defaults)
+        console.print(f"[green]✓[/] '{table}' defaults updated: " + (", ".join(f"{k}={v}" for k, v in defaults.items()) or "all back to project defaults"))
+
+    run_command(_run, ctx.obj["verbosity"])
+
+
 @config_app.command("show")
 def config_show(
     ctx: typer.Context,
@@ -1757,12 +1822,18 @@ def batch_cmd(
     name: Optional[str] = typer.Argument(None, help="Batch table name (omit to list all)"),
     add: Optional[list[str]] = typer.Option(None, "--add", help="Add a member file (relative path, repeatable)"),
     remove: Optional[list[str]] = typer.Option(None, "--remove", help="Remove a member file (relative path, repeatable)"),
+    reader: Optional[str] = typer.Option(None, "--reader", help="Set the batch's reader override ("" clears it)"),
+    writer: Optional[str] = typer.Option(None, "--writer", help="Set the batch's writer override ("" clears it)"),
+    byte_order: Optional[str] = typer.Option(None, "--byte-order", help="Set the batch's byte_order override ("" clears it)"),
+    stage: Optional[list[str]] = typer.Option(None, "--stage", help="Explicit pipeline stage, repeatable: 'reader:name' | 'writer:name' | 'exec:cmd' (clears the pipeline when omitted)"),
     delete: bool = typer.Option(False, "--delete", help="Delete the whole batch table"),
     root: Path = typer.Option(Path("."), "--root"),
 ):
     """Lists the [[batch_table]] declarations, or mutates one: --add/
-    --remove a member file, --delete the whole entry. Same config the
-    webapp's Batch page edits (no hand-editing table-tool.toml)."""
+    --remove a member file, --reader/--writer/--byte-order overrides,
+    --stage for an explicit pipeline, --delete the whole entry. Same
+    config the webapp's Batch settings modal edits (no hand-editing
+    table-tool.toml)."""
 
     def _run():
         require_project_root(root)
@@ -1790,11 +1861,45 @@ def batch_cmd(
             console.print(f"[green]✓[/] '{name}' members updated")
             return
 
+        if reader is not None or writer is not None or byte_order is not None or stage is not None:
+            entry = declared.get(name)
+            if entry is None:
+                raise BatchTableError(name, "no [[batch_table]] with this name")
+            raw_sources = list(entry.get("sources") or [])
+            stages = None
+            if stage is not None:
+                stages = [_parse_cli_stage(x) for x in stage if x]  # --stage "" clears
+            upsert_batch_table(
+                root, name, raw_sources,
+                reader=reader, writer=writer, byte_order=byte_order,
+                stages=stages,
+            )
+            parts = []
+            if reader is not None:
+                parts.append(f"reader={reader or 'auto'}")
+            if writer is not None:
+                parts.append(f"writer={writer or 'auto'}")
+            if byte_order is not None:
+                parts.append(f"byte_order={byte_order or 'auto'}")
+            if stage is not None:
+                parts.append(f"pipeline={len(stages or [])} stage(s)" if stages else "pipeline cleared")
+            console.print(f"[green]✓[/] '{name}' overrides updated: " + ", ".join(parts))
+            return
+
         entry = declared.get(name)
         if entry is None:
             console.print(f"[yellow]![/] no batch table '{name}'")
             return
-        console.print(f"'{name}': " + (", ".join(entry.get("sources") or []) or "[dim]no members[/]"))
+        src = ", ".join(entry.get("sources") or []) or "[dim]no members[/]"
+        overrides = []
+        for k in ("reader", "writer", "byte_order"):
+            if entry.get(k):
+                overrides.append(f"{k}={entry[k]}")
+        stages = entry.get("stages")
+        if stages:
+            overrides.append(f"{len(stages)} stage(s)")
+        suffix = f" [dim]({', '.join(overrides)})[/]" if overrides else ""
+        console.print(f"'{name}': {src}{suffix}")
 
     run_command(_run, ctx.obj["verbosity"])
 
@@ -2479,8 +2584,9 @@ def clone(
     new_name: str = typer.Argument(..., help="Name for the copy"),
     root: Path = typer.Option(Path("."), "--root"),
 ):
-    """Duplicate a single-file table (source + sidecar + tags/cluster)
-    as a new table with fresh history."""
+    """Duplicate a table as a new one with fresh history: a single-file
+    table copies source + sidecar + tags/cluster; a batch table
+    duplicates its [[batch_table]] entry (members + overrides)."""
 
     def _run():
         require_project_root(root)

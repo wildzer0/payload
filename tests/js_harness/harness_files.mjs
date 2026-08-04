@@ -43,6 +43,25 @@ await flush();
 check("files: Analyze fills the panel",
   document.getElementById("fs-analyze-panel").innerHTML.includes("entropy") || document.getElementById("fs-analyze-panel").innerHTML.includes("4.5"));
 
+// strings: enabling the toggle + clicking a string jumps to its offset
+// via an as_hex=1 read (no rows-less response crash)
+{
+  const toggle = document.getElementById("fs-strings-toggle");
+  if (toggle) { toggle.checked = true; toggle.fire("change"); }
+  await flush();
+  const strBox = document.getElementById("fs-strings");
+  const strBtn = strBox && strBox.querySelector("[data-offset]");
+  const reads = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (p2, o) => { const u = String(p2); if (u.includes("/api/fs/read")) reads.push(u); return realFetch(p2, o); };
+  if (strBtn) strBtn.fire("click");
+  await flush();
+  globalThis.fetch = realFetch;
+  check("files: string click reads with as_hex=1 (no crash)",
+    reads.length > 0 && reads.every((u) => u.includes("as_hex=1")));
+  document.getElementById("modal-overlay").hidden = true;
+}
+
 // table page
 const table = await import("./app/js/views/table.js");
 await table.viewTable("example_table");

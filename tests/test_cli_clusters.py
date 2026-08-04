@@ -515,3 +515,51 @@ def test_ls_shows_stale_when_source_changed(tmp_path, monkeypatch):
     r = runner.invoke(app, ["ls"])
     assert r.exit_code == 0
     assert "stale" in r.stdout
+
+
+def test_config_set_sidecar_overrides(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+
+    r = runner.invoke(app, ["config", "set", "example_table", "--reader", "raw_text", "--byte-order", "big"])
+    assert r.exit_code == 0, r.stderr
+    sidecar = (proj / "example_table.config.toml").read_text()
+    assert 'reader = "raw_text"' in sidecar and 'byte_order = "big"' in sidecar
+
+    # "" clears back to the project default
+    r = runner.invoke(app, ["config", "set", "example_table", "--reader", ""])
+    assert r.exit_code == 0, r.stderr
+    assert 'reader = "raw_text"' not in (proj / "example_table.config.toml").read_text()
+
+    # a batch has no sidecar
+    r = runner.invoke(app, ["config", "set", "sensors", "--reader", "raw_text"])  # no such table -> error
+    assert r.exit_code != 0
+
+
+def test_config_set_guard_branches(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+
+    # no option -> nothing to set
+    r = runner.invoke(app, ["config", "set", "example_table"])
+    assert r.exit_code == 0 and "nothing to set" in r.stdout
+
+    # unknown table -> not found
+    r = runner.invoke(app, ["config", "set", "nope", "--reader", "raw_text"])
+    assert r.exit_code == 4
+
+    # writer + byte_order clear paths (an empty sidecar is deleted)
+    runner.invoke(app, ["config", "set", "example_table", "--writer", "bin", "--byte-order", "big"])
+    r = runner.invoke(app, ["config", "set", "example_table", "--writer", "", "--byte-order", ""])
+    assert r.exit_code == 0
+    assert not (proj / "example_table.config.toml").exists()
+
+
+def test_config_set_rejects_batch(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "x.raw").write_text("# x\n0x01,\n")
+    runner.invoke(app, ["import", str(external / "x.raw"), "--new-batch", "sensors"])
+
+    r = runner.invoke(app, ["config", "set", "sensors", "--reader", "raw_text"])
+    assert r.exit_code != 0
+    assert "has no sidecar" in r.stderr

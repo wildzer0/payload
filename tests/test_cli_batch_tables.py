@@ -290,3 +290,60 @@ def test_watch_initial_sweep_includes_batch_table(tmp_path, monkeypatch):
     result = runner.invoke(app, ["build-all", "--dry-run"])
 
     assert result.exit_code == 0, result.stdout
+
+
+def test_batch_override_and_pipeline_flags(tmp_path, monkeypatch):
+    """pld batch --reader/--writer/--byte-order/--stage mirror the
+    webapp's batch settings modal."""
+    proj = _init_project(tmp_path, monkeypatch)
+    _write_rows(proj)
+    _add_batch_table(proj)
+
+    r = runner.invoke(app, ["batch", "rows", "--reader", "raw_text", "--byte-order", "big",
+                            "--stage", "reader:raw_text", "--stage", "writer:bin"])
+    assert r.exit_code == 0, r.stderr
+    shown = runner.invoke(app, ["batch", "rows"]).stdout
+    assert "reader=raw_text" in shown and "byte_order=big" in shown and "2 stage(s)" in shown
+
+    # clearing one override
+    r = runner.invoke(app, ["batch", "rows", "--reader", ""])
+    assert r.exit_code == 0, r.stderr
+    assert "reader=raw_text" not in runner.invoke(app, ["batch", "rows"]).stdout
+
+
+def test_batch_stage_guard_branches(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    _write_rows(proj)
+    _add_batch_table(proj)
+
+    # invalid stage syntax
+    r = runner.invoke(app, ["batch", "rows", "--stage", "bogus"])
+    assert r.exit_code != 0 and "invalid --stage" in r.stderr
+
+    # exec stage parses
+    r = runner.invoke(app, ["batch", "rows", "--stage", "exec:objcopy -O binary"])
+    assert r.exit_code == 0, r.stderr
+
+    # empty --stage clears the pipeline
+    runner.invoke(app, ["batch", "rows", "--stage", "reader:raw_text", "--stage", "writer:bin"])
+    r = runner.invoke(app, ["batch", "rows", "--stage", ""])
+    assert r.exit_code == 0, r.stderr
+    assert "stage(s)" not in runner.invoke(app, ["batch", "rows"]).stdout
+
+    # unknown batch with overrides
+    r = runner.invoke(app, ["batch", "ghost", "--reader", "raw_text"])
+    assert r.exit_code != 0
+
+
+def test_batch_writer_byteorder_flags(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    _write_rows(proj)
+    _add_batch_table(proj)
+
+    r = runner.invoke(app, ["batch", "rows", "--writer", "hex", "--byte-order", "big"])
+    assert r.exit_code == 0, r.stderr
+    shown = runner.invoke(app, ["batch", "rows"]).stdout
+    assert "writer=hex" in shown and "byte_order=big" in shown
+    r = runner.invoke(app, ["batch", "rows", "--writer", "", "--byte-order", ""])
+    assert r.exit_code == 0, r.stderr
+    assert "writer=hex" not in runner.invoke(app, ["batch", "rows"]).stdout

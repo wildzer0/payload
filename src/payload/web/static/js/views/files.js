@@ -576,7 +576,10 @@ async function viewFiles(rawPath) {
     const pageSize = r.limit || 256;
     const loadPage = async (offset) => {
       try {
-        const next = await api(`/api/fs/read?path=${encodeURIComponent(rel)}&offset=${offset}&limit=${pageSize}`);
+        // as_hex=1 is mandatory: a text-extension file viewed as hex
+        // would otherwise come back is_text (no rows) and crash the
+        // hex renderer when jumping from a string to its offset
+        const next = await api(`/api/fs/read?path=${encodeURIComponent(rel)}&offset=${offset}&limit=${pageSize}&as_hex=1`);
         const hex = document.getElementById("fs-hex");
         if (hex) hex.innerHTML = hexRowsHtml(next);
         const label = document.getElementById("fs-offset-label");
