@@ -568,8 +568,13 @@ async function viewTable(name) {
     }
   };
 
+  // the batch/single decision must be known BEFORE the loaders run:
+  // loadSource/loadSidecarCard check isBatchTable() to avoid calling
+  // endpoints that reject batches — awaiting ensureTableSources first
+  // removes the race (Promise.all used to start them in parallel).
+  await ensureTableSources(name);
   await Promise.all([
-    ensureTableSources(name), loadSource(name), loadPipelineBuilder(name),
+    loadSource(name), loadPipelineBuilder(name),
     loadSidecarCard(name), loadHistory(name), loadGoldenSummary(name),
   ]);
 }

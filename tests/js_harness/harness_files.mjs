@@ -57,6 +57,23 @@ check("table: source Edit opens the editor modal with dirty guard",
 document.getElementById("modal-overlay").hidden = true;
 
 // batch table page: source/sidecar cards show members/overrides (no 400s)
+// and the rejected endpoints are NEVER called (race: is_batch must be
+// known before the loaders run)
+{
+  const hitSource = [], hitSidecar = [];
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (p2, o) => {
+    const u = String(p2);
+    if (u.includes("/api/source/sensors")) hitSource.push(u);
+    if (u.includes("/api/sidecar/sensors")) hitSidecar.push(u);
+    return realFetch(p2, o);
+  };
+  await table.viewTable("sensors");
+  await flush();
+  globalThis.fetch = realFetch;
+  check("table: batch page never calls /api/source or /api/sidecar",
+    hitSource.length === 0 && hitSidecar.length === 0);
+}
 await table.viewTable("sensors");
 await flush();
 check("table: batch page source card shows members (no source 400)",
