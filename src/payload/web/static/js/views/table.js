@@ -652,7 +652,7 @@ async function loadSource(name) {
       el.innerHTML = render`
         <p class="subtitle">Batch table — ${members.length} member file${members.length === 1 ? "" : "s"} (concatenation order). Members and overrides are managed from the Dashboard's Settings modal.</p>
         <ol class="batch-members-list">
-          ${members.map((m, i) => `<li><span class="mono">${i + 1}.</span> <span class="mono">${escapeHtml(m)}</span></li>`).join("")}
+          ${raw(members.map((m, i) => `<li><span class="mono">${i + 1}.</span> <span class="mono">${escapeHtml(m)}</span></li>`).join(""))}
         </ol>
       `;
       return;
@@ -795,13 +795,15 @@ async function loadSidecarCard(name) {
       // [[batch_table]] (read-only here — edit from the Dashboard)
       const resp = await api("/api/batch");
       const b = (resp.batches || []).find((x) => x.name === name);
-      const chip = (label, value) => `<div class="field"><label>${label}</label><input type="text" class="mono" value="${escapeHtml(value || "")}" disabled></div>`;
+      const pill = (label, value) => value
+        ? `<span class="meta-chip"><strong>${escapeHtml(label)}</strong><span class="mono">${escapeHtml(value)}</span></span>`
+        : `<span class="meta-chip"><strong>${escapeHtml(label)}</strong><span class="subtitle">auto</span></span>`;
       el.innerHTML = `
         <p class="subtitle">Batch overrides live inline in [[batch_table]] — managed from the Dashboard's Settings modal.</p>
-        <div class="field-row">
-          ${chip("Reader", b ? b.reader : "")}
-          ${chip("Writer", b ? b.writer : "")}
-          ${chip("Byte order", b ? b.byte_order : "")}
+        <div class="fs-detail-meta">
+          ${pill("Reader", b ? b.reader : "")}
+          ${pill("Writer", b ? b.writer : "")}
+          ${pill("Byte order", b ? b.byte_order : "")}
         </div>
       `;
       return;

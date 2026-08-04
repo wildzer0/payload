@@ -76,12 +76,14 @@ document.getElementById("modal-overlay").hidden = true;
 }
 await table.viewTable("sensors");
 await flush();
-check("table: batch page source card shows members (no source 400)",
-  document.getElementById("view-result").innerHTML.includes("Batch table"));
-check("table: batch page sidecar card shows overrides (no sidecar 400)",
-  document.getElementById("sidecar-result").innerHTML.includes("Byte order"));
+const batchSrc = document.getElementById("view-result").innerHTML;
+const batchSc = document.getElementById("sidecar-result").innerHTML;
+check("table: batch page source card shows members as real <li> (not escaped)",
+  batchSrc.includes("Batch table") && batchSrc.includes("<li>") && !batchSrc.includes("&lt;li"));
+check("table: batch page sidecar card shows overrides as pills (no input boxes)",
+  batchSc.includes("Byte order") && batchSc.includes("meta-chip") && !batchSc.includes("<input"));
 check("table: no source/sidecar rejection errors surfaced",
-  !document.getElementById("view-result").innerHTML.includes("only supports") && !document.getElementById("sidecar-result").innerHTML.includes("no sidecar"));
+  !batchSrc.includes("only supports") && !batchSc.includes("no sidecar"));
 
 // pipeline card compact
 await table.viewTable("example_table");
