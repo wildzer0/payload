@@ -406,14 +406,35 @@ def _drop_none_values(section: dict) -> dict:
     return {k: v for k, v in section.items() if v is not None}
 
 
-def write_global_config(project_root: Path, defaults: dict) -> Path:
-    """Writes/overwrites the [defaults] section of table-tool.toml,
-    preserving any existing [plugin.*]/[pipeline] as is. Validates
-    BEFORE writing: a config that wouldn't pass load_config() never
-    ends up on disk."""
+def write_global_config(project_root: Path, defaults: dict | None = None, plugin: dict | None = None) -> Path:
+    """Writes/overwrites the [defaults] (and optionally [plugin.*])
+    sections of table-tool.toml, preserving anything else as is.
+    Validates BEFORE writing: a config that wouldn't pass load_config()
+    never ends up on disk."""
     path = project_root / GLOBAL_CONFIG_FILENAME
     merged = dict(_load_toml(path)) if path.exists() else {}
-    merged["defaults"] = _drop_none_values(defaults)
+    if defaults is not None:
+        merged["defaults"] = _drop_none_values(defaults)
+    if plugin is not None:
+        plugin_section = dict(merged.get("plugin", {}))
+        for name, values in plugin.items():
+            if not values:
+                plugin_section.pop(name, None)
+                continue
+            section = dict(plugin_section.get(name, {}))
+            for key, value in values.items():
+                if value is None or value == "":
+                    section.pop(key, None)
+                else:
+                    section[key] = value
+            if section:
+                plugin_section[name] = section
+            else:
+                plugin_section.pop(name, None)
+        if plugin_section:
+            merged["plugin"] = plugin_section
+        else:
+            merged.pop("plugin", None)
 
     _build_config(merged, path)
 
@@ -436,6 +457,7 @@ def write_sidecar_config(
     source_path: Path,
     defaults: dict | None = None,
     pipeline_stages: list | None = None,
+    plugin: dict | None = None,
 ) -> Path:
     """Updates source_path's sidecar one piece at a time: each None
     parameter leaves the existing section untouched, an empty
@@ -457,6 +479,27 @@ def write_sidecar_config(
             merged["pipeline"] = {**merged.get("pipeline", {}), "stages": pipeline_stages}
         else:
             merged.pop("pipeline", None)
+    if plugin is not None:
+        # [plugin.<name>] — merge per plugin name; a key set to None/"" is removed
+        plugin_section = dict(merged.get("plugin", {}))
+        for name, values in plugin.items():
+            if not values:
+                plugin_section.pop(name, None)
+                continue
+            section = dict(plugin_section.get(name, {}))
+            for key, value in values.items():
+                if value is None or value == "":
+                    section.pop(key, None)
+                else:
+                    section[key] = value
+            if section:
+                plugin_section[name] = section
+            else:
+                plugin_section.pop(name, None)
+        if plugin_section:
+            merged["plugin"] = plugin_section
+        else:
+            merged.pop("plugin", None)
 
     # Same structural validation as _build_config for defaults
     # (pipeline.stages has already been validated by the caller with

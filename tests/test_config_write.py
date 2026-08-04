@@ -586,3 +586,22 @@ def test_report_html_includes_warnings(tmp_path):
     (root / "dupe.txt").write_text("# b\n", encoding="utf-8")
     body = render_report_html(root)
     assert "Project needs attention" in body
+
+
+def test_write_plugin_empty_dict_removes_section(tmp_path):
+    root = _init_project(tmp_path)
+    src = root / "x.raw"
+    src.write_text("# x\n")
+    # defaults keep the sidecar alive after the plugin section is removed
+    sidecar = write_sidecar_config(src, defaults={"reader": "raw_text"}, plugin={"c_source": {"compiler": "gcc"}})
+    assert sidecar.exists() and "c_source" in sidecar.read_text()
+
+    # an empty plugin dict removes the whole section
+    write_sidecar_config(src, plugin={"c_source": {}})
+    assert "c_source" not in sidecar.read_text()
+    assert sidecar.exists()  # the defaults keep the sidecar alive
+
+    # global variant: empty plugin dict removes the section
+    write_global_config(root, defaults={"writer": "bin"}, plugin={"c_source": {"compiler": "gcc"}})
+    write_global_config(root, plugin={"c_source": {}})
+    assert "[plugin.c_source]" not in (root / "table-tool.toml").read_text()

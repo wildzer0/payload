@@ -217,6 +217,24 @@ same table built from the CLI.
 pld doctor                               # toolchain, plugins, config, directories
 ```
 
+Plugins that need an external binary (e.g. `c_source` needs a
+compiler + objcopy, `obj` needs objcopy with a target/arch) read their
+options from `[plugin.<name>]` — the doctor check reads the same
+section, so the "compiler not configured" warning goes away as soon as
+you configure it:
+
+```bash
+pld config set --plugin c_source.compiler=arm-none-eabi-gcc \
+               --plugin c_source.objcopy=arm-none-eabi-objcopy
+pld config set --plugin obj.objcopy_target=elf32-littlearm \
+               --plugin obj.objcopy_arch=arm
+```
+
+Without a table this writes the GLOBAL `table-tool.toml`; pass a table
+name to put the options in that table's sidecar instead (per-table
+overrides). `--plugin name.key=` clears a key. The doctor check then
+verifies the binary is actually on `PATH`.
+
 Conventions worth knowing:
 
 - a table is a source file; its name is the file's stem (a batch

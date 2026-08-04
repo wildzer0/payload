@@ -199,15 +199,19 @@ pld config show                # global config, no sidecar/cluster involved
 pld config show temp_table     # includes this table's cluster (if any) and sidecar (if any)
 ```
 
-#### `pld config set <table> --reader X [--writer Y] [--byte-order big] [--root <dir>]`
+#### `pld config set [table] [--reader X] [--writer Y] [--byte-order BO] [--plugin NAME.KEY=VALUE]... [--root <dir>]`
 
-Sets per-table overrides (the sidecar) — the CLI counterpart of the
-webapp's per-row **Settings** modal. Pass `""` to clear an override
-back to the project default. A batch table has no sidecar: use
+Sets overrides — the CLI counterpart of the webapp's Settings modals.
+With a `table`: per-table (the sidecar). Without: the GLOBAL
+`table-tool.toml`. `--plugin` configures a plugin's options (e.g. the
+compiler/objcopy the `c_source`/`obj` plugins need) — repeatable,
+`NAME.KEY=` clears a key. Pass `""` to clear a value back to the
+project default. A batch table has no sidecar: use
 `pld batch --reader/--writer/--byte-order` for those.
 
 ```bash
 pld config set temp_table --reader raw_text --byte-order big
+pld config set --plugin c_source.compiler=arm-none-eabi-gcc
 pld config set temp_table --reader ""     # back to auto
 ```
 

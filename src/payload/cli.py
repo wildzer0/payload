@@ -33,6 +33,7 @@ from payload.core.config import (
     remove_batch_table_source,
     write_sidecar_config,
     upsert_batch_table,
+    write_global_config,
     create_cluster,
     delete_cluster,
     load_config,
@@ -1034,21 +1035,60 @@ def import_cmd(
 @config_app.command("set")
 def config_set(
     ctx: typer.Context,
-    table: str = typer.Argument(..., help="Table name (a batch table has no sidecar — use 'pld batch --reader/--writer/--byte-order')"),
-    reader: Optional[str] = typer.Option(None, "--reader", help="Default reader for this table (\"\" clears the override)"),
-    writer: Optional[str] = typer.Option(None, "--writer", help="Default writer for this table (\"\" clears the override)"),
+    table: Optional[str] = typer.Argument(None, help="Table name (omit for the GLOBAL config). A batch table has no sidecar — use 'pld batch --reader/--writer/--byte-order'"),
+    reader: Optional[str] = typer.Option(None, "--reader", help="Default reader (\"\" clears the override)"),
+    writer: Optional[str] = typer.Option(None, "--writer", help="Default writer (\"\" clears the override)"),
     byte_order: Optional[str] = typer.Option(None, "--byte-order", help="Default byte order: little | big (\"\" clears the override)"),
+    plugin: Optional[list[str]] = typer.Option(None, "--plugin", help="Plugin option, repeatable: NAME.KEY=VALUE — e.g. --plugin c_source.compiler=arm-none-eabi-gcc (\"\" clears the key)"),
     root: Path = typer.Option(Path("."), "--root"),
 ):
-    """Sets per-table overrides (the sidecar) — the CLI counterpart of
-    the webapp's per-row Settings modal. Pass \"\" to clear an override
-    back to the project default."""
+    """Sets overrides — the CLI counterpart of the webapp's Settings
+    modals. With a table: per-table (sidecar). Without a table: the
+    GLOBAL table-tool.toml. Pass \"\" to clear a value back to the
+    project default."""
 
     def _run():
         require_project_root(root)
-        if reader is None and writer is None and byte_order is None:
-            console.print("[yellow]![/] nothing to set — pass at least one of --reader/--writer/--byte-order")
+        if reader is None and writer is None and byte_order is None and not plugin:
+            console.print("[yellow]![/] nothing to set — pass --reader/--writer/--byte-order and/or --plugin")
             return
+
+        # parse --plugin name.key=value into {name: {key: value}}
+        plugin_updates: dict[str, dict[str, str]] = {}
+        for raw in plugin or []:
+            if "." not in raw or "=" not in raw:
+                raise PayloadError(f"invalid --plugin '{raw}' (expected NAME.KEY=VALUE, e.g. c_source.compiler=gcc)")
+            name, kv = raw.split(".", 1)
+            key, _, value = kv.partition("=")
+            if not name or not key:
+                raise PayloadError(f"invalid --plugin '{raw}' (expected NAME.KEY=VALUE)")
+            plugin_updates.setdefault(name, {})[key] = value
+
+        if table is None:
+            # GLOBAL config (table-tool.toml)
+            current = load_config(root)
+            defaults = None
+            if reader is not None or writer is not None or byte_order is not None:
+                defaults = dict(current.defaults.__dict__) if hasattr(current.defaults, "__dict__") else {}
+                if reader is not None:
+                    if reader:
+                        defaults["reader"] = reader
+                    else:
+                        defaults.pop("reader", None)
+                if writer is not None:
+                    if writer:
+                        defaults["writer"] = writer
+                    else:
+                        defaults.pop("writer", None)
+                if byte_order is not None:
+                    if byte_order:
+                        defaults["byte_order"] = byte_order
+                    else:
+                        defaults.pop("byte_order", None)
+            write_global_config(root, defaults=defaults, plugin=plugin_updates or None)
+            console.print("[green]✓[/] global config updated")
+            return
+
         sources, batch_tables, _ = discover_for_history(root)
         ref = resolve_table_ref(sources, batch_tables, table)
         if ref is None:
@@ -1074,8 +1114,8 @@ def config_set(
             else:
                 defaults.pop("byte_order", None)
 
-        write_sidecar_config(ref.source_paths[0], defaults=defaults)
-        console.print(f"[green]✓[/] '{table}' defaults updated: " + (", ".join(f"{k}={v}" for k, v in defaults.items()) or "all back to project defaults"))
+        write_sidecar_config(ref.source_paths[0], defaults=defaults, plugin=plugin_updates or None)
+        console.print(f"[green]✓[/] '{table}' updated: " + (", ".join(f"{k}={v}" for k, v in defaults.items()) or "defaults cleared"))
 
     run_command(_run, ctx.obj["verbosity"])
 

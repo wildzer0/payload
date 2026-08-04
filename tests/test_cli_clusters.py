@@ -563,3 +563,83 @@ def test_config_set_rejects_batch(tmp_path, monkeypatch):
     r = runner.invoke(app, ["config", "set", "sensors", "--reader", "raw_text"])
     assert r.exit_code != 0
     assert "has no sidecar" in r.stderr
+
+
+def test_config_set_plugin_options(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+
+    # global plugin options
+    r = runner.invoke(app, ["config", "set", "--plugin", "c_source.compiler=arm-none-eabi-gcc",
+                            "--plugin", "obj.objcopy_target=elf32-littlearm"])
+    assert r.exit_code == 0, r.stderr
+    toml = (proj / "table-tool.toml").read_text()
+    assert 'compiler = "arm-none-eabi-gcc"' in toml and 'objcopy_target = "elf32-littlearm"' in toml
+
+    # per-table plugin option (sidecar)
+    r = runner.invoke(app, ["config", "set", "example_table", "--plugin", "c_source.compiler=gcc"])
+    assert r.exit_code == 0, r.stderr
+    sidecar = (proj / "example_table.config.toml").read_text()
+    assert 'compiler = "gcc"' in sidecar
+
+    # clear a key
+    r = runner.invoke(app, ["config", "set", "example_table", "--plugin", "c_source.compiler="])
+    assert r.exit_code == 0, r.stderr
+    assert not (proj / "example_table.config.toml").exists()  # empty sidecar removed
+
+    # invalid syntax
+    r = runner.invoke(app, ["config", "set", "--plugin", "bogus"])
+    assert r.exit_code != 0 and "invalid --plugin" in r.stderr
+
+
+def test_config_set_global_defaults_and_plugin_clear(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+
+    # global defaults without a table
+    r = runner.invoke(app, ["config", "set", "--reader", "raw_text", "--byte-order", "big"])
+    assert r.exit_code == 0, r.stderr
+    toml = (proj / "table-tool.toml").read_text()
+    assert 'reader = "raw_text"' in toml and 'byte_order = "big"' in toml
+
+    # clear a global plugin key leaving an empty section -> section removed
+    runner.invoke(app, ["config", "set", "--plugin", "c_source.compiler=gcc"])
+    r = runner.invoke(app, ["config", "set", "--plugin", "c_source.compiler="])
+    assert r.exit_code == 0, r.stderr
+    assert "[plugin.c_source]" not in (proj / "table-tool.toml").read_text()
+
+    # global defaults cleared back
+    r = runner.invoke(app, ["config", "set", "--reader", "", "--byte-order", ""])
+    assert r.exit_code == 0, r.stderr
+    assert 'reader = "raw_text"' not in (proj / "table-tool.toml").read_text()
+
+
+def test_config_set_plugin_edge_branches(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+    # missing key / missing name -> invalid
+    r = runner.invoke(app, ["config", "set", "--plugin", "c_source.=gcc"])
+    assert r.exit_code != 0 and "invalid --plugin" in r.stderr
+    # a global plugin section with several keys: clearing ONE key keeps
+    # the section; clearing the last key removes it
+    runner.invoke(app, ["config", "set", "--plugin", "c_source.compiler=gcc", "--plugin", "c_source.objcopy=objcopy"])
+    r = runner.invoke(app, ["config", "set", "--plugin", "c_source.compiler="])
+    assert r.exit_code == 0 and "[plugin.c_source]" in (proj / "table-tool.toml").read_text()
+    r = runner.invoke(app, ["config", "set", "--plugin", "c_source.objcopy="])
+    assert "[plugin.c_source]" not in (proj / "table-tool.toml").read_text()
+
+
+def test_config_set_global_writer_and_sidecar_section(tmp_path, monkeypatch):
+    proj = _init_project(tmp_path, monkeypatch)
+
+    # global writer set + clear
+    r = runner.invoke(app, ["config", "set", "--writer", "hex"])
+    assert r.exit_code == 0 and 'writer = "hex"' in (proj / "table-tool.toml").read_text()
+    r = runner.invoke(app, ["config", "set", "--writer", ""])
+    assert 'writer = "hex"' not in (proj / "table-tool.toml").read_text()
+
+    # sidecar plugin section with two keys: clearing one keeps the section
+    runner.invoke(app, ["config", "set", "example_table", "--plugin", "obj.objcopy_target=elf32-littlearm", "--plugin", "obj.objcopy_arch=arm"])
+    r = runner.invoke(app, ["config", "set", "example_table", "--plugin", "obj.objcopy_target="])
+    assert r.exit_code == 0
+    sidecar = (proj / "example_table.config.toml").read_text()
+    assert "objcopy_arch" in sidecar and "objcopy_target" not in sidecar
+    r = runner.invoke(app, ["config", "set", "example_table", "--plugin", "obj.objcopy_arch="])
+    assert not (proj / "example_table.config.toml").exists()
