@@ -87,7 +87,8 @@ def test_status_shows_batch_table(tmp_path):
     rows_entry = next(t for t in r.json()["tables"] if t["name"] == "rows")
     assert rows_entry["is_batch"] is True
     assert rows_entry["source_count"] == 2
-    assert rows_entry["path"] is None
+    # batches build by name: the status 'path' is the batch name
+    assert rows_entry["path"] == "rows"
 
 
 def test_commit_batch_table(tmp_path):
@@ -529,3 +530,26 @@ def test_clone_batch_table_duplicates_entry(tmp_path):
     assert client.get("/api/pipeline/sensors_v2").json()["explicit"] is True
     # the original is untouched and still there
     assert "sensors" in batches
+
+
+def test_batch_quick_build_by_name(tmp_path):
+    """A batch builds via /api/build with its NAME as source (the
+    dashboard sends status.path, which for a batch is the name) — the
+    output uses the batch name and is committable."""
+    root = _init_project(tmp_path)
+    client = _client(root)
+    (root / "a.raw").write_text("# a\n0x01,\n")
+    (root / "b.raw").write_text("# b\n0x02,\n")
+    client.post("/api/batch", json={"name": "sensors", "sources": ["a.raw", "b.raw"]})
+
+    # the status path for a batch is its name
+    status = {t["name"]: t["path"] for t in client.get("/api/status").json()["tables"]}
+    assert status["sensors"] == "sensors"
+
+    r = client.post("/api/build", json={"source": "sensors"})
+    assert r.status_code == 200
+    assert any(str(p).endswith("sensors.bin") for p in r.json()["outputs"])
+
+    r = client.post("/api/commit", json={"message": "v1", "only": ["sensors"]})
+    assert r.status_code == 200
+    assert r.json()["committed"][0]["name"] == "sensors"

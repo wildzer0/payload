@@ -54,7 +54,7 @@ async def status(request: Request) -> JSONResponse:
             meta = table_metas.get(ref.name)
             tables.append({
                 "name": ref.name,
-                "path": str(ref.source_paths[0]) if not ref.is_batch else None,
+                "path": ref.name if ref.is_batch else str(ref.source_paths[0]),  # batches build by name (the /api/build route accepts it)
                 "is_batch": ref.is_batch,
                 "source_count": len(ref.source_paths),
                 "state": state,
