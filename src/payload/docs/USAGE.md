@@ -735,6 +735,11 @@ interface: the same features as the CLI, plus the parts that only make
 sense in a browser. It talks to the same core, so a table built from
 the web is the same table built from the CLI.
 
+**Settings** (gear in the sidebar): the global `table-tool.toml`
+form (defaults + **Plugin options** — pick an installed plugin, key +
+value, saved to `[plugin.*]`) with origin pills; CLI twin
+`pld config set --plugin NAME.KEY=VALUE`.
+
 **Dashboard** (`/`): a minimal table (name, status, golden, size,
 actions) — searchable/filterable by name, tag, cluster, note or
 property, quick build and download per row, a **Settings** button per

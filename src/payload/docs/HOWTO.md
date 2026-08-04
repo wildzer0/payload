@@ -204,7 +204,10 @@ pld serve                                # http://127.0.0.1:8000
   with Strings, compare/grep/analyze as buttons.
 - **Activity** (`/log`): the project timeline, paged (Load more).
 - **Settings** (gear in the sidebar): the global `table-tool.toml`
-  form with origin pills.
+  form with origin pills, plus a **Plugin options** section — pick an
+  installed plugin, type a key and a value (e.g. `compiler =
+  arm-none-eabi-gcc`), Add/remove rows; saved to `[plugin.*]`. The CLI
+  twin is `pld config set --plugin NAME.KEY=VALUE`.
 
 The web talks to the same core: a table built from the web is the
 same table built from the CLI.
