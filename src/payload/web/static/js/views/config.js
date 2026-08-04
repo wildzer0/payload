@@ -223,7 +223,9 @@ async function openSettingsModal() {
           const key = btn.dataset.pluginKey;
           if (!pluginState[name]) return; // already removed
           delete pluginState[name][key];
-          if (!Object.keys(pluginState[name] || {}).length) delete pluginState[name];
+          // keep the name with an EMPTY section as a tombstone: the save
+          // sends it and the backend (replace-per-name) removes the
+          // whole [plugin.<name>] from table-tool.toml
           renderPluginRows();
           refresh();
         };

@@ -351,3 +351,26 @@ def test_config_put_plugin_options(tmp_path):
     assert r.status_code == 400
     r = client.put("/api/config", json={"plugin": ["not", "a", "dict"]})
     assert r.status_code == 400
+
+
+def test_config_put_plugin_removal_and_replace(tmp_path):
+    root = _init_project(tmp_path)
+    client = _client(root)
+
+    client.put("/api/config", json={"plugin": {"c_source": {"compiler": "gcc", "objcopy": "objcopy"}}})
+    assert "objcopy" in (root / "table-tool.toml").read_text()
+
+    # replace-per-name: submitting a section without a key removes that key
+    client.put("/api/config", json={"plugin": {"c_source": {"compiler": "clang"}}})
+    toml = (root / "table-tool.toml").read_text()
+    assert 'compiler = "clang"' in toml and "objcopy" not in toml
+
+    # an empty section removes the whole [plugin.<name>]
+    client.put("/api/config", json={"plugin": {"c_source": {}}})
+    assert "[plugin.c_source]" not in (root / "table-tool.toml").read_text()
+
+    # names not submitted are left untouched
+    client.put("/api/config", json={"plugin": {"obj": {"objcopy_target": "elf32-littlearm"}}})
+    client.put("/api/config", json={"plugin": {"c_source": {"compiler": "gcc"}}})
+    toml = (root / "table-tool.toml").read_text()
+    assert "objcopy_target" in toml and "compiler" in toml

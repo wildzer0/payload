@@ -416,17 +416,10 @@ def write_global_config(project_root: Path, defaults: dict | None = None, plugin
     if defaults is not None:
         merged["defaults"] = _drop_none_values(defaults)
     if plugin is not None:
+        # replace-per-name (see write_sidecar_config)
         plugin_section = dict(merged.get("plugin", {}))
         for name, values in plugin.items():
-            if not values:
-                plugin_section.pop(name, None)
-                continue
-            section = dict(plugin_section.get(name, {}))
-            for key, value in values.items():
-                if value is None or value == "":
-                    section.pop(key, None)
-                else:
-                    section[key] = value
+            section = {k: v for k, v in (values or {}).items() if v is not None and v != ""}
             if section:
                 plugin_section[name] = section
             else:
@@ -480,18 +473,13 @@ def write_sidecar_config(
         else:
             merged.pop("pipeline", None)
     if plugin is not None:
-        # [plugin.<name>] — merge per plugin name; a key set to None/"" is removed
+        # [plugin.<name>] — REPLACE per plugin name: the submitted section
+        # is authoritative for that name (keys absent from it are removed;
+        # an empty/None section removes the whole [plugin.<name>]). Names
+        # not present in the submitted dict are left untouched.
         plugin_section = dict(merged.get("plugin", {}))
         for name, values in plugin.items():
-            if not values:
-                plugin_section.pop(name, None)
-                continue
-            section = dict(plugin_section.get(name, {}))
-            for key, value in values.items():
-                if value is None or value == "":
-                    section.pop(key, None)
-                else:
-                    section[key] = value
+            section = {k: v for k, v in (values or {}).items() if v is not None and v != ""}
             if section:
                 plugin_section[name] = section
             else:

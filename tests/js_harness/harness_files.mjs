@@ -237,11 +237,21 @@ check("config: settings modal shows the plugin options",
   if (rmBtn) rmBtn.fire("click");
   await flush();
   const rowsAfterRm = document.getElementById("cfg-plugin-rows").innerHTML;
-  print("[dbg-addrm3] after rm:", JSON.stringify(rowsAfterRm.match(/cfg-plugin-group-head">[^<]+/g) || []));
   // the added raw_text group appears after Add and disappears after the
   // remove; the pre-existing c_source group stays
   check("config: plugin option add then remove keeps the modal intact",
     rowsAfterAdd.includes(">raw_text</div>") && !rowsAfterRm.includes(">raw_text</div>") && rowsAfterRm.includes(">c_source</div>"));
+  // saving after a removal sends the tombstone (empty section) so the
+  // backend can actually delete the option
+  const puts2 = [];
+  const realFetch2 = globalThis.fetch;
+  globalThis.fetch = (p2, o) => { if (String(p2).includes("/api/config") && o && o.method === "PUT") puts2.push(JSON.parse(o.body)); return realFetch2(p2, o); };
+  document.getElementById("cfg-save").fire("click");
+  await flush();
+  globalThis.fetch = realFetch2;
+  const lastPut2 = puts2[puts2.length - 1];
+  check("config: save after removal sends the empty plugin section (deletion)",
+    lastPut2 && lastPut2.plugin && JSON.stringify(lastPut2.plugin.raw_text) === "{}");
 }
 
 // saving sends the plugin dict too

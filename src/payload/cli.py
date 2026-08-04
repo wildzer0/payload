@@ -1064,6 +1064,21 @@ def config_set(
                 raise PayloadError(f"invalid --plugin '{raw}' (expected NAME.KEY=VALUE)")
             plugin_updates.setdefault(name, {})[key] = value
 
+        # with the replace-per-name backend, submit the FULL section for
+        # each touched plugin (the flags only change the given keys, the
+        # rest of the section is read from the current config)
+        def _merge_plugin(current_sections: dict) -> dict:
+            merged = dict(current_sections)
+            for name, updates in plugin_updates.items():
+                section = dict(merged.get(name, {}))
+                for key, value in updates.items():
+                    if value:
+                        section[key] = value
+                    else:
+                        section.pop(key, None)
+                merged[name] = section  # empty section = removal
+            return merged
+
         if table is None:
             # GLOBAL config (table-tool.toml)
             current = load_config(root)
@@ -1085,7 +1100,7 @@ def config_set(
                         defaults["byte_order"] = byte_order
                     else:
                         defaults.pop("byte_order", None)
-            write_global_config(root, defaults=defaults, plugin=plugin_updates or None)
+            write_global_config(root, defaults=defaults, plugin=_merge_plugin(dict(current.plugin or {})) if plugin_updates else None)
             console.print("[green]✓[/] global config updated")
             return
 
@@ -1114,7 +1129,8 @@ def config_set(
             else:
                 defaults.pop("byte_order", None)
 
-        write_sidecar_config(ref.source_paths[0], defaults=defaults, plugin=plugin_updates or None)
+        current_plugin = dict(((current or {}).get("plugin") or {}))
+        write_sidecar_config(ref.source_paths[0], defaults=defaults, plugin=_merge_plugin(current_plugin) if plugin_updates else None)
         console.print(f"[green]✓[/] '{table}' updated: " + (", ".join(f"{k}={v}" for k, v in defaults.items()) or "defaults cleared"))
 
     run_command(_run, ctx.obj["verbosity"])
