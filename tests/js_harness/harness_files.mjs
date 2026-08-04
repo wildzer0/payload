@@ -220,7 +220,10 @@ const cfgHtml = document.getElementById("modal-box").innerHTML;
 check("config: settings modal with default pill, no page", cfgHtml.includes("default") && !cfgHtml.includes("section-collapse"));
 const pluginRowsHtml = document.getElementById("cfg-plugin-rows").innerHTML;
 check("config: settings modal shows the plugin options",
-  cfgHtml.includes("Plugin options") && pluginRowsHtml.includes("c_source.compiler"));
+  cfgHtml.includes("Plugin options")
+  && cfgHtml.includes('<option value="raw_text">')  // dropdown lists the installed plugins (real <option>)
+  && pluginRowsHtml.includes('>c_source</div>')      // configured options grouped by plugin
+  && pluginRowsHtml.includes('value="compiler"'));   // the key as its own input
 // saving sends the plugin dict too
 {
   const puts = [];

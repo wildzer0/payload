@@ -2972,9 +2972,18 @@ input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline
 .dash-name-cell .dash-batch-toggle { margin-right: 2px; width: 22px; height: 22px; }
 
 /* settings modal: plugin options */
-.cfg-plugin-rows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-.cfg-plugin-row { display: flex; align-items: center; gap: 10px; }
-.cfg-plugin-row .cfg-plugin-key { min-width: 220px; color: var(--text-dim); }
-.cfg-plugin-row input[data-plugin-name] { flex: 1; }
+.cfg-plugin-rows { display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.cfg-plugin-group { display: flex; flex-direction: column; gap: 5px; }
+.cfg-plugin-group-head {
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  text-transform: uppercase; letter-spacing: 0.05em;
+}
+.cfg-plugin-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 40%) 1fr 28px;
+  gap: 8px; align-items: center;
+}
+.cfg-plugin-row .cfg-plugin-key { font-weight: 500; }
 .cfg-plugin-addrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.cfg-plugin-addrow input { flex: 1; min-width: 140px; }
+.cfg-plugin-addrow select { flex: 0 1 160px; }
+.cfg-plugin-addrow input { flex: 1; min-width: 120px; }

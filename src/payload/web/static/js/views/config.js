@@ -144,7 +144,7 @@ async function openSettingsModal() {
           <p class="settings-section-desc">Options the installed plugins read (e.g. the compiler/objcopy the c_source/obj plugins need) — written to [plugin.*] in table-tool.toml. A value starting with [ is treated as a list.</p>
           <div class="cfg-plugin-rows" id="cfg-plugin-rows"></div>
           <div class="cfg-plugin-addrow">
-            <select id="cfg-plugin-name"><option value="">— plugin —</option>${pluginNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join("")}</select>
+            <select id="cfg-plugin-name"><option value="">— plugin —</option>${raw(pluginNames.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join(""))}</select>
             <input type="text" id="cfg-plugin-key" placeholder="key (e.g. compiler)">
             <input type="text" id="cfg-plugin-value" placeholder="value (e.g. arm-none-eabi-gcc)">
             <button id="cfg-plugin-add">${icon("plus")}Add</button>
@@ -195,23 +195,31 @@ async function openSettingsModal() {
     const renderPluginRows = () => {
       const rowsEl = document.getElementById("cfg-plugin-rows");
       if (!rowsEl) return;
-      const names = Object.keys(pluginState);
+      const names = Object.keys(pluginState).filter((n) => Object.keys(pluginState[n] || {}).length);
       rowsEl.innerHTML = names.length
-        ? names.map((name) => Object.keys(pluginState[name] || {}).map((key) => {
-          const id = `cfg-pl-${name}-${key}`;
-          return `
-            <div class="cfg-plugin-row">
-              <span class="mono cfg-plugin-key">${escapeHtml(name)}.${escapeHtml(key)}</span>
-              <input type="text" class="mono" id="${id}" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" value="${escapeHtml(fmtPluginValue(pluginState[name][key]))}">
-              <button type="button" class="icon-only cfg-plugin-rm" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" title="Remove option">×</button>
-            </div>`;
-        }).join("")).join("")
+        ? names.map((name) => `
+            <div class="cfg-plugin-group">
+              <div class="cfg-plugin-group-head">${escapeHtml(name)}</div>
+              ${Object.keys(pluginState[name]).map((key) => `
+                <div class="cfg-plugin-row">
+                  <input type="text" class="mono cfg-plugin-key" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" value="${escapeHtml(key)}" title="option key">
+                  <input type="text" class="mono cfg-plugin-value" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" value="${escapeHtml(fmtPluginValue(pluginState[name][key]))}" title="option value">
+                  <button type="button" class="icon-only cfg-plugin-rm" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" title="Remove option">×</button>
+                </div>`).join("")}
+            </div>`).join("")
         : '<p class="subtitle m-0">No plugin options configured yet — add one below.</p>';
-      rowsEl.querySelectorAll("input[data-plugin-name]").forEach((input) => {
+      rowsEl.querySelectorAll(".cfg-plugin-key, .cfg-plugin-value").forEach((input) => {
         input.oninput = () => {
           const name = input.dataset.pluginName;
           const key = input.dataset.pluginKey;
-          pluginState[name][key] = parsePluginValue(input.value);
+          if (input.classList.contains("cfg-plugin-key")) {
+            // the key itself is editable: move the value to the new key
+            const value = pluginState[name][key];
+            delete pluginState[name][key];
+            pluginState[name][input.value.trim()] = value;
+          } else {
+            pluginState[name][key] = parsePluginValue(input.value);
+          }
           refresh();
         };
       });
