@@ -53,15 +53,6 @@ function _orphanedTablesHtml(names) {
 /* Default reader/writer <select> for a dashboard row: the 'auto'
  * option shows in parentheses what would actually be resolved today
  * (resolvedValue), the other options are the explicit override. */
-function _defaultSelectHtml(kind, tableName, options, currentValue, resolvedValue, disabled, isBatch) {
-  const id = `dd-${kind}-${tableName}`;
-  const autoLabel = disabled ? "pipeline" : (resolvedValue ? `auto (${resolvedValue})` : "auto");
-  const opts = [`<option value="">${escapeHtml(autoLabel)}</option>`].concat(
-    options.map((o) => `<option value="${escapeHtml(o)}"${o === currentValue ? " selected" : ""}>${escapeHtml(o)}</option>`)
-  );
-  return `<select id="${id}" class="inline-select" data-default-kind="${kind}" data-default-table="${escapeHtml(tableName)}"${isBatch ? ` data-batch="true"` : ""}${disabled ? " disabled" : ""}>${opts.join("")}</select>`;
-}
-
 function _tableRowHtml(t, stateByName) {
   const state = stateByName[t.name] || "never_saved";
   const tags = t.tags || [];
@@ -80,29 +71,25 @@ function _tableRowHtml(t, stateByName) {
   const snap = t.last_snapshot ? `snapshot #${t.last_snapshot.id} · ` : "";
   // NOTE: PLAIN template — interpolate built HTML strings directly,
   // never raw()/icon() (they return {__raw} markers -> "[object Object]")
+  // 5 minimal columns: Table · Status · Golden · Size · Actions. The
+  // cluster and the reader/writer overrides are NOT on the dashboard —
+  // they live in the table page and the per-row Settings modal.
   return `
     <tr>
-      <td>
+      <td class="dash-name-cell">
         <a class="link" href="#/table/${encodeURIComponent(t.name)}" title="${escapeHtml(snap)}modified ${escapeHtml(t.source_mtime)}">${escapeHtml(t.name)}</a>
         ${t.is_batch ? `<span class="batch-marker" title="batch table — ${t.source_count} source files">${iconSpan("layers")}</span>` : ""}
         ${tagsHtml}
       </td>
-      <td>${t.cluster ? `<span class="pill pill-current" title="Cluster">${escapeHtml(t.cluster)}</span>` : ""}</td>
       <td>${_rawString(statusPill(state))}</td>
       <td>${_rawString(statusPill(t.golden_status || "missing"))}${t.golden_snapshot_id ? goldBadge() : ""}</td>
-      <td class="dash-pipeline">
-        ${t.is_batch
-          ? `<button class="dash-batch-settings" data-batch-settings="${escapeHtml(t.name)}" title="Batch settings — members, overrides, pipeline">${iconSpan("sliders")}Settings</button>`
-          : `${_defaultSelectHtml("reader", t.name, _dashReaderNames, t.reader_override, t.resolved_reader, t.pipeline_explicit)}
-             <span class="dash-arrow" aria-hidden="true">→</span>
-             ${_defaultSelectHtml("writer", t.name, _dashWriterNames, t.writer_override, t.resolved_writer, t.pipeline_explicit)}`}
-      </td>
       <td class="mono dash-size">${t.source_count > 1 ? `${t.source_count} files · ` : ""}${fmtBytes(t.source_size)}${t.output_size != null ? ` → ${fmtBytes(t.output_size)}` : ""}</td>
       <td class="dash-actions">
         <!-- download slot is ALWAYS rendered (visibility-hidden when no
              output): the build button stays at the same x on every row -->
         <a class="btn icon-only${t.output_size != null ? "" : " dash-hidden"}" href="/api/table/${encodeURIComponent(t.name)}/download" title="Download the last built output" download>${iconSpan("download")}</a>
         <button class="icon-only" data-quick-build="${t.name}" title="Quick build (default reader/writer)">${iconSpan("play")}</button>
+        <button class="icon-only" data-table-settings="${t.name}" data-is-batch="${t.is_batch ? "1" : ""}" title="Settings — overrides for this table">${iconSpan("sliders")}</button>
       </td>
     </tr>`;
 }
@@ -152,53 +139,13 @@ async function viewDashboard() {
       };
     });
 
-    // default reader/writer selects (Pipeline column): persists to the
-    // sidecar, same semantics as before
-    document.querySelectorAll("[data-default-kind]").forEach((sel) => {
-      sel.onchange = async () => {
-        const kind = sel.dataset.defaultKind;
-        const table = sel.dataset.defaultTable;
-        sel.disabled = true;
-        try {
-          if (sel.dataset.batch === "true") {
-            // batch overrides live inline in [[batch_table]], not in a
-            // sidecar (which batches don't have)
-            const b = batchByName.get(table);
-            const body = {
-              sources: b ? b.sources : [],
-              reader: (kind === "reader" ? sel.value : (b && b.reader) || null) || null,
-              writer: (kind === "writer" ? sel.value : (b && b.writer) || null) || null,
-              byte_order: (b && b.byte_order) || null,
-            };
-            await api("/api/batch/" + encodeURIComponent(table), { method: "PUT", body });
-            toast(`Default ${kind} for batch '${table}' updated`, "ok");
-            viewDashboard();
-            return;
-          }
-          const current = await api("/api/sidecar/" + encodeURIComponent(table));
-          const defaults = { ...(current.defaults || {}) };
-          if (sel.value) defaults[kind] = sel.value; else delete defaults[kind];
-          await api("/api/sidecar/" + encodeURIComponent(table), { method: "PUT", body: { defaults } });
-
-          if (kind === "reader" && sel.value) {
-            try {
-              const v = await api("/api/source/" + encodeURIComponent(table) + "/validate", { method: "POST" });
-              if (v.conforms) {
-                toast(`Default reader for '${table}' updated: reads the file correctly`, "ok");
-              } else {
-                toast(`Reader set, but '${v.reader}' can't read the source of '${table}'`, "warn", v.issues.map((i) => i.detail).join("; "));
-              }
-            } catch (ve) {
-              toast(`Default reader for '${table}' updated (verification failed: ${ve.message})`, "warn");
-            }
-          } else {
-            toast(`Default ${kind === "reader" ? "reader" : "writer"} for '${table}' updated`, "ok");
-          }
-          viewDashboard();
-        } catch (e) {
-          toastError(e);
-          sel.disabled = false;
-        }
+    // per-row Settings button: a modal for the overrides (single
+    // tables -> sidecar; batches -> the [[batch_table]] entry)
+    document.querySelectorAll("[data-table-settings]").forEach((btn) => {
+      btn.onclick = () => {
+        const table = btn.dataset.tableSettings;
+        if (btn.dataset.isBatch === "1") openBatchSettingsModal(table);
+        else openTableSettingsModal(table);
       };
     });
   };
@@ -238,6 +185,76 @@ async function viewDashboard() {
       ? rows.map((t) => _tableRowHtml(t, stateByName)).join("")
       : '<tr><td colspan="7" class="dash-empty">No table matches the current filter.</td></tr>';
     wireCardHandlers();
+  };
+
+  /* Settings modal for a single-file table: the reader/writer/byte
+   * order overrides (persisted to the sidecar). Batches have their own
+   * modal (openBatchSettingsModal) with the members too. */
+  const openTableSettingsModal = async (name) => {
+    const overlay = document.getElementById("modal-overlay");
+    const box = document.getElementById("modal-box");
+    const [sidecar, meta] = await Promise.all([
+      api("/api/sidecar/" + encodeURIComponent(name)),
+      api("/api/table/" + encodeURIComponent(name) + "/meta"),
+    ]);
+    const defs = sidecar.defaults || {};
+
+    box.classList.add("modal-large");
+    box.innerHTML = render`
+      <div class="modal-head-row">
+        <h3 class="modal-title m-0">Settings — ${escapeHtml(name)}</h3>
+        <button type="button" class="modal-x modal-x-static" id="ts-x" aria-label="Close" title="Close">×</button>
+      </div>
+      <div class="settings-modal-scroll">
+        <div class="card settings-section">
+          <h2 class="settings-section-title">Defaults</h2>
+          <p class="settings-section-desc">Reader/writer/byte order for this table — empty falls back to the project defaults.</p>
+          <div class="dash-batch-toolbar">
+            <label class="dash-ov-label">Reader</label>
+            <select class="inline-select" id="ts-reader"><option value="">auto</option>${_dashReaderNames.map((r) => `<option value="${escapeHtml(r)}"${r === defs.reader ? " selected" : ""}>${escapeHtml(r)}</option>`).join("")}</select>
+            <label class="dash-ov-label">Writer</label>
+            <select class="inline-select" id="ts-writer"><option value="">auto</option>${_dashWriterNames.map((w) => `<option value="${escapeHtml(w)}"${w === defs.writer ? " selected" : ""}>${escapeHtml(w)}</option>`).join("")}</select>
+            <label class="dash-ov-label">Byte order</label>
+            <select class="inline-select" id="ts-byteorder"><option value="little"${defs.byte_order !== "big" ? " selected" : ""}>little</option><option value="big"${defs.byte_order === "big" ? " selected" : ""}>big</option></select>
+          </div>
+        </div>
+        <div class="card settings-section">
+          <h2 class="settings-section-title">Cluster</h2>
+          <p class="settings-section-desc">${meta.cluster ? `member of '${escapeHtml(meta.cluster)}'` : "not assigned to a cluster"}</p>
+        </div>
+        <div class="card settings-section">
+          <h2 class="settings-section-title">Pipeline & build</h2>
+          <p class="settings-section-desc">The graphical pipeline editor and the build configuration live on the table page.</p>
+          <a class="btn" href="#/table/${encodeURIComponent(name)}">${icon("box")}Open table — pipeline editor &amp; build</a>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="primary" id="ts-save">${icon("save")}Save</button>
+      </div>
+    `;
+    overlay.hidden = false;
+
+    const close = () => {
+      overlay.hidden = true;
+      box.classList.remove("modal-large");
+      box.innerHTML = "";
+    };
+    document.getElementById("ts-x").onclick = close;
+    document.getElementById("ts-save").onclick = async () => {
+      const btn = document.getElementById("ts-save");
+      btn.disabled = true;
+      try {
+        const defaults = {
+          reader: document.getElementById("ts-reader").value || null,
+          writer: document.getElementById("ts-writer").value || null,
+          byte_order: document.getElementById("ts-byteorder").value || null,
+        };
+        await api("/api/sidecar/" + encodeURIComponent(name), { method: "PUT", body: { defaults } });
+        toast(`Settings for '${name}' saved`, "ok");
+        close();
+        viewDashboard();
+      } catch (e) { toastError(e); btn.disabled = false; }
+    };
   };
 
   /* Batch settings modal (the old batch page + inline panel, in modal
@@ -387,10 +404,8 @@ async function viewDashboard() {
       <table class="dash-table">
         <thead><tr>
           ${raw(sortHeader("name", "Table"))}
-          <th>Cluster</th>
           <th>Status</th>
           <th>Golden</th>
-          <th>Pipeline</th>
           ${raw(sortHeader("size", "Size"))}
           <th class="dash-actions"></th>
         </tr></thead>
