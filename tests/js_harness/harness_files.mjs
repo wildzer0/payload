@@ -223,7 +223,27 @@ check("config: settings modal shows the plugin options",
   cfgHtml.includes("Plugin options")
   && cfgHtml.includes('<option value="raw_text">')  // dropdown lists the installed plugins (real <option>)
   && pluginRowsHtml.includes('>c_source</div>')      // configured options grouped by plugin
-  && pluginRowsHtml.includes('value="compiler"'));   // the key as its own input
+  && pluginRowsHtml.includes('>compiler</span>'));  // the key as a fixed label
+// add a plugin option then remove it: the rows must not break
+{
+  document.getElementById("cfg-plugin-name").value = "raw_text";
+  document.getElementById("cfg-plugin-key").value = "delimiter";
+  document.getElementById("cfg-plugin-value").value = ";";
+  document.getElementById("cfg-plugin-add").fire("click");
+  await flush();
+  const rmBtn = document.querySelectorAll(".cfg-plugin-rm")[0] || document.querySelector(".cfg-plugin-rm");
+  const rowsAfterAdd = document.getElementById("cfg-plugin-rows").innerHTML;
+  print("[dbg-addrm2] after add:", JSON.stringify(rowsAfterAdd.match(/cfg-plugin-group-head">[^<]+/g) || []), "| rmBtn:", !!rmBtn);
+  if (rmBtn) rmBtn.fire("click");
+  await flush();
+  const rowsAfterRm = document.getElementById("cfg-plugin-rows").innerHTML;
+  print("[dbg-addrm3] after rm:", JSON.stringify(rowsAfterRm.match(/cfg-plugin-group-head">[^<]+/g) || []));
+  // the added raw_text group appears after Add and disappears after the
+  // remove; the pre-existing c_source group stays
+  check("config: plugin option add then remove keeps the modal intact",
+    rowsAfterAdd.includes(">raw_text</div>") && !rowsAfterRm.includes(">raw_text</div>") && rowsAfterRm.includes(">c_source</div>"));
+}
+
 // saving sends the plugin dict too
 {
   const puts = [];

@@ -36,6 +36,10 @@ function makeElement() {
         return [batchBtn, singleBtn];
       }
       if (sel === "[data-offset]") return [this._stringBtn ||= Object.assign(makeElement(), { dataset: { offset: "0" } })];
+      if (sel === ".cfg-plugin-rm") return [document._els["plugin-rm"] ||= Object.assign(makeElement(), { dataset: { pluginName: "raw_text", pluginKey: "delimiter" } })];
+      if (sel === ".cfg-plugin-key, .cfg-plugin-value" || sel === ".cfg-plugin-key" || sel === ".cfg-plugin-value") {
+        return [this._pluginKeyInput ||= Object.assign(makeElement(), { value: "compiler", dataset: { pluginName: "c_source", pluginKey: "compiler" }, classList: makeClassList() })];
+      }
       return this._phantom;
     },
     closest() { return null; },
@@ -60,6 +64,7 @@ globalThis.document = {
       const singleBtn = this._els["dash-settings-single"] ||= Object.assign(makeElement(), { dataset: { tableSettings: "example_table", isBatch: "" } });
       return [batchBtn, singleBtn];
     }
+    if (sel === ".cfg-plugin-rm") return [this._els["plugin-rm"] ||= Object.assign(makeElement(), { dataset: { pluginName: "raw_text", pluginKey: "delimiter" } })];
     return [];
   },
   createElement() { return makeElement(); },

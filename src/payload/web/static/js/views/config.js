@@ -202,24 +202,18 @@ async function openSettingsModal() {
               <div class="cfg-plugin-group-head">${escapeHtml(name)}</div>
               ${Object.keys(pluginState[name]).map((key) => `
                 <div class="cfg-plugin-row">
-                  <input type="text" class="mono cfg-plugin-key" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" value="${escapeHtml(key)}" title="option key">
+                  <span class="mono cfg-plugin-key" title="option key">${escapeHtml(key)}</span>
                   <input type="text" class="mono cfg-plugin-value" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" value="${escapeHtml(fmtPluginValue(pluginState[name][key]))}" title="option value">
                   <button type="button" class="icon-only cfg-plugin-rm" data-plugin-name="${escapeHtml(name)}" data-plugin-key="${escapeHtml(key)}" title="Remove option">×</button>
                 </div>`).join("")}
             </div>`).join("")
         : '<p class="subtitle m-0">No plugin options configured yet — add one below.</p>';
-      rowsEl.querySelectorAll(".cfg-plugin-key, .cfg-plugin-value").forEach((input) => {
+      rowsEl.querySelectorAll(".cfg-plugin-value").forEach((input) => {
         input.oninput = () => {
           const name = input.dataset.pluginName;
           const key = input.dataset.pluginKey;
-          if (input.classList.contains("cfg-plugin-key")) {
-            // the key itself is editable: move the value to the new key
-            const value = pluginState[name][key];
-            delete pluginState[name][key];
-            pluginState[name][input.value.trim()] = value;
-          } else {
-            pluginState[name][key] = parsePluginValue(input.value);
-          }
+          if (!pluginState[name] || key === "") return; // stale row: ignore
+          pluginState[name][key] = parsePluginValue(input.value);
           refresh();
         };
       });
@@ -227,6 +221,7 @@ async function openSettingsModal() {
         btn.onclick = () => {
           const name = btn.dataset.pluginName;
           const key = btn.dataset.pluginKey;
+          if (!pluginState[name]) return; // already removed
           delete pluginState[name][key];
           if (!Object.keys(pluginState[name] || {}).length) delete pluginState[name];
           renderPluginRows();
@@ -241,7 +236,7 @@ async function openSettingsModal() {
       const value = document.getElementById("cfg-plugin-value").value;
       if (!name || !key) { toast("Pick a plugin and enter a key", "warn"); return; }
       pluginState[name] = pluginState[name] || {};
-      pluginState[name][key] = parsePluginValue(value);
+      pluginState[name][key] = parsePluginValue(value) || "";
       document.getElementById("cfg-plugin-name").value = "";
       document.getElementById("cfg-plugin-key").value = "";
       document.getElementById("cfg-plugin-value").value = "";
