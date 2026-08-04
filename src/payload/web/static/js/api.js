@@ -89,6 +89,7 @@ async function ensureTableSources(name) {
   if (_tableSources && (!name || _tableSources[name])) return;
   const status = await api("/api/status");
   _tableSources = Object.fromEntries(status.tables.map((t) => [t.name, t.path]));
+  _tableIsBatch = Object.fromEntries(status.tables.map((t) => [t.name, t.is_batch]));
 }
 
 /* Any operation that can change the name -> path map (table
@@ -97,6 +98,13 @@ async function ensureTableSources(name) {
  * refetches it. */
 function invalidateTableSources() {
   _tableSources = null;
+  _tableIsBatch = {};
 }
 
-export { api, apiUpload, ApiError, getPlugins, invalidatePluginsCache, ensureTableSources, findSourcePath, invalidateTableSources };
+/* Batch tables have no sidecar and no single editable source: the
+ * table page must know BEFORE calling /api/source or /api/sidecar
+ * (which reject batches) so it can render the batch view instead. */
+let _tableIsBatch = {};
+function isBatchTable(name) { return !!_tableIsBatch[name]; }
+
+export { api, apiUpload, ApiError, getPlugins, invalidatePluginsCache, ensureTableSources, findSourcePath, invalidateTableSources, isBatchTable };

@@ -1,3 +1,9 @@
+/* [hidden] must win over any display rule (e.g. the base button rule
+ * sets display: inline-flex, which would otherwise keep a hidden button
+ * visible — the Activity "Load more" used to stay on screen after the
+ * last page and appear broken). */
+[hidden] { display: none !important; }
+
 /* payload web UI — light theme by default via prefers-color-scheme,
    manually overridable with [data-theme] (persisted in localStorage
    by the toggle in app.js). */

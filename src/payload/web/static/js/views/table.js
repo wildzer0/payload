@@ -10,7 +10,7 @@ import {
   goldBadge, currentBadge, baseName, fmtBytes, val, chk, attachAutocomplete,
   registerDirtyGuard, removeDirtyGuard, loadCodeMirror, emptyCard, openTextEditorModal,
 } from "../ui.js";
-import { api, getPlugins, ensureTableSources, findSourcePath, invalidateTableSources } from "../api.js";
+import { api, getPlugins, ensureTableSources, findSourcePath, invalidateTableSources, isBatchTable } from "../api.js";
 import { openPipelineEditor } from "./pipeline_editor.js";
 
 const COMMIT_MESSAGE_MAX_LENGTH = 1024;
@@ -639,6 +639,19 @@ async function renderPagedHex(el, name, offset) {
 async function loadSource(name) {
   const el = document.getElementById("view-result");
   try {
+    if (isBatchTable(name)) {
+      // a batch has no single editable source: show its members
+      const resp = await api("/api/batch");
+      const b = (resp.batches || []).find((x) => x.name === name);
+      const members = b ? b.sources : [];
+      el.innerHTML = render`
+        <p class="subtitle">Batch table — ${members.length} member file${members.length === 1 ? "" : "s"} (concatenation order). Members and overrides are managed from the Dashboard's Settings modal.</p>
+        <ol class="batch-members-list">
+          ${members.map((m, i) => `<li><span class="mono">${i + 1}.</span> <span class="mono">${escapeHtml(m)}</span></li>`).join("")}
+        </ol>
+      `;
+      return;
+    }
     const info = await api("/api/source/" + encodeURIComponent(name));
     const msg = info.truncated
       ? "The source is larger than 1 MB: the editor opens read-only (first 1 MB) and the whole file is browsable in the hex view."
@@ -772,6 +785,22 @@ async function loadPipelineBuilder(name) {
 async function loadSidecarCard(name) {
   const el = document.getElementById("sidecar-result");
   try {
+    if (isBatchTable(name)) {
+      // a batch has no sidecar: its overrides live inline in
+      // [[batch_table]] (read-only here — edit from the Dashboard)
+      const resp = await api("/api/batch");
+      const b = (resp.batches || []).find((x) => x.name === name);
+      const chip = (label, value) => `<div class="field"><label>${label}</label><input type="text" class="mono" value="${escapeHtml(value || "")}" disabled></div>`;
+      el.innerHTML = `
+        <p class="subtitle">Batch overrides live inline in [[batch_table]] — managed from the Dashboard's Settings modal.</p>
+        <div class="field-row">
+          ${chip("Reader", b ? b.reader : "")}
+          ${chip("Writer", b ? b.writer : "")}
+          ${chip("Byte order", b ? b.byte_order : "")}
+        </div>
+      `;
+      return;
+    }
     const [sidecar, cfg] = await Promise.all([api("/api/sidecar/" + encodeURIComponent(name)), api("/api/config")]);
     const schema = cfg.schema;
     const sidecarDefaults = sidecar.defaults || {};
