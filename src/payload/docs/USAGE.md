@@ -2,7 +2,8 @@
 
 > New here? Start with [HOWTO.md](HOWTO.md) — a guided tour with the
 > sample files in `examples/howto/` and the plugins in
-> `examples/plugins/`.
+> `examples/plugins/`. Maintaining the code? Read
+> [DEVELOPER.md](DEVELOPER.md).
 
 Complete reference for every command, the configuration file, and exit
 codes. To write a plugin (developer side), see instead

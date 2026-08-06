@@ -23,6 +23,10 @@ DOCS = [
         "description": "A step-by-step walkthrough of every operation, with the sample files in examples/howto/.",
     },
     {
+        "slug": "developer", "filename": "DEVELOPER.md", "title": "Developer guide",
+        "description": "Architecture, design and where to touch to maintain the code.",
+    },
+    {
         "slug": "plugins", "filename": "PLUGINS.md", "title": "Plugin guide",
         "description": "The full Reader/Writer/TableIR contract, explained with commented examples.",
     },
