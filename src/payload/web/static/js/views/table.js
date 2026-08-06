@@ -57,12 +57,9 @@ async function viewTable(name) {
       <textarea id="commit-message" class="commit-message-input mono" rows="3" maxlength="${COMMIT_MESSAGE_MAX_LENGTH}" placeholder="Describe what changed…"></textarea>
       <div class="field-hint"><span id="commit-message-count">0</span>/${COMMIT_MESSAGE_MAX_LENGTH}</div>
     </div>
-    <label class="commit-golden-row">
+    <label class="commit-golden-row" title="Save this snapshot as the golden reference for future diff checks">
       <span class="switch switch-lg"><input type="checkbox" id="commit-golden"><span class="track"></span></span>
-      <span class="commit-golden-label">
-        <span class="commit-golden-title">${iconSpan("star")}Also set as golden</span>
-        <small>Save this snapshot as the golden reference for future diff checks</small>
-      </span>
+      <span class="commit-golden-title">${iconSpan("star")}Also set as golden</span>
     </label>
     <div class="build-actions">
       <button id="btn-commit">${iconSpan("save")}Commit changes</button>

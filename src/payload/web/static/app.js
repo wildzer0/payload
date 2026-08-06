@@ -192,8 +192,6 @@ document.getElementById("content").addEventListener("click", (e) => {
 });
 
 api("/api/health").then((r) => {
-  document.getElementById("root-path").textContent = r.root;
-  document.getElementById("root-path").title = r.root;
   const versionEl = document.getElementById("app-version");
   if (versionEl && r.version) versionEl.textContent = `payload v${r.version}`;
 }).catch(() => {});
